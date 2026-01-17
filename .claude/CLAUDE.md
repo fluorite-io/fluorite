@@ -16,6 +16,12 @@
 - Colocate tests with implementation (`#[cfg(test)]` in same file)
 - Flat is better than nested; avoid deep module hierarchies
 
+## Documentation
+- Each module folder should have a README.md describing purpose and usage
+- Update README.md when adding/changing endpoints, public APIs, or architecture
+- Keep READMEs concise: architecture overview, usage example, API reference
+- Code should be self-documenting; READMEs explain the "why" and "how to use"
+
 ## Naming
 - Names should be self-documenting; avoid comments that restate code
 - Functions: verb phrases (`parse_schema`, `write_batch`)
