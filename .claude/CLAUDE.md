@@ -22,6 +22,15 @@
 - Keep READMEs concise: architecture overview, usage example, API reference
 - Code should be self-documenting; READMEs explain the "why" and "how to use"
 
+## Git Commits
+- Commit when you have a coherent, working unit of change
+- One logical change per commit; avoid mixing unrelated changes
+- Commit before risky refactors or experiments (easy to revert)
+- Commit after completing a feature, fixing a bug, or finishing a refactor
+- Don't commit after every line; don't wait until everything is done
+- Message format: imperative verb + what changed + why (if not obvious)
+- If a commit message needs "and", consider splitting the commit
+
 ## Naming
 - Names should be self-documenting; avoid comments that restate code
 - Functions: verb phrases (`parse_schema`, `write_batch`)
