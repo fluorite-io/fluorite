@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd high-performance Avro to Parquet service\n\n- HTTP service with Axum for accepting Avro payloads\n- Avro to Arrow schema and value conversion\n- Parquet file writing with configurable compression\n- Endpoints: /health, /schema, /write/:schema_name, /write-raw\n- Unit and integration tests for all modules\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
