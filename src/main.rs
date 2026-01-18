@@ -1,5 +1,3 @@
-mod buffer;
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -10,7 +8,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
 
-use buffer::{build_router, AppState, ParquetWriterConfig};
+use turbine::buffer::{build_router, AppState, ParquetWriterConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "turbine")]

@@ -3,6 +3,14 @@ name = "turbine"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "turbine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "turbine"
+path = "src/main.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -12,9 +20,6 @@ axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "compression-gzip"] }
 
-# Avro support
-apache-avro = { version = "0.17", features = ["snappy", "zstandard"] }
-
 # Arrow and Parquet
 arrow = { version = "53" }
 parquet = { version = "53", features = ["arrow", "snap", "zstd", "lz4"] }
@@ -22,6 +27,15 @@ parquet = { version = "53", features = ["arrow", "snap", "zstd", "lz4"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Avro
+apache-avro = "0.17"
+integer-encoding = { version = "4", default-features = false }
+num-traits = "0.2"
+rust_decimal = { version = "1", default-features = false, features = ["serde-with-str"] }
+serde_derive = "1"
+serde_serializer_quick_unsupported = "0.1"
+serde-transcode = "1"
 
 # Error handling
 thiserror = "1"
@@ -45,3 +59,9 @@ tempfile = "3"
 tokio-test = "0.4"
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
+criterion = "0.5"
+pretty_assertions = "1"
+
+[[bench]]
+name = "avro_value"
+harness = false
