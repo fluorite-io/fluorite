@@ -9,6 +9,10 @@ enum Kind<'r, 'c, 's, W> {
 		block_writer: BlockWriter<'r, 'c, 's, W>,
 		elements_schema: &'s SchemaNode<'s>,
 	},
+	Record {
+		serializer_state: &'r mut SerializerState<'c, 's, W>,
+		record_fields: std::slice::Iter<'s, crate::avro::schema::self_referential::RecordField<'s>>,
+	},
 	Duration {
 		serializer_state: &'r mut SerializerState<'c, 's, W>,
 		n_values: u8,
@@ -33,6 +37,18 @@ impl<'r, 'c, 's, W: Write> SerializeSeqOrTupleOrTupleStruct<'r, 'c, 's, W> {
 			kind: Kind::Array {
 				block_writer,
 				elements_schema,
+			},
+		}
+	}
+
+	pub(super) fn record(
+		serializer_state: &'r mut SerializerState<'c, 's, W>,
+		record_fields: std::slice::Iter<'s, crate::avro::schema::self_referential::RecordField<'s>>,
+	) -> Self {
+		Self {
+			kind: Kind::Record {
+				serializer_state,
+				record_fields,
 			},
 		}
 	}
@@ -104,6 +120,20 @@ impl<'r, 'c, 's, W: Write> SerializeSeqOrTupleOrTupleStruct<'r, 'c, 's, W> {
 					schema_node: elements_schema,
 				})
 			}
+			Kind::Record {
+				ref mut serializer_state,
+				ref mut record_fields,
+			} => {
+				match record_fields.next() {
+					Some(field) => value.serialize(DatumSerializer {
+						state: serializer_state,
+						schema_node: field.schema.as_ref(),
+					}),
+					None => Err(SerError::new(
+						"Too many elements when serializing sequence as record",
+					)),
+				}
+			}
 			Kind::Duration {
 				ref mut serializer_state,
 				ref mut n_values,
@@ -154,6 +184,17 @@ impl<'r, 'c, 's, W: Write> SerializeSeqOrTupleOrTupleStruct<'r, 'c, 's, W> {
 				Kind::Array { block_writer, .. } => block_writer.end(),
 				_ => unreachable!(),
 			},
+			Kind::Record {
+				ref record_fields, ..
+			} => {
+				if record_fields.len() != 0 {
+					Err(SerError::new(
+						"Not enough elements when serializing sequence as record",
+					))
+				} else {
+					Ok(())
+				}
+			}
 			Kind::Duration { n_values, .. } => {
 				if n_values != 3 {
 					Err(duration_seq_len_incorrect())

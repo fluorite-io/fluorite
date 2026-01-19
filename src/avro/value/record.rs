@@ -1,166 +1,135 @@
-//! GenericRecord implementation for Avro records with O(1) field lookup.
+//! GenericRecord implementation for Avro records.
+//!
+//! Fields are stored as a Vec in schema order. Field name lookups require
+//! the schema's field index map for O(1) access.
 
 use super::Value;
-use std::borrow::Cow;
 use std::collections::HashMap;
 
-/// A generic Avro record with named fields and O(1) field lookup.
+use crate::avro::schema::FieldType;
+
+/// A generic Avro record with fields stored in schema order.
 ///
-/// This struct stores fields in insertion order while maintaining a HashMap
-/// index for fast field access by name. This provides both ordered iteration
-/// and efficient lookups.
+/// This struct stores only the field values (no field names), making deserialization
+/// fast by avoiding per-record HashMap construction and string allocations.
+/// Field access by name requires the schema's field index map.
 ///
 /// # Example
 ///
 /// ```
-/// use turbine::avro::value::{GenericRecord, Value};
-/// use std::borrow::Cow;
+/// use turbine::avro::{from_datum_slice, Schema};
+/// use turbine::avro::value::Value;
 ///
-/// let mut record = GenericRecord::new();
-/// record.put("name", Value::String(Cow::Borrowed("Alice")));
-/// record.put("age", Value::Int(30));
+/// let schema: Schema = r#"{"type":"record","name":"User","fields":[
+///     {"name":"id","type":"int"},
+///     {"name":"name","type":"string"}
+/// ]}"#.parse().unwrap();
 ///
-/// assert_eq!(record.get("name"), Some(&Value::String(Cow::Borrowed("Alice"))));
-/// assert_eq!(record.get("age"), Some(&Value::Int(30)));
-/// assert_eq!(record.get("unknown"), None);
+/// let data = &[4, 8, 74, 111, 104, 110]; // id=2, name="John"
+/// let value: Value = from_datum_slice(data, &schema).unwrap();
+///
+/// if let Value::Record(record) = &value {
+///     // Get field index from schema and access by index
+///     let fields = schema.record_index().get_record_fields("User").unwrap();
+///     assert_eq!(record.get("id", fields), Some(&Value::Int(2)));
+///     // Or access by index directly if you know the field position
+///     assert_eq!(record.get_by_index(0), Some(&Value::Int(2)));
+/// }
 /// ```
-#[derive(Debug, Clone)]
-pub struct GenericRecord<'a> {
-	/// Fields stored in insertion order as (name, value) pairs
-	fields: Vec<(Cow<'a, str>, Value<'a>)>,
-	/// Index mapping field names to their position in the fields vector
-	index: HashMap<Cow<'a, str>, usize>,
-}
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericRecord<'a>(Vec<Value<'a>>);
 
 impl<'a> GenericRecord<'a> {
-	/// Create a new empty record.
-	pub fn new() -> Self {
-		Self {
-			fields: Vec::new(),
-			index: HashMap::new(),
-		}
-	}
-
 	/// Create a new record with the specified capacity.
 	pub fn with_capacity(capacity: usize) -> Self {
-		Self {
-			fields: Vec::with_capacity(capacity),
-			index: HashMap::with_capacity(capacity),
-		}
+		Self(Vec::with_capacity(capacity))
 	}
 
-	/// Get a reference to a field value by name.
+	/// Create a new record from a vector of fields.
+	pub fn from_fields(fields: Vec<Value<'a>>) -> Self {
+		Self(fields)
+	}
+
+	/// Get a reference to a field value by name using the schema's field index.
+	///
+	/// The `fields` parameter should be obtained from `schema.record_index().get_record_fields(record_name)`.
 	///
 	/// Returns `None` if the field does not exist.
-	///
 	/// This is an O(1) operation.
-	pub fn get(&self, name: &str) -> Option<&Value<'a>> {
-		self.index.get(name).map(|&idx| &self.fields[idx].1)
+	pub fn get(&self, name: &str, fields: &HashMap<String, (usize, FieldType)>) -> Option<&Value<'a>> {
+		let (idx, _) = fields.get(name)?;
+		self.0.get(*idx)
 	}
 
 	/// Get a mutable reference to a field value by name.
-	///
-	/// Returns `None` if the field does not exist.
-	///
-	/// This is an O(1) operation.
-	pub fn get_mut(&mut self, name: &str) -> Option<&mut Value<'a>> {
-		self.index.get(name).map(|&idx| &mut self.fields[idx].1)
+	pub fn get_mut(
+		&mut self,
+		name: &str,
+		fields: &HashMap<String, (usize, FieldType)>,
+	) -> Option<&mut Value<'a>> {
+		let (idx, _) = fields.get(name)?;
+		self.0.get_mut(*idx)
 	}
 
-	/// Insert or update a field.
+	/// Get a reference to a field value by its index (position in schema).
 	///
-	/// If a field with the same name already exists, its value is updated
-	/// and the old value is returned. Otherwise, the field is appended
-	/// and `None` is returned.
-	pub fn put(&mut self, name: impl Into<Cow<'a, str>>, value: Value<'a>) -> Option<Value<'a>> {
-		let name = name.into();
-		if let Some(&idx) = self.index.get(&name) {
-			Some(std::mem::replace(&mut self.fields[idx].1, value))
-		} else {
-			let idx = self.fields.len();
-			self.index.insert(name.clone(), idx);
-			self.fields.push((name, value));
-			None
-		}
+	/// This is an O(1) operation that doesn't require the schema.
+	pub fn get_by_index(&self, idx: usize) -> Option<&Value<'a>> {
+		self.0.get(idx)
+	}
+
+	/// Get a mutable reference to a field value by its index.
+	pub fn get_by_index_mut(&mut self, idx: usize) -> Option<&mut Value<'a>> {
+		self.0.get_mut(idx)
+	}
+
+	/// Push a field value (appends to the end).
+	///
+	/// Fields should be pushed in schema order during deserialization.
+	pub fn push(&mut self, value: Value<'a>) {
+		self.0.push(value);
 	}
 
 	/// Returns the number of fields in the record.
 	pub fn len(&self) -> usize {
-		self.fields.len()
+		self.0.len()
 	}
 
 	/// Returns `true` if the record has no fields.
 	pub fn is_empty(&self) -> bool {
-		self.fields.is_empty()
+		self.0.is_empty()
 	}
 
-	/// Returns `true` if the record contains a field with the given name.
-	pub fn contains(&self, name: &str) -> bool {
-		self.index.contains_key(name)
-	}
-
-	/// Returns an iterator over the fields in insertion order.
-	pub fn iter(&self) -> impl Iterator<Item = (&str, &Value<'a>)> {
-		self.fields.iter().map(|(k, v)| (k.as_ref(), v))
-	}
-
-	/// Returns an iterator over the field names in insertion order.
-	pub fn keys(&self) -> impl Iterator<Item = &str> {
-		self.fields.iter().map(|(k, _)| k.as_ref())
-	}
-
-	/// Returns an iterator over the field values in insertion order.
+	/// Returns an iterator over the field values in schema order.
 	pub fn values(&self) -> impl Iterator<Item = &Value<'a>> {
-		self.fields.iter().map(|(_, v)| v)
+		self.0.iter()
+	}
+
+	/// Returns an iterator over the field values in schema order (mutable).
+	pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Value<'a>> {
+		self.0.iter_mut()
 	}
 
 	/// Convert this record into an owned version with `'static` lifetime.
 	pub fn into_owned(self) -> GenericRecord<'static> {
-		GenericRecord {
-			fields: self
-				.fields
-				.into_iter()
-				.map(|(k, v)| (Cow::Owned(k.into_owned()), v.into_owned()))
-				.collect(),
-			index: self
-				.index
-				.into_iter()
-				.map(|(k, v)| (Cow::Owned(k.into_owned()), v))
-				.collect(),
-		}
-	}
-}
-
-impl Default for GenericRecord<'_> {
-	fn default() -> Self {
-		Self::new()
-	}
-}
-
-impl<'a> PartialEq for GenericRecord<'a> {
-	fn eq(&self, other: &Self) -> bool {
-		if self.fields.len() != other.fields.len() {
-			return false;
-		}
-		// Compare by field order and values
-		self.fields == other.fields
+		GenericRecord(self.0.into_iter().map(|v| v.into_owned()).collect())
 	}
 }
 
 impl<'a> IntoIterator for GenericRecord<'a> {
-	type Item = (Cow<'a, str>, Value<'a>);
+	type Item = Value<'a>;
 	type IntoIter = std::vec::IntoIter<Self::Item>;
 
 	fn into_iter(self) -> Self::IntoIter {
-		self.fields.into_iter()
+		self.0.into_iter()
 	}
 }
 
 impl<'a, 'b> IntoIterator for &'b GenericRecord<'a> {
-	type Item = &'b (Cow<'a, str>, Value<'a>);
-	type IntoIter = std::slice::Iter<'b, (Cow<'a, str>, Value<'a>)>;
+	type Item = &'b Value<'a>;
+	type IntoIter = std::slice::Iter<'b, Value<'a>>;
 
 	fn into_iter(self) -> Self::IntoIter {
-		self.fields.iter()
+		self.0.iter()
 	}
 }

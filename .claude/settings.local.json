@@ -8,7 +8,9 @@
       "Bash(git commit:*)",
       "Bash(find:*)",
       "Bash(grep:*)",
-      "Bash(cargo bench:*)"
+      "Bash(cargo bench:*)",
+      "Bash(cargo flamegraph:*)",
+      "Bash(sysctl:*)"
     ]
   }
 }

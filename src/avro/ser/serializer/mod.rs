@@ -368,6 +368,19 @@ impl<'r, 'c, 's, W: Write> Serializer for DatumSerializer<'r, 'c, 's, W> {
 				BlockWriter::new(self.state, len.unwrap_or(0))?,
 				elements_schema.as_ref(),
 			)),
+			SchemaNode::Record(record) => {
+				// Support serializing sequences as records (e.g., GenericRecord)
+				if len.map_or(false, |l| l != record.fields.len()) {
+					Err(SerError::new(
+						"Sequence length does not match record field count",
+					))
+				} else {
+					Ok(SerializeSeqOrTupleOrTupleStruct::record(
+						self.state,
+						record.fields.iter(),
+					))
+				}
+			}
 			SchemaNode::Duration => {
 				if len.map_or(false, |l| l != 3) {
 					Err(seq_or_tuple::duration_seq_len_incorrect())

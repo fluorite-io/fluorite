@@ -1,12 +1,12 @@
 //! Deserialization implementation for Value.
 //!
-//! Provides both:
-//! - Standard serde `Deserialize` implementation for compatibility with generic serde code
-//! - The deserialization happens through the existing serde infrastructure
+//! Records are deserialized as sequences (not maps) for performance - field values
+//! are stored in schema order without field names.
 
 use super::{GenericRecord, Value};
 use serde::de::{self, Deserialize, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 
 /// Visitor for deserializing Value from any Avro data.
@@ -145,6 +145,8 @@ impl<'de> Visitor<'de> for ValueVisitor<'de> {
 	where
 		A: SeqAccess<'de>,
 	{
+		// Sequences are used for both arrays and records
+		// We'll return Array here; the deserializer will use RecordSeqAccess for records
 		let mut values = match seq.size_hint() {
 			Some(size) => Vec::with_capacity(size),
 			None => Vec::new(),
@@ -159,16 +161,15 @@ impl<'de> Visitor<'de> for ValueVisitor<'de> {
 	where
 		A: MapAccess<'de>,
 	{
-		// We use GenericRecord for all map-like structures since we can't
-		// distinguish between records and maps at the serde level
-		let mut record = match map.size_hint() {
-			Some(size) => GenericRecord::with_capacity(size),
-			None => GenericRecord::new(),
+		// Maps are used for Avro maps (string -> value)
+		let mut result = match map.size_hint() {
+			Some(size) => HashMap::with_capacity(size),
+			None => HashMap::new(),
 		};
 		while let Some((key, value)) = map.next_entry_seed(CowStrSeed, ValueSeed::new())? {
-			record.put(key, value);
+			result.insert(key, value);
 		}
-		Ok(Value::Record(record))
+		Ok(Value::Map(result))
 	}
 
 	fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
@@ -198,6 +199,52 @@ impl<'de> Visitor<'de> for ValueVisitor<'de> {
 			}
 		}
 	}
+
+	fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		// Records come through visit_newtype_struct to distinguish from arrays
+		// The inner deserializer will give us a sequence of field values
+		deserializer.deserialize_any(RecordValueVisitor::new())
+			.map(Value::Record)
+	}
+}
+
+/// Visitor specifically for deserializing records as sequences of values.
+/// This is used by the Avro deserializer to efficiently deserialize records.
+pub(crate) struct RecordValueVisitor<'a> {
+	_marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> RecordValueVisitor<'a> {
+	pub(crate) fn new() -> Self {
+		Self {
+			_marker: std::marker::PhantomData,
+		}
+	}
+}
+
+impl<'de> Visitor<'de> for RecordValueVisitor<'de> {
+	type Value = GenericRecord<'de>;
+
+	fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str("a record (sequence of field values)")
+	}
+
+	fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+	where
+		A: SeqAccess<'de>,
+	{
+		let mut record = match seq.size_hint() {
+			Some(size) => GenericRecord::with_capacity(size),
+			None => GenericRecord::with_capacity(0),
+		};
+		while let Some(value) = seq.next_element()? {
+			record.push(value);
+		}
+		Ok(record)
+	}
 }
 
 impl<'de> Deserialize<'de> for Value<'de> {
@@ -210,13 +257,13 @@ impl<'de> Deserialize<'de> for Value<'de> {
 }
 
 /// A DeserializeSeed that captures the lifetime properly for borrowed data
-pub(super) struct ValueSeed<'a> {
+pub(crate) struct ValueSeed<'a> {
 	_marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> ValueSeed<'a> {
 	/// Create a new ValueSeed
-	pub(super) fn new() -> Self {
+	pub(crate) fn new() -> Self {
 		Self {
 			_marker: std::marker::PhantomData,
 		}

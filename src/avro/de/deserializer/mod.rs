@@ -53,10 +53,12 @@ impl<'de, R: ReadSlice<'de>> Deserializer<'de> for DatumDeserializer<'_, '_, R> 
 			SchemaNode::Record(ref record) => {
 				// NB: infinite recursion is prevented here by the fact we prevent constructing
 				// a schema that contains a record that always ends up containing itself
-				visitor.visit_map(RecordMapAccess {
+				// Use visit_newtype_struct so Value deserialization can distinguish records from arrays
+				visitor.visit_newtype_struct(RecordDeserializer {
 					record_fields: record.fields.iter(),
 					state: self.state,
 					allowed_depth: self.allowed_depth.dec()?,
+					field_count: record.fields.len(),
 				})
 			}
 			SchemaNode::Enum(ref enum_) => read_enum_as_str(self.state, &enum_.symbols, visitor),
@@ -338,7 +340,18 @@ impl<'de, R: ReadSlice<'de>> Deserializer<'de> for DatumDeserializer<'_, '_, R> 
 	where
 		V: Visitor<'de>,
 	{
-		self.deserialize_map(visitor)
+		// For regular structs, we can use visit_seq directly since the struct
+		// already knows it's a struct. This avoids the visit_newtype_struct wrapper
+		// which is only needed for Value deserialization (via deserialize_any).
+		match *self.schema_node {
+			SchemaNode::Record(ref record) => visitor.visit_seq(RecordSeqAccess {
+				record_fields: record.fields.iter(),
+				state: self.state,
+				allowed_depth: self.allowed_depth.dec()?,
+				field_count: record.fields.len(),
+			}),
+			_ => self.deserialize_map(visitor),
+		}
 	}
 
 	fn deserialize_enum<V>(

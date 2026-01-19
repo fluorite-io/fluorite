@@ -234,11 +234,13 @@ fn bench_value_field_access(c: &mut Criterion) {
     });
 
     // turbine::avro - access nested field (O(1) lookup)
+    let complex_fields = fast_schema.record_index().get_record_fields("benchmark.ComplexDocument").unwrap();
+    let author_fields = fast_schema.record_index().get_record_fields("benchmark.Author").unwrap();
     group.bench_function("turbine::avro nested field", |b| {
         b.iter(|| {
             if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(turbine::avro::Value::Record(author)) = record.get("author") {
-                    if let Some(name) = author.get("name") {
+                if let Some(turbine::avro::Value::Record(author)) = record.get("author", complex_fields) {
+                    if let Some(name) = author.get("name", author_fields) {
                         return black_box(name.clone());
                     }
                 }
@@ -270,19 +272,19 @@ fn bench_value_field_access(c: &mut Criterion) {
         b.iter(|| {
             let mut results = Vec::with_capacity(5);
             if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(v) = record.get("id") {
+                if let Some(v) = record.get("id", complex_fields) {
                     results.push(v.clone());
                 }
-                if let Some(v) = record.get("version") {
+                if let Some(v) = record.get("version", complex_fields) {
                     results.push(v.clone());
                 }
-                if let Some(v) = record.get("active") {
+                if let Some(v) = record.get("active", complex_fields) {
                     results.push(v.clone());
                 }
-                if let Some(v) = record.get("score") {
+                if let Some(v) = record.get("score", complex_fields) {
                     results.push(v.clone());
                 }
-                if let Some(v) = record.get("priority") {
+                if let Some(v) = record.get("priority", complex_fields) {
                     results.push(v.clone());
                 }
             }
@@ -379,11 +381,12 @@ fn bench_array_iteration(c: &mut Criterion) {
     });
 
     // turbine::avro - iterate over related_ids array
+    let complex_fields = fast_schema.record_index().get_record_fields("benchmark.ComplexDocument").unwrap();
     group.bench_function("turbine::avro array sum", |b| {
         b.iter(|| {
             let mut sum: i64 = 0;
             if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(turbine::avro::Value::Array(arr)) = record.get("related_ids") {
+                if let Some(turbine::avro::Value::Array(arr)) = record.get("related_ids", complex_fields) {
                     for item in arr {
                         if let turbine::avro::Value::Long(n) = item {
                             sum += n;
@@ -435,15 +438,16 @@ fn bench_map_access(c: &mut Criterion) {
         })
     });
 
-    // turbine::avro - access map keys (maps are records with HashMap)
+    // turbine::avro - access map keys (maps are HashMap<Cow<str>, Value>)
+    let complex_fields = fast_schema.record_index().get_record_fields("benchmark.ComplexDocument").unwrap();
     group.bench_function("turbine::avro map lookup", |b| {
         b.iter(|| {
             let mut found = 0;
             if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(turbine::avro::Value::Record(map)) = record.get("metadata") {
+                if let Some(turbine::avro::Value::Map(map)) = record.get("metadata", complex_fields) {
                     // Look up specific keys
                     for key in ["key_0", "key_25", "key_50", "key_75", "key_99"] {
-                        if map.get(key).is_some() {
+                        if map.contains_key(key) {
                             found += 1;
                         }
                     }

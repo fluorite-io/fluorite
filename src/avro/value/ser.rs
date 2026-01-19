@@ -1,6 +1,7 @@
 //! Serialization implementation for Value.
 //!
 //! Provides serde `Serialize` implementation for round-trip support.
+//! Records are serialized as sequences of values in schema order.
 
 use super::{GenericRecord, Value};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
@@ -75,11 +76,13 @@ impl Serialize for GenericRecord<'_> {
 	where
 		S: Serializer,
 	{
-		let mut map = serializer.serialize_map(Some(self.len()))?;
-		for (key, value) in self.iter() {
-			map.serialize_entry(key, value)?;
+		// Serialize record as a sequence of field values (no field names)
+		// The Avro serializer knows the schema and will write fields in order
+		let mut seq = serializer.serialize_seq(Some(self.len()))?;
+		for value in self.values() {
+			seq.serialize_element(value)?;
 		}
-		map.end()
+		seq.end()
 	}
 }
 
@@ -102,14 +105,14 @@ mod tests {
 
 	#[test]
 	fn test_serialize_record() {
-		let mut record = GenericRecord::new();
-		record.put("name", Value::String(Cow::Borrowed("Alice")));
-		record.put("age", Value::Int(30));
+		// Records serialize as arrays of values
+		let record = GenericRecord::from_fields(vec![
+			Value::String(Cow::Borrowed("Alice")),
+			Value::Int(30),
+		]);
 
 		let json = serde_json::to_string(&Value::Record(record)).unwrap();
-		assert!(json.contains("\"name\""));
-		assert!(json.contains("\"Alice\""));
-		assert!(json.contains("\"age\""));
-		assert!(json.contains("30"));
+		// Record is serialized as a JSON array
+		assert_eq!(json, r#"["Alice",30]"#);
 	}
 }

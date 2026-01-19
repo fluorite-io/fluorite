@@ -8,6 +8,73 @@ use std::{collections::HashMap, marker::PhantomData};
 
 pub(crate) use super::{Fixed, Name};
 
+/// Type information for a field, enabling fast traversal without schema lookups.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldType {
+	// Primitives
+	Null,
+	Boolean,
+	Int,
+	Long,
+	Float,
+	Double,
+	Bytes,
+	String,
+	// Logical types
+	Uuid,
+	Date,
+	TimeMillis,
+	TimeMicros,
+	TimestampMillis,
+	TimestampMicros,
+	Decimal,
+	BigDecimal,
+	Duration,
+	// Complex types
+	/// Record type with its full name for index lookup
+	Record(String),
+	/// Enum type with its full name
+	Enum(String),
+	/// Fixed type with name and size
+	Fixed { name: String, size: usize },
+	/// Array with element type
+	Array(Box<FieldType>),
+	/// Map with value type (Avro map keys are always strings)
+	Map(Box<FieldType>),
+	/// Union with variant types
+	Union(Vec<FieldType>),
+}
+
+/// Index for fast field lookup in records.
+///
+/// Maps record names to their field indices and types, enabling O(1) field access
+/// and fast traversal without storing field names in each record instance.
+#[derive(Debug, Default)]
+pub struct SchemaRecordIndex {
+	/// Maps record full name -> (field name -> (field position, field type))
+	records: HashMap<String, HashMap<String, (usize, FieldType)>>,
+}
+
+impl SchemaRecordIndex {
+	/// Get the field index and type for a given record and field name.
+	pub fn get_field(&self, record_name: &str, field_name: &str) -> Option<(usize, &FieldType)> {
+		self.records
+			.get(record_name)?
+			.get(field_name)
+			.map(|(idx, ft)| (*idx, ft))
+	}
+
+	/// Get the field index for a given record and field name.
+	pub fn get_field_index(&self, record_name: &str, field_name: &str) -> Option<usize> {
+		self.records.get(record_name)?.get(field_name).map(|(idx, _)| *idx)
+	}
+
+	/// Get the field map for a given record.
+	pub fn get_record_fields(&self, record_name: &str) -> Option<&HashMap<String, (usize, FieldType)>> {
+		self.records.get(record_name)
+	}
+}
+
 /// Main Schema type, opaque representation of an Avro schema
 ///
 /// This is the fully pre-computed type used by the serializer and deserializer.
@@ -32,6 +99,8 @@ pub struct Schema {
 	nodes: Vec<SchemaNode<'static>>,
 	fingerprint: [u8; 8],
 	schema_json: String,
+	/// Index for fast record field lookup
+	record_index: SchemaRecordIndex,
 }
 
 impl Schema {
@@ -73,6 +142,11 @@ impl Schema {
 	/// Obtain the Rabin fingerprint of the schema
 	pub fn rabin_fingerprint(&self) -> &[u8; 8] {
 		&self.fingerprint
+	}
+
+	/// Get the record field index for fast field lookups
+	pub fn record_index(&self) -> &SchemaRecordIndex {
+		&self.record_index
 	}
 }
 
@@ -264,6 +338,7 @@ impl TryFrom<super::safe::SchemaMut> for Schema {
 				None => safe.serialize_to_json()?,
 				Some(json) => json,
 			},
+			record_index: SchemaRecordIndex::default(),
 		};
 		let len = ret.nodes.len();
 		// Let's be extra-sure (second condition is for calls to add)
@@ -433,6 +508,69 @@ impl TryFrom<super::safe::SchemaMut> for Schema {
 				curr_storage_node_ptr = curr_storage_node_ptr.add(1);
 			}
 		}
+
+		// Build the record_index for fast field lookups
+		// Helper function to convert SchemaNode to FieldType
+		fn schema_node_to_field_type(node: &SchemaNode<'_>) -> FieldType {
+			match node {
+				SchemaNode::Null => FieldType::Null,
+				SchemaNode::Boolean => FieldType::Boolean,
+				SchemaNode::Int => FieldType::Int,
+				SchemaNode::Long => FieldType::Long,
+				SchemaNode::Float => FieldType::Float,
+				SchemaNode::Double => FieldType::Double,
+				SchemaNode::Bytes => FieldType::Bytes,
+				SchemaNode::String => FieldType::String,
+				SchemaNode::Uuid => FieldType::Uuid,
+				SchemaNode::Date => FieldType::Date,
+				SchemaNode::TimeMillis => FieldType::TimeMillis,
+				SchemaNode::TimeMicros => FieldType::TimeMicros,
+				SchemaNode::TimestampMillis => FieldType::TimestampMillis,
+				SchemaNode::TimestampMicros => FieldType::TimestampMicros,
+				SchemaNode::Decimal(_) => FieldType::Decimal,
+				SchemaNode::BigDecimal => FieldType::BigDecimal,
+				SchemaNode::Duration => FieldType::Duration,
+				SchemaNode::Record(rec) => {
+					FieldType::Record(rec.name.fully_qualified_name().to_owned())
+				}
+				SchemaNode::Enum(e) => FieldType::Enum(e.name.fully_qualified_name().to_owned()),
+				SchemaNode::Fixed(f) => FieldType::Fixed {
+					name: f.name.fully_qualified_name().to_owned(),
+					size: f.size,
+				},
+				SchemaNode::Array(elem) => {
+					FieldType::Array(Box::new(schema_node_to_field_type(elem.as_ref())))
+				}
+				SchemaNode::Map(val) => {
+					FieldType::Map(Box::new(schema_node_to_field_type(val.as_ref())))
+				}
+				SchemaNode::Union(u) => FieldType::Union(
+					u.variants
+						.iter()
+						.map(|v| schema_node_to_field_type(v.as_ref()))
+						.collect(),
+				),
+			}
+		}
+
+		// Iterate through all nodes and build index for records
+		for node in &ret.nodes {
+			if let SchemaNode::Record(record) = node {
+				let field_map: HashMap<String, (usize, FieldType)> = record
+					.fields
+					.iter()
+					.enumerate()
+					.map(|(idx, field)| {
+						let field_type = schema_node_to_field_type(field.schema.as_ref());
+						(field.name.clone(), (idx, field_type))
+					})
+					.collect();
+				ret.record_index
+					.records
+					.insert(record.name.fully_qualified_name().to_owned(), field_map);
+			}
+		}
+
 		Ok(ret)
 	}
 }

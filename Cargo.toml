@@ -65,3 +65,10 @@ pretty_assertions = "1"
 [[bench]]
 name = "avro_value"
 harness = false
+
+[[bin]]
+name = "profile_deser"
+path = "benches/profile_deser.rs"
+
+[profile.release]
+debug = true

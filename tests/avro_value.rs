@@ -1,7 +1,9 @@
 //! Tests for the Value type - dynamic Avro value representation
 
-use turbine::avro::{from_datum_slice, ser::SerializerConfig, to_datum_vec, GenericRecord, Schema, Value};
 use std::borrow::Cow;
+use turbine::avro::{
+	from_datum_slice, ser::SerializerConfig, to_datum_vec, GenericRecord, Schema, Value,
+};
 
 #[test]
 fn test_null() {
@@ -135,10 +137,23 @@ fn test_record() {
 	let value: Value = from_datum_slice(data, &schema).unwrap();
 	let record = value.as_record().unwrap();
 
+	// Get the field index for this record type
+	let fields = schema.record_index().get_record_fields("Person").unwrap();
+
 	assert_eq!(record.len(), 2);
-	assert_eq!(record.get("id"), Some(&Value::Int(2)));
-	assert_eq!(record.get("name"), Some(&Value::String(Cow::Borrowed("John"))));
-	assert_eq!(record.get("unknown"), None);
+	assert_eq!(record.get("id", fields), Some(&Value::Int(2)));
+	assert_eq!(
+		record.get("name", fields),
+		Some(&Value::String(Cow::Borrowed("John")))
+	);
+	assert_eq!(record.get("unknown", fields), None);
+
+	// Can also access by index
+	assert_eq!(record.get_by_index(0), Some(&Value::Int(2)));
+	assert_eq!(
+		record.get_by_index(1),
+		Some(&Value::String(Cow::Borrowed("John")))
+	);
 }
 
 #[test]
@@ -159,9 +174,9 @@ fn test_record_field_order() {
 	let value: Value = from_datum_slice(data, &schema).unwrap();
 	let record = value.as_record().unwrap();
 
-	// Verify iteration order matches schema order
-	let keys: Vec<&str> = record.keys().collect();
-	assert_eq!(keys, vec!["a", "b", "c"]);
+	// Verify fields are in schema order
+	let values: Vec<i32> = record.values().map(|v| v.as_int().unwrap()).collect();
+	assert_eq!(values, vec![1, 2, 3]);
 }
 
 #[test]
@@ -222,10 +237,10 @@ fn test_map() {
 	let data = &[4, 2, b'a', 20, 2, b'b', 40, 0];
 
 	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let record = value.as_record().unwrap();
+	let map = value.as_map().unwrap();
 
-	assert_eq!(record.get("a"), Some(&Value::Int(10)));
-	assert_eq!(record.get("b"), Some(&Value::Int(20)));
+	assert_eq!(map.get("a"), Some(&Value::Int(10)));
+	assert_eq!(map.get("b"), Some(&Value::Int(20)));
 }
 
 #[test]
@@ -252,8 +267,12 @@ fn test_nested_record() {
 
 	let value: Value = from_datum_slice(data, &schema).unwrap();
 	let outer = value.as_record().unwrap();
-	let inner = outer.get("inner").unwrap().as_record().unwrap();
-	assert_eq!(inner.get("value"), Some(&Value::Int(21)));
+
+	let outer_fields = schema.record_index().get_record_fields("Outer").unwrap();
+	let inner_fields = schema.record_index().get_record_fields("Inner").unwrap();
+
+	let inner = outer.get("inner", outer_fields).unwrap().as_record().unwrap();
+	assert_eq!(inner.get("value", inner_fields), Some(&Value::Int(21)));
 }
 
 #[test]
@@ -281,29 +300,20 @@ fn test_value_into_owned() {
 
 #[test]
 fn test_generic_record_operations() {
-	let mut record = GenericRecord::new();
-	assert!(record.is_empty());
-
-	record.put("a", Value::Int(1));
-	record.put("b", Value::Int(2));
-	record.put("c", Value::Int(3));
+	let record = GenericRecord::from_fields(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
 
 	assert_eq!(record.len(), 3);
 	assert!(!record.is_empty());
-	assert!(record.contains("a"));
-	assert!(!record.contains("d"));
 
-	// Update existing field
-	let old = record.put("a", Value::Int(10));
-	assert_eq!(old, Some(Value::Int(1)));
-	assert_eq!(record.get("a"), Some(&Value::Int(10)));
+	// Access by index
+	assert_eq!(record.get_by_index(0), Some(&Value::Int(1)));
+	assert_eq!(record.get_by_index(1), Some(&Value::Int(2)));
+	assert_eq!(record.get_by_index(2), Some(&Value::Int(3)));
+	assert_eq!(record.get_by_index(3), None);
 
 	// Iteration
-	let values: Vec<i32> = record
-		.values()
-		.map(|v| v.as_int().unwrap())
-		.collect();
-	assert_eq!(values, vec![10, 2, 3]);
+	let values: Vec<i32> = record.values().map(|v| v.as_int().unwrap()).collect();
+	assert_eq!(values, vec![1, 2, 3]);
 }
 
 #[test]
@@ -343,18 +353,21 @@ fn test_value_round_trip_record() {
 	.unwrap();
 	let config = &mut SerializerConfig::new(&schema);
 
-	let mut record = GenericRecord::new();
-	record.put("id", Value::Int(42));
-	record.put("name", Value::String(Cow::Borrowed("test")));
+	// Create record with fields in schema order
+	let record = GenericRecord::from_fields(vec![
+		Value::Int(42),
+		Value::String(Cow::Borrowed("test")),
+	]);
 	let original = Value::Record(record);
 
 	let encoded = to_datum_vec(&original, config).unwrap();
 	let decoded: Value = from_datum_slice(&encoded, &schema).unwrap();
 
+	let fields = schema.record_index().get_record_fields("Test").unwrap();
 	let decoded_record = decoded.as_record().unwrap();
-	assert_eq!(decoded_record.get("id"), Some(&Value::Int(42)));
+	assert_eq!(decoded_record.get("id", fields), Some(&Value::Int(42)));
 	assert_eq!(
-		decoded_record.get("name"),
+		decoded_record.get("name", fields),
 		Some(&Value::String(Cow::Borrowed("test")))
 	);
 }
@@ -427,42 +440,39 @@ fn test_complex_nested_structure() {
 	let value: Value = from_datum_slice(data, &schema).unwrap();
 	let record = value.as_record().unwrap();
 
-	assert_eq!(record.get("id"), Some(&Value::String(Cow::Borrowed("doc1"))));
+	let fields = schema.record_index().get_record_fields("Document").unwrap();
 
-	let tags = record.get("tags").unwrap().as_array().unwrap();
+	assert_eq!(
+		record.get("id", fields),
+		Some(&Value::String(Cow::Borrowed("doc1")))
+	);
+
+	let tags = record.get("tags", fields).unwrap().as_array().unwrap();
 	assert_eq!(tags.len(), 2);
 	assert_eq!(tags[0].as_str(), Some("a"));
 	assert_eq!(tags[1].as_str(), Some("b"));
 
-	let metadata = record.get("metadata").unwrap().as_record().unwrap();
+	let metadata = record.get("metadata", fields).unwrap().as_map().unwrap();
 	assert_eq!(metadata.get("x"), Some(&Value::Int(1)));
 	assert_eq!(metadata.get("y"), Some(&Value::Int(2)));
 }
 
 #[test]
 fn test_value_equality() {
-	let mut r1 = GenericRecord::new();
-	r1.put("a", Value::Int(1));
-	r1.put("b", Value::Int(2));
-
-	let mut r2 = GenericRecord::new();
-	r2.put("a", Value::Int(1));
-	r2.put("b", Value::Int(2));
+	let r1 = GenericRecord::from_fields(vec![Value::Int(1), Value::Int(2)]);
+	let r2 = GenericRecord::from_fields(vec![Value::Int(1), Value::Int(2)]);
 
 	assert_eq!(Value::Record(r1.clone()), Value::Record(r2.clone()));
 
-	// Different order results in different records
-	let mut r3 = GenericRecord::new();
-	r3.put("b", Value::Int(2));
-	r3.put("a", Value::Int(1));
+	// Different values result in different records
+	let r3 = GenericRecord::from_fields(vec![Value::Int(2), Value::Int(1)]);
 
 	assert_ne!(Value::Record(r1), Value::Record(r3));
 }
 
 #[test]
 fn test_value_clone() {
-	let mut record = GenericRecord::new();
-	record.put("x", Value::String(Cow::Borrowed("test")));
+	let record = GenericRecord::from_fields(vec![Value::String(Cow::Borrowed("test"))]);
 
 	let value = Value::Record(record);
 	let cloned = value.clone();

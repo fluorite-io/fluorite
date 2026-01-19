@@ -5,7 +5,7 @@
 //!
 //! - **Zero-copy deserialization**: Strings and bytes can borrow from the input slice
 //! - **Schema-aware deserialization**: Preserves logical types (Date, Timestamp, UUID, Decimal, Duration)
-//! - **O(1) record field lookup**: GenericRecord uses a HashMap index for fast field access
+//! - **O(1) record field lookup**: Use schema's field index for fast access by name
 //!
 //! # Example
 //!
@@ -28,8 +28,11 @@
 //! let value: Value = from_datum_slice(data, &schema).unwrap();
 //!
 //! if let Value::Record(record) = &value {
-//!     assert_eq!(record.get("id"), Some(&Value::Int(2)));
-//!     assert_eq!(record.get("name"), Some(&Value::String("John".into())));
+//!     // Access fields by index (fastest)
+//!     assert_eq!(record.get_by_index(0), Some(&Value::Int(2)));
+//!     // Or by name using schema's field index
+//!     let fields = schema.record_index().get_record_fields("User").unwrap();
+//!     assert_eq!(record.get("id", fields), Some(&Value::Int(2)));
 //! }
 //! ```
 
