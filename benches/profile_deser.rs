@@ -124,6 +124,8 @@ fn make_complex_document(
 }
 
 fn main() {
+    use turbine::avro::value::BatchDeserializer;
+
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
     let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
@@ -134,8 +136,12 @@ fn main() {
     // Run many iterations for profiling
     const ITERATIONS: usize = 500_000;
 
+    // Use bump allocator for profiling
+    let mut batch = BatchDeserializer::new(&fast_schema);
+
     for _ in 0..ITERATIONS {
-        let value: turbine::avro::Value = turbine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
-        black_box(value);
+        batch.reset();
+        let value = batch.deserialize(&datum).unwrap();
+        let _ = black_box(&value);
     }
 }

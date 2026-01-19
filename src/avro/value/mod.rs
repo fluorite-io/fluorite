@@ -36,10 +36,12 @@
 //! }
 //! ```
 
+pub mod bump;
 mod de;
 mod record;
 mod ser;
 
+pub use bump::{BatchDeserializer, BumpValue, BumpValueSeed, from_datum_slice_bump};
 pub use record::GenericRecord;
 
 use rust_decimal::Decimal as RustDecimal;

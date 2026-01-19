@@ -521,6 +521,115 @@ fn bench_string_heavy(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_bump_allocation(c: &mut Criterion) {
+    use turbine::avro::value::BatchDeserializer;
+
+    let mut group = c.benchmark_group("Bump vs Regular Allocation");
+
+    let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
+    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+
+    // Test with different sizes
+    for (num_tags, num_metadata, num_comments, num_related, label) in [
+        (5, 5, 3, 10, "small"),
+        (20, 20, 10, 50, "medium"),
+        (50, 50, 30, 200, "large"),
+    ] {
+        let document = make_complex_document(num_tags, num_metadata, num_comments, num_related);
+        let datum = apache_avro::to_avro_datum(&apache_schema, document).unwrap();
+
+        group.throughput(Throughput::Bytes(datum.len() as u64));
+
+        // Regular allocation (Vec-based)
+        group.bench_with_input(
+            BenchmarkId::new("regular_alloc", label),
+            &datum,
+            |b, datum| {
+                b.iter(|| {
+                    let value: turbine::avro::Value =
+                        turbine::avro::from_datum_slice(datum, &fast_schema).unwrap();
+                    black_box(value)
+                })
+            },
+        );
+
+        // Bump allocation (reusing allocator)
+        group.bench_with_input(
+            BenchmarkId::new("bump_alloc", label),
+            &datum,
+            |b, datum| {
+                let mut batch = BatchDeserializer::new(&fast_schema);
+                b.iter(|| {
+                    batch.reset();
+                    let value = batch.deserialize(datum).unwrap();
+                    // Access the value to prevent dead code elimination without escaping the closure
+                    let _ = black_box(&value);
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_batch_processing(c: &mut Criterion) {
+    use turbine::avro::value::BatchDeserializer;
+
+    let mut group = c.benchmark_group("Batch Processing");
+
+    let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
+    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+
+    // Generate a batch of documents
+    let batch_sizes = [10, 100, 1000];
+
+    for batch_size in batch_sizes {
+        // Create batch of encoded records
+        let records: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| {
+                let document = make_complex_document(5 + (i % 10), 5, 3, 10);
+                apache_avro::to_avro_datum(&apache_schema, document).unwrap()
+            })
+            .collect();
+
+        let total_bytes: usize = records.iter().map(|r| r.len()).sum();
+        group.throughput(Throughput::Bytes(total_bytes as u64));
+
+        // Regular allocation - new allocations for each record
+        group.bench_with_input(
+            BenchmarkId::new("regular_alloc", batch_size),
+            &records,
+            |b, records| {
+                b.iter(|| {
+                    for record in records {
+                        let value: turbine::avro::Value =
+                            turbine::avro::from_datum_slice(record, &fast_schema).unwrap();
+                        black_box(&value);
+                    }
+                })
+            },
+        );
+
+        // Bump allocation - reset between records (simulates consuming each record before next)
+        group.bench_with_input(
+            BenchmarkId::new("bump_alloc_reset_each", batch_size),
+            &records,
+            |b, records| {
+                let mut batch = BatchDeserializer::new(&fast_schema);
+                b.iter(|| {
+                    for record in records {
+                        batch.reset();
+                        let value = batch.deserialize(record).unwrap();
+                        let _ = black_box(&value);
+                    }
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_value_deserialization,
@@ -529,5 +638,7 @@ criterion_group!(
     bench_array_iteration,
     bench_map_access,
     bench_string_heavy,
+    bench_bump_allocation,
+    bench_batch_processing,
 );
 criterion_main!(benches);

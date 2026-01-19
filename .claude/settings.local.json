@@ -10,7 +10,8 @@
       "Bash(grep:*)",
       "Bash(cargo bench:*)",
       "Bash(cargo flamegraph:*)",
-      "Bash(sysctl:*)"
+      "Bash(sysctl:*)",
+      "Bash(sort:*)"
     ]
   }
 }

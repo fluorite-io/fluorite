@@ -2,6 +2,7 @@ use super::*;
 
 use std::num::NonZeroUsize;
 
+#[inline(always)]
 fn read_block_len<'de, R>(
 	state: &mut DeserializerState<'_, R>,
 	ignored: bool,
@@ -63,6 +64,7 @@ impl<'r, 's, R> BlockReader<'r, 's, R> {
 			ignored: hinted_ignored,
 		}
 	}
+	#[inline(always)]
 	fn has_more<'de>(&mut self) -> Result<bool, DeError>
 	where
 		R: ReadSlice<'de>,
@@ -98,6 +100,7 @@ pub(in super::super) struct ArraySeqAccess<'r, 's, R> {
 impl<'de, R: ReadSlice<'de>> SeqAccess<'de> for ArraySeqAccess<'_, '_, R> {
 	type Error = DeError;
 
+	#[inline(always)]
 	fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
 	where
 		T: DeserializeSeed<'de>,
@@ -120,6 +123,7 @@ pub(in super::super) struct MapMapAccess<'r, 's, R> {
 impl<'de, R: ReadSlice<'de>> MapAccess<'de> for MapMapAccess<'_, '_, R> {
 	type Error = DeError;
 
+	#[inline(always)]
 	fn next_key_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
 	where
 		T: DeserializeSeed<'de>,
@@ -133,6 +137,7 @@ impl<'de, R: ReadSlice<'de>> MapAccess<'de> for MapMapAccess<'_, '_, R> {
 		})?))
 	}
 
+	#[inline(always)]
 	fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
 	where
 		V: DeserializeSeed<'de>,

@@ -2328,6 +2328,7 @@ dependencies = [
  "apache-avro",
  "arrow",
  "axum",
+ "bumpalo",
  "bytes",
  "chrono",
  "clap",

@@ -54,7 +54,7 @@ impl private::Sealed for SliceReadTake<'_> {}
 impl Read for SliceReadTake<'_> {
 	fn read_varint<I>(&mut self) -> Result<I, DeError>
 	where
-		I: VarInt,
+		I: FastVarInt,
 	{
 		<SliceRead<'_> as Read>::read_varint(&mut self.inner_slice_read)
 	}

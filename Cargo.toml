@@ -54,6 +54,9 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 parking_lot = "0.12"
 
+# Arena allocation
+bumpalo = { version = "3", features = ["collections"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4"

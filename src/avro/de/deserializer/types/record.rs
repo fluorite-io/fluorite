@@ -43,6 +43,7 @@ pub(in super::super) struct RecordSeqAccess<'r, 's, R> {
 impl<'de, R: ReadSlice<'de>> SeqAccess<'de> for RecordSeqAccess<'_, '_, R> {
 	type Error = DeError;
 
+	#[inline(always)]
 	fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
 	where
 		T: DeserializeSeed<'de>,
