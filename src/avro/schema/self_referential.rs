@@ -1,6 +1,5 @@
 use super::{
 	safe::{LogicalType, RegularType as SafeSchemaType, SchemaNode as SafeSchemaNode},
-	union_variants_per_type_lookup::PerTypeLookup as UnionVariantsPerTypeLookup,
 	SchemaError,
 };
 
@@ -123,17 +122,6 @@ impl Schema {
 		unsafe { NodeRef::new(self.nodes.as_ptr() as *mut _) }
 	}
 
-	/// SAFETY: this `NodeRef` must never be dereferenced after the
-	/// corresponding schema was dropped.
-	pub(crate) unsafe fn root_with_fake_static_lifetime(&self) -> NodeRef<'static> {
-		assert!(
-			!self.nodes.is_empty(),
-			"Schema must have at least one node (the root)"
-		);
-		// SAFETY: bounds checked
-		NodeRef::new(self.nodes.as_ptr() as *mut _)
-	}
-
 	/// Obtain the JSON for this schema
 	pub fn json(&self) -> &str {
 		&self.schema_json
@@ -189,16 +177,6 @@ impl<N> NodeRef<'static, N> {
 			_spooky: PhantomData,
 		}
 	}
-	pub(crate) const fn from_static(actually_static: &'static N) -> Self {
-		// SAFETY: since it's actually 'static, it always upholds the invariant
-		// that we can turn it into a `&'static N`
-		unsafe {
-			Self {
-				node: std::ptr::NonNull::new_unchecked(actually_static as *const N as *mut N),
-				_spooky: PhantomData,
-			}
-		}
-	}
 }
 impl<'a, N> NodeRef<'a, N> {
 	/// Compared to `Deref`, this propagates the lifetime of the reference
@@ -249,35 +227,16 @@ pub(crate) enum SchemaNode<'a> {
 }
 
 /// Component of a [`SchemaNode`]
+#[derive(Debug)]
 pub(crate) struct Union<'a> {
 	pub(crate) variants: Vec<NodeRef<'a>>,
-	pub(crate) per_type_lookup: UnionVariantsPerTypeLookup<'a>,
-}
-
-impl std::fmt::Debug for Union<'_> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		// Skip per_type_lookup for readability
-		f.debug_struct("Union")
-			.field("variants", &self.variants)
-			.finish()
-	}
 }
 
 /// Component of a [`SchemaNode`]
+#[derive(Debug)]
 pub(crate) struct Record<'a> {
 	pub(crate) fields: Vec<RecordField<'a>>,
 	pub(crate) name: Name,
-	pub(crate) per_name_lookup: HashMap<String, usize>,
-}
-
-impl<'a> std::fmt::Debug for Record<'a> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		// Skip per_type_lookup for readability
-		f.debug_struct("Record")
-			.field("fields", &self.fields)
-			.field("name", &self.name)
-			.finish()
-	}
 }
 
 /// Component of a [`SchemaNode`]
@@ -288,21 +247,10 @@ pub(crate) struct RecordField<'a> {
 }
 
 /// Component of a [`SchemaNode`]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Enum {
 	pub(crate) symbols: Vec<String>,
 	pub(crate) name: Name,
-	pub(crate) per_name_lookup: HashMap<String, usize>,
-}
-
-impl std::fmt::Debug for Enum {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		// Skip per_type_lookup for readability
-		f.debug_struct("Enum")
-			.field("name", &self.name)
-			.field("symbols", &self.symbols)
-			.finish()
-	}
 }
 
 /// Component of a [`SchemaNode`]
@@ -439,20 +387,9 @@ impl TryFrom<super::safe::SchemaMut> for Schema {
 								}
 								variants
 							},
-							per_type_lookup: {
-								// Can't be initialized just yet because other nodes
-								// may not have been initialized
-								UnionVariantsPerTypeLookup::placeholder()
-							},
 						}
 					}),
 					SafeSchemaType::Record(record) => SchemaNode::Record(Record {
-						per_name_lookup: record
-							.fields
-							.iter()
-							.enumerate()
-							.map(|(i, v)| (v.name.clone(), i))
-							.collect(),
 						fields: {
 							let mut fields = Vec::with_capacity(record.fields.len());
 							for field in record.fields {
@@ -466,12 +403,6 @@ impl TryFrom<super::safe::SchemaMut> for Schema {
 						name: record.name,
 					}),
 					SafeSchemaType::Enum(enum_) => SchemaNode::Enum(Enum {
-						per_name_lookup: enum_
-							.symbols
-							.iter()
-							.enumerate()
-							.map(|(i, v)| (v.clone(), i))
-							.collect(),
 						symbols: enum_.symbols,
 						name: enum_.name,
 					}),
@@ -483,30 +414,6 @@ impl TryFrom<super::safe::SchemaMut> for Schema {
 				*curr_storage_node_ptr = new_node;
 				curr_storage_node_ptr = curr_storage_node_ptr.add(1);
 			};
-		}
-
-		// Now that all the nodes have been **fully** initialized (except their
-		// `per_type_lookup` tables) we can initialize the `per_type_lookup` tables
-		// Note that this has to be done after all nodes have been initialized because
-		// the `per_type_lookup` table may read even the late-initialized fields such as
-		// decimal repr.
-		curr_storage_node_ptr = storage_start_ptr;
-		for _ in 0..len {
-			// Safety:
-			// - UnionVariantsPerTypeLookup won't ever read `per_type_lookup` of the other
-			//   nodes, so there are no aliasing issues.
-			unsafe {
-				match *curr_storage_node_ptr {
-					SchemaNode::Union(Union {
-						ref variants,
-						ref mut per_type_lookup,
-					}) => {
-						*per_type_lookup = UnionVariantsPerTypeLookup::new(variants);
-					}
-					_ => {}
-				}
-				curr_storage_node_ptr = curr_storage_node_ptr.add(1);
-			}
 		}
 
 		// Build the record_index for fast field lookups

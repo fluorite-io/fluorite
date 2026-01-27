@@ -2,69 +2,35 @@
 //!
 //! # For advanced usage
 //!
-//! You typically want to use top-level functions such as
-//! [`from_datum_slice`](crate::from_datum_slice) but access to this may be
-//! necessary for more advanced usage.
+//! For most use cases, use [`from_datum_slice_bump`](crate::avro::value::from_datum_slice_bump)
+//! or [`BatchDeserializer`](crate::avro::value::BatchDeserializer).
 //!
-//! This gives manual access to the type that implements
-//! [`serde::Deserializer`], as well as its building blocks in order to set
-//! configuration parameters meant to prevent DOS:
+//! This module provides manual access to the [`serde::Deserializer`] implementation,
+//! as well as configuration parameters to prevent DOS:
 //! - [`DeserializerConfig::max_seq_size`]
 //! - [`read::ReaderRead::max_alloc_size`]
 //!
-//! Such usage would go as follows:
+//! # Example
+//!
 //! ```
-//! let schema: turbine::avro::Schema = r#"
+//! use turbine::avro::Schema;
+//! use turbine::avro::value::{from_datum_slice_bump, BumpValue};
+//!
+//! let schema: Schema = r#"
 //! {
-//! 	"namespace": "test",
-//! 	"type": "record",
-//! 	"name": "Test",
-//! 	"fields": [
-//! 		{
-//! 			"type": {
-//! 				"type": "string"
-//! 			},
-//! 			"name": "field"
-//! 		}
-//! 	]
+//!     "type": "record",
+//!     "name": "Test",
+//!     "fields": [{"name": "field", "type": "string"}]
 //! }
-//! "#
-//! .parse()
-//! .expect("Failed to parse schema");
+//! "#.parse().unwrap();
 //!
-//! #[derive(serde_derive::Deserialize, Debug, PartialEq)]
-//! struct Test {
-//! 	field: String,
+//! let avro_datum: &[u8] = &[6, 102, 111, 111]; // field = "foo"
+//! let bump = bumpalo::Bump::new();
+//! let value = from_datum_slice_bump(avro_datum, &schema, &bump).unwrap();
+//!
+//! if let BumpValue::Record(fields) = value {
+//!     assert!(matches!(fields[0], BumpValue::String("foo")));
 //! }
-//!
-//! let avro_datum: &[u8] = &[6, 102, 111, 111]; // Any `impl BufRead`
-//!
-//! // Of course, don't actually use `ReaderRead` if you have a slice
-//! let mut avro_reader = turbine::avro::de::read::ReaderRead::new(avro_datum);
-//!
-//! // Now we can set some custom parameters
-//! avro_reader.max_alloc_size = 32 * 1024;
-//!
-//! // We can also set parameters that are common to the slice version and the reader version
-//! let mut deserializer_config = turbine::avro::de::DeserializerConfig::new(&schema);
-//! deserializer_config.max_seq_size = 1_000_000;
-//!
-//! // Now we can build the struct that will generally serve through deserialization
-//! let mut deserializer_state =
-//! 	turbine::avro::de::DeserializerState::with_config(avro_reader, deserializer_config);
-//!
-//! // It's not the `&mut DeserializerState` that implements `serde::Deserializer` directly, instead
-//! // it is `DatumDeserializer` (which is essentially an `&mut DeserializerState` but not exactly
-//! // because it also keeps track of the current schema node)
-//! // We build it through `DeserializerState::deserializer`
-//! let result: Test = serde::Deserialize::deserialize(deserializer_state.deserializer())
-//! 	.expect("Failed to deserialize");
-//! assert_eq!(
-//! 	result,
-//! 	Test {
-//! 		field: "foo".to_owned()
-//! 	}
-//! );
 //! ```
 
 mod deserializer;

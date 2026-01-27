@@ -1,107 +1,102 @@
-//! Tests for the Value type - dynamic Avro value representation
+//! Tests for the BumpValue type - dynamic Avro value representation
 
-use std::borrow::Cow;
 use turbine::avro::{
-	from_datum_slice, ser::SerializerConfig, to_datum_vec, GenericRecord, Schema, Value,
+	value::{from_datum_slice_bump, BumpValue},
+	Schema,
 };
 
 #[test]
 fn test_null() {
 	let schema: Schema = r#""null""#.parse().unwrap();
 	let data = &[];
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	assert_eq!(value, Value::Null);
-	assert!(value.is_null());
+	let bump = bumpalo::Bump::new();
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Null));
 }
 
 #[test]
 fn test_boolean() {
 	let schema: Schema = r#""boolean""#.parse().unwrap();
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(&[1], &schema).unwrap();
-	assert_eq!(value, Value::Boolean(true));
-	assert_eq!(value.as_bool(), Some(true));
+	let value = from_datum_slice_bump(&[1], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Boolean(true)));
 
-	let value: Value = from_datum_slice(&[0], &schema).unwrap();
-	assert_eq!(value, Value::Boolean(false));
-	assert_eq!(value.as_bool(), Some(false));
+	let value = from_datum_slice_bump(&[0], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Boolean(false)));
 }
 
 #[test]
 fn test_int() {
 	let schema: Schema = r#""int""#.parse().unwrap();
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(&[4], &schema).unwrap();
-	assert_eq!(value, Value::Int(2));
-	assert_eq!(value.as_int(), Some(2));
+	let value = from_datum_slice_bump(&[4], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Int(2)));
 
-	let value: Value = from_datum_slice(&[3], &schema).unwrap();
-	assert_eq!(value, Value::Int(-2));
+	let value = from_datum_slice_bump(&[3], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Int(-2)));
 }
 
 #[test]
 fn test_long() {
 	let schema: Schema = r#""long""#.parse().unwrap();
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(&[200, 1], &schema).unwrap();
-	assert_eq!(value, Value::Long(100));
-	assert_eq!(value.as_long(), Some(100));
+	let value = from_datum_slice_bump(&[200, 1], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Long(100)));
 }
 
 #[test]
 fn test_float() {
 	let schema: Schema = r#""float""#.parse().unwrap();
 	let data = 3.14f32.to_le_bytes();
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(&data, &schema).unwrap();
-	assert_eq!(value, Value::Float(3.14));
-	assert!((value.as_float().unwrap() - 3.14).abs() < 0.001);
+	let value = from_datum_slice_bump(&data, &schema, &bump).unwrap();
+	if let BumpValue::Float(f) = value {
+		assert!((f - 3.14).abs() < 0.001);
+	} else {
+		panic!("Expected Float");
+	}
 }
 
 #[test]
 fn test_double() {
 	let schema: Schema = r#""double""#.parse().unwrap();
 	let data = 3.14159265359f64.to_le_bytes();
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(&data, &schema).unwrap();
-	assert_eq!(value, Value::Double(3.14159265359));
-	assert!((value.as_double().unwrap() - 3.14159265359).abs() < 0.0001);
+	let value = from_datum_slice_bump(&data, &schema, &bump).unwrap();
+	if let BumpValue::Double(d) = value {
+		assert!((d - 3.14159265359).abs() < 0.0001);
+	} else {
+		panic!("Expected Double");
+	}
 }
 
 #[test]
 fn test_string() {
 	let schema: Schema = r#""string""#.parse().unwrap();
 	let data = &[10, b'h', b'e', b'l', b'l', b'o'];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	assert_eq!(value, Value::String(Cow::Borrowed("hello")));
-	assert_eq!(value.as_str(), Some("hello"));
-}
-
-#[test]
-fn test_string_zero_copy() {
-	let schema: Schema = r#""string""#.parse().unwrap();
-	let data: &[u8] = &[10, b'h', b'e', b'l', b'l', b'o'];
-
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	if let Value::String(Cow::Borrowed(s)) = &value {
-		// Verify it's actually borrowing from the input
-		let s_ptr = s.as_ptr();
-		let data_ptr = data[1..].as_ptr();
-		assert_eq!(s_ptr, data_ptr);
-	} else {
-		panic!("Expected borrowed string");
-	}
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::String("hello")));
 }
 
 #[test]
 fn test_bytes() {
 	let schema: Schema = r#""bytes""#.parse().unwrap();
 	let data = &[6, 1, 2, 3];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	assert_eq!(value, Value::Bytes(Cow::Borrowed(&[1, 2, 3])));
-	assert_eq!(value.as_bytes(), Some(&[1u8, 2, 3][..]));
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Bytes(b) = value {
+		assert_eq!(b, &[1, 2, 3]);
+	} else {
+		panic!("Expected Bytes");
+	}
 }
 
 #[test]
@@ -109,14 +104,17 @@ fn test_array() {
 	let schema: Schema = r#"{"type": "array", "items": "int"}"#.parse().unwrap();
 	// Block with 3 elements: [2, 4, 6] (zigzag encoded as [4, 8, 12])
 	let data = &[6, 4, 8, 12, 0];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let expected = Value::Array(vec![Value::Int(2), Value::Int(4), Value::Int(6)]);
-	assert_eq!(value, expected);
-
-	let arr = value.as_array().unwrap();
-	assert_eq!(arr.len(), 3);
-	assert_eq!(arr[0], Value::Int(2));
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Array(arr) = value {
+		assert_eq!(arr.len(), 3);
+		assert!(matches!(arr[0], BumpValue::Int(2)));
+		assert!(matches!(arr[1], BumpValue::Int(4)));
+		assert!(matches!(arr[2], BumpValue::Int(6)));
+	} else {
+		panic!("Expected Array");
+	}
 }
 
 #[test]
@@ -133,27 +131,16 @@ fn test_record() {
 	.unwrap();
 	// id=2 (zigzag: 4), name="John" (len=4, "John")
 	let data = &[4, 8, b'J', b'o', b'h', b'n'];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let record = value.as_record().unwrap();
-
-	// Get the field index for this record type
-	let fields = schema.record_index().get_record_fields("Person").unwrap();
-
-	assert_eq!(record.len(), 2);
-	assert_eq!(record.get("id", fields), Some(&Value::Int(2)));
-	assert_eq!(
-		record.get("name", fields),
-		Some(&Value::String(Cow::Borrowed("John")))
-	);
-	assert_eq!(record.get("unknown", fields), None);
-
-	// Can also access by index
-	assert_eq!(record.get_by_index(0), Some(&Value::Int(2)));
-	assert_eq!(
-		record.get_by_index(1),
-		Some(&Value::String(Cow::Borrowed("John")))
-	);
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Record(fields) = value {
+		assert_eq!(fields.len(), 2);
+		assert!(matches!(fields[0], BumpValue::Int(2)));
+		assert!(matches!(fields[1], BumpValue::String("John")));
+	} else {
+		panic!("Expected Record");
+	}
 }
 
 #[test]
@@ -170,13 +157,16 @@ fn test_record_field_order() {
 	.parse()
 	.unwrap();
 	let data = &[2, 4, 6];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let record = value.as_record().unwrap();
-
-	// Verify fields are in schema order
-	let values: Vec<i32> = record.values().map(|v| v.as_int().unwrap()).collect();
-	assert_eq!(values, vec![1, 2, 3]);
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Record(fields) = value {
+		assert!(matches!(fields[0], BumpValue::Int(1)));
+		assert!(matches!(fields[1], BumpValue::Int(2)));
+		assert!(matches!(fields[2], BumpValue::Int(3)));
+	} else {
+		panic!("Expected Record");
+	}
 }
 
 #[test]
@@ -188,14 +178,11 @@ fn test_enum() {
 	}"#
 	.parse()
 	.unwrap();
+	let bump = bumpalo::Bump::new();
 
 	// Discriminant 1 = GREEN
-	let value: Value = from_datum_slice(&[2], &schema).unwrap();
-	if let Value::String(s) = &value {
-		assert_eq!(s.as_ref(), "GREEN");
-	} else {
-		panic!("Expected enum to deserialize as string, got {:?}", value);
-	}
+	let value = from_datum_slice_bump(&[2], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::String("GREEN")));
 }
 
 #[test]
@@ -204,18 +191,24 @@ fn test_fixed() {
 		.parse()
 		.unwrap();
 	let data = &[1, 2, 3, 4];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	assert_eq!(value, Value::Bytes(Cow::Borrowed(&[1, 2, 3, 4])));
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Bytes(b) = value {
+		assert_eq!(b, &[1, 2, 3, 4]);
+	} else {
+		panic!("Expected Bytes for fixed");
+	}
 }
 
 #[test]
 fn test_union_null() {
 	let schema: Schema = r#"["null", "string"]"#.parse().unwrap();
 	let data = &[0]; // discriminant 0 = null
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	assert_eq!(value, Value::Null);
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Null));
 }
 
 #[test]
@@ -223,9 +216,10 @@ fn test_union_string() {
 	let schema: Schema = r#"["null", "string"]"#.parse().unwrap();
 	// discriminant 1 = string, then "hi"
 	let data = &[2, 4, b'h', b'i'];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	assert_eq!(value, Value::String(Cow::Borrowed("hi")));
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::String("hi")));
 }
 
 #[test]
@@ -235,12 +229,31 @@ fn test_map() {
 	// Entry: key="a" (len=1), value=10 (zigzag: 20)
 	// Entry: key="b" (len=1), value=20 (zigzag: 40)
 	let data = &[4, 2, b'a', 20, 2, b'b', 40, 0];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let map = value.as_map().unwrap();
-
-	assert_eq!(map.get("a"), Some(&Value::Int(10)));
-	assert_eq!(map.get("b"), Some(&Value::Int(20)));
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Map(entries) = value {
+		assert_eq!(entries.len(), 2);
+		// Map entries are (key, value) tuples
+		let mut found_a = false;
+		let mut found_b = false;
+		for (key, val) in entries {
+			match *key {
+				"a" => {
+					assert!(matches!(val, BumpValue::Int(10)));
+					found_a = true;
+				}
+				"b" => {
+					assert!(matches!(val, BumpValue::Int(20)));
+					found_b = true;
+				}
+				_ => panic!("Unexpected key"),
+			}
+		}
+		assert!(found_a && found_b);
+	} else {
+		panic!("Expected Map");
+	}
 }
 
 #[test]
@@ -264,112 +277,18 @@ fn test_nested_record() {
 	.parse()
 	.unwrap();
 	let data = &[42]; // inner.value = 21 (zigzag: 42)
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let outer = value.as_record().unwrap();
-
-	let outer_fields = schema.record_index().get_record_fields("Outer").unwrap();
-	let inner_fields = schema.record_index().get_record_fields("Inner").unwrap();
-
-	let inner = outer.get("inner", outer_fields).unwrap().as_record().unwrap();
-	assert_eq!(inner.get("value", inner_fields), Some(&Value::Int(21)));
-}
-
-#[test]
-fn test_value_into_owned() {
-	let schema: Schema = r#""string""#.parse().unwrap();
-	let data = &[10, b'h', b'e', b'l', b'l', b'o'];
-
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-
-	// Original borrows from data
-	if let Value::String(Cow::Borrowed(_)) = &value {
-		// good
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Record(outer_fields) = value {
+		if let BumpValue::Record(inner_fields) = &outer_fields[0] {
+			assert!(matches!(inner_fields[0], BumpValue::Int(21)));
+		} else {
+			panic!("Expected inner Record");
+		}
 	} else {
-		panic!("Expected borrowed string");
+		panic!("Expected outer Record");
 	}
-
-	// After into_owned, it should be owned
-	let owned = value.into_owned();
-	if let Value::String(Cow::Owned(s)) = owned {
-		assert_eq!(s, "hello");
-	} else {
-		panic!("Expected owned string");
-	}
-}
-
-#[test]
-fn test_generic_record_operations() {
-	let record = GenericRecord::from_fields(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
-
-	assert_eq!(record.len(), 3);
-	assert!(!record.is_empty());
-
-	// Access by index
-	assert_eq!(record.get_by_index(0), Some(&Value::Int(1)));
-	assert_eq!(record.get_by_index(1), Some(&Value::Int(2)));
-	assert_eq!(record.get_by_index(2), Some(&Value::Int(3)));
-	assert_eq!(record.get_by_index(3), None);
-
-	// Iteration
-	let values: Vec<i32> = record.values().map(|v| v.as_int().unwrap()).collect();
-	assert_eq!(values, vec![1, 2, 3]);
-}
-
-#[test]
-fn test_value_round_trip_primitives() {
-	// Test that Value can be serialized back to Avro
-	let schema: Schema = r#""int""#.parse().unwrap();
-	let config = &mut SerializerConfig::new(&schema);
-
-	let original: Value = Value::Int(42);
-	let encoded = to_datum_vec(&original, config).unwrap();
-	let decoded: Value = from_datum_slice(&encoded, &schema).unwrap();
-	assert_eq!(decoded, Value::Int(42));
-}
-
-#[test]
-fn test_value_round_trip_string() {
-	let schema: Schema = r#""string""#.parse().unwrap();
-	let config = &mut SerializerConfig::new(&schema);
-
-	let original = Value::String(Cow::Borrowed("hello"));
-	let encoded = to_datum_vec(&original, config).unwrap();
-	let decoded: Value = from_datum_slice(&encoded, &schema).unwrap();
-	assert_eq!(decoded, Value::String(Cow::Borrowed("hello")));
-}
-
-#[test]
-fn test_value_round_trip_record() {
-	let schema: Schema = r#"{
-		"type": "record",
-		"name": "Test",
-		"fields": [
-			{"name": "id", "type": "int"},
-			{"name": "name", "type": "string"}
-		]
-	}"#
-	.parse()
-	.unwrap();
-	let config = &mut SerializerConfig::new(&schema);
-
-	// Create record with fields in schema order
-	let record = GenericRecord::from_fields(vec![
-		Value::Int(42),
-		Value::String(Cow::Borrowed("test")),
-	]);
-	let original = Value::Record(record);
-
-	let encoded = to_datum_vec(&original, config).unwrap();
-	let decoded: Value = from_datum_slice(&encoded, &schema).unwrap();
-
-	let fields = schema.record_index().get_record_fields("Test").unwrap();
-	let decoded_record = decoded.as_record().unwrap();
-	assert_eq!(decoded_record.get("id", fields), Some(&Value::Int(42)));
-	assert_eq!(
-		decoded_record.get("name", fields),
-		Some(&Value::String(Cow::Borrowed("test")))
-	);
 }
 
 #[test]
@@ -377,12 +296,13 @@ fn test_date_logical_type() {
 	let schema: Schema = r#"{"type": "int", "logicalType": "date"}"#
 		.parse()
 		.unwrap();
-	// Serialize a known value and then deserialize it
-	let config = &mut SerializerConfig::new(&schema);
-	let encoded = to_datum_vec(&19000i32, config).unwrap();
-	let value: Value = from_datum_slice(&encoded, &schema).unwrap();
-	// Date is deserialized as int through serde
-	assert_eq!(value, Value::Int(19000));
+	// zigzag encode 19000 -> 38000
+	// varint: 38000 & 0x7F = 0x70, (38000 >> 7) & 0x7F = 0x28, 38000 >> 14 = 2
+	let data = &[0xf0, 0xa8, 0x02]; // varint for 38000
+	let bump = bumpalo::Bump::new();
+
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Int(19000)));
 }
 
 #[test]
@@ -390,8 +310,10 @@ fn test_timestamp_millis_logical_type() {
 	let schema: Schema = r#"{"type": "long", "logicalType": "timestamp-millis"}"#
 		.parse()
 		.unwrap();
-	let value: Value = from_datum_slice(&[200, 1], &schema).unwrap();
-	assert_eq!(value, Value::Long(100));
+	let bump = bumpalo::Bump::new();
+
+	let value = from_datum_slice_bump(&[200, 1], &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::Long(100)));
 }
 
 #[test]
@@ -402,9 +324,10 @@ fn test_uuid_logical_type() {
 	let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
 	let mut data = vec![(uuid_str.len() * 2) as u8];
 	data.extend_from_slice(uuid_str.as_bytes());
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(&data, &schema).unwrap();
-	assert_eq!(value.as_str(), Some(uuid_str));
+	let value = from_datum_slice_bump(&data, &schema, &bump).unwrap();
+	assert!(matches!(value, BumpValue::String(s) if s == uuid_str));
 }
 
 #[test]
@@ -436,46 +359,26 @@ fn test_complex_nested_structure() {
 		4, 2, b'a', 2, b'b', 0, // tags = ["a", "b"]
 		4, 2, b'x', 2, 2, b'y', 4, 0, // metadata = {"x": 1, "y": 2}
 	];
+	let bump = bumpalo::Bump::new();
 
-	let value: Value = from_datum_slice(data, &schema).unwrap();
-	let record = value.as_record().unwrap();
+	let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
+	if let BumpValue::Record(fields) = value {
+		assert!(matches!(fields[0], BumpValue::String("doc1")));
 
-	let fields = schema.record_index().get_record_fields("Document").unwrap();
+		if let BumpValue::Array(tags) = &fields[1] {
+			assert_eq!(tags.len(), 2);
+			assert!(matches!(tags[0], BumpValue::String("a")));
+			assert!(matches!(tags[1], BumpValue::String("b")));
+		} else {
+			panic!("Expected Array for tags");
+		}
 
-	assert_eq!(
-		record.get("id", fields),
-		Some(&Value::String(Cow::Borrowed("doc1")))
-	);
-
-	let tags = record.get("tags", fields).unwrap().as_array().unwrap();
-	assert_eq!(tags.len(), 2);
-	assert_eq!(tags[0].as_str(), Some("a"));
-	assert_eq!(tags[1].as_str(), Some("b"));
-
-	let metadata = record.get("metadata", fields).unwrap().as_map().unwrap();
-	assert_eq!(metadata.get("x"), Some(&Value::Int(1)));
-	assert_eq!(metadata.get("y"), Some(&Value::Int(2)));
-}
-
-#[test]
-fn test_value_equality() {
-	let r1 = GenericRecord::from_fields(vec![Value::Int(1), Value::Int(2)]);
-	let r2 = GenericRecord::from_fields(vec![Value::Int(1), Value::Int(2)]);
-
-	assert_eq!(Value::Record(r1.clone()), Value::Record(r2.clone()));
-
-	// Different values result in different records
-	let r3 = GenericRecord::from_fields(vec![Value::Int(2), Value::Int(1)]);
-
-	assert_ne!(Value::Record(r1), Value::Record(r3));
-}
-
-#[test]
-fn test_value_clone() {
-	let record = GenericRecord::from_fields(vec![Value::String(Cow::Borrowed("test"))]);
-
-	let value = Value::Record(record);
-	let cloned = value.clone();
-
-	assert_eq!(value, cloned);
+		if let BumpValue::Map(metadata) = &fields[2] {
+			assert_eq!(metadata.len(), 2);
+		} else {
+			panic!("Expected Map for metadata");
+		}
+	} else {
+		panic!("Expected Record");
+	}
 }

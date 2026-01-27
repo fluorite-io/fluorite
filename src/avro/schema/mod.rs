@@ -3,15 +3,12 @@
 mod error;
 mod safe;
 pub(crate) mod self_referential;
-mod union_variants_per_type_lookup;
 
 pub use {
 	error::SchemaError,
 	safe::*,
 	self_referential::{FieldType, Schema, SchemaRecordIndex},
 };
-
-pub(crate) use union_variants_per_type_lookup::UnionVariantLookupKey;
 
 impl std::str::FromStr for Schema {
 	type Err = SchemaError;

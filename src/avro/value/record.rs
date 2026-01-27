@@ -14,28 +14,8 @@ use crate::avro::schema::FieldType;
 /// fast by avoiding per-record HashMap construction and string allocations.
 /// Field access by name requires the schema's field index map.
 ///
-/// # Example
-///
-/// ```
-/// use turbine::avro::{from_datum_slice, Schema};
-/// use turbine::avro::value::Value;
-///
-/// let schema: Schema = r#"{"type":"record","name":"User","fields":[
-///     {"name":"id","type":"int"},
-///     {"name":"name","type":"string"}
-/// ]}"#.parse().unwrap();
-///
-/// let data = &[4, 8, 74, 111, 104, 110]; // id=2, name="John"
-/// let value: Value = from_datum_slice(data, &schema).unwrap();
-///
-/// if let Value::Record(record) = &value {
-///     // Get field index from schema and access by index
-///     let fields = schema.record_index().get_record_fields("User").unwrap();
-///     assert_eq!(record.get("id", fields), Some(&Value::Int(2)));
-///     // Or access by index directly if you know the field position
-///     assert_eq!(record.get_by_index(0), Some(&Value::Int(2)));
-/// }
-/// ```
+/// For high-performance deserialization, use [`BumpValue`](super::BumpValue) and
+/// [`from_datum_slice_bump`](super::from_datum_slice_bump) which use arena allocation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenericRecord<'a>(Vec<Value<'a>>);
 

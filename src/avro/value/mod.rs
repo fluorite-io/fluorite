@@ -10,8 +10,8 @@
 //! # Example
 //!
 //! ```
-//! use turbine::avro::{from_datum_slice, Schema};
-//! use turbine::avro::value::Value;
+//! use turbine::avro::Schema;
+//! use turbine::avro::value::{Value, from_datum_slice_bump};
 //!
 //! let schema: Schema = r#"
 //! {
@@ -25,21 +25,20 @@
 //! "#.parse().unwrap();
 //!
 //! let data = &[4, 8, 74, 111, 104, 110]; // id=2, name="John"
-//! let value: Value = from_datum_slice(data, &schema).unwrap();
+//! let bump = bumpalo::Bump::new();
+//! let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
 //!
-//! if let Value::Record(record) = &value {
-//!     // Access fields by index (fastest)
-//!     assert_eq!(record.get_by_index(0), Some(&Value::Int(2)));
-//!     // Or by name using schema's field index
-//!     let fields = schema.record_index().get_record_fields("User").unwrap();
-//!     assert_eq!(record.get("id", fields), Some(&Value::Int(2)));
+//! use turbine::avro::value::BumpValue;
+//! if let BumpValue::Record(fields) = value {
+//!     // Access fields by index (O(1))
+//!     assert!(matches!(fields[0], BumpValue::Int(2)));
+//!     assert!(matches!(fields[1], BumpValue::String("John")));
 //! }
 //! ```
 
 pub mod bump;
 mod de;
 mod record;
-mod ser;
 
 pub use bump::{BatchDeserializer, BumpValue, BumpValueSeed, from_datum_slice_bump};
 pub use record::GenericRecord;

@@ -124,16 +124,6 @@ impl<R: std::io::BufRead> IntoLeftAfterTake for ReaderRead<std::io::Take<R>> {
 			));
 		}
 		let reader = self.reader.into_inner();
-		// The following would consume everything that hasn't been read in this block
-		// but given the current interface it shouldn't ever happen
-		/*
-		while left_to_consume != 0 {
-			let s = reader.fill_buf().map_err(DeError::io)?;
-			let to_consume_this_time = left_to_consume.min(s.len().try_into().expect("Buffer len does not fit in u64"));
-			reader.consume(to_consume_this_time as usize);
-			left_to_consume -= to_consume_this_time;
-		}
-		*/
 		Ok(ReaderRead {
 			reader,
 			scratch: self.scratch,
