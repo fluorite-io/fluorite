@@ -9,6 +9,7 @@
 
 pub mod batched_server;
 pub mod buffer;
+pub mod coordinator;
 pub mod dedup;
 pub mod error;
 pub mod object_store;
@@ -17,6 +18,10 @@ pub mod tbin;
 
 pub use batched_server::{BatchedAgentConfig, BatchedAgentState};
 pub use buffer::{AgentBuffer, BufferConfig, DrainResult, PendingProducer, SegmentKey};
+pub use coordinator::{
+    compute_assignment, CommitStatus, Coordinator, CoordinatorConfig, HeartbeatResult,
+    HeartbeatStatus, JoinResult, RejoinResult, RejoinStatus,
+};
 pub use dedup::{DedupCache, DedupCacheConfig, DedupResult, ProducerState};
 pub use error::AgentError;
 pub use object_store::{LocalFsStore, ObjectStore, S3ObjectStore};

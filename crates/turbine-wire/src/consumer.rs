@@ -99,6 +99,59 @@ pub struct CommitResponse {
     pub success: bool,
 }
 
+/// Leave group request.
+#[derive(Debug, Clone)]
+pub struct LeaveGroupRequest {
+    pub group_id: String,
+    pub topic_id: TopicId,
+    pub consumer_id: String,
+}
+
+/// Leave group response.
+#[derive(Debug, Clone)]
+pub struct LeaveGroupResponse {
+    pub success: bool,
+}
+
+/// Rejoin request (after rebalance notification).
+#[derive(Debug, Clone)]
+pub struct RejoinRequest {
+    pub group_id: String,
+    pub topic_id: TopicId,
+    pub consumer_id: String,
+    pub generation: Generation,
+}
+
+/// Rejoin response status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejoinStatus {
+    Ok,
+    RebalanceNeeded,
+}
+
+/// Rejoin response.
+#[derive(Debug, Clone)]
+pub struct RejoinResponse {
+    pub generation: Generation,
+    pub status: RejoinStatus,
+    pub assignments: Vec<PartitionAssignment>,
+}
+
+/// Heartbeat response status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeartbeatStatus {
+    Ok,
+    RebalanceNeeded,
+    UnknownMember,
+}
+
+/// Extended heartbeat response with status enum.
+#[derive(Debug, Clone)]
+pub struct HeartbeatResponseExt {
+    pub generation: Generation,
+    pub status: HeartbeatStatus,
+}
+
 // ============ Encoding Functions ============
 
 /// Encode a FetchRequest.
@@ -452,6 +505,194 @@ pub fn decode_commit_response(buf: &[u8]) -> Result<(CommitResponse, usize), Dec
     Ok((CommitResponse { success: buf[0] != 0 }, 1))
 }
 
+/// Encode a LeaveGroupRequest.
+pub fn encode_leave_request(req: &LeaveGroupRequest, buf: &mut [u8]) -> usize {
+    let mut offset = 0;
+    offset += encode_string(&req.group_id, &mut buf[offset..]);
+    offset += varint::encode_i64(req.topic_id.0 as i64, &mut buf[offset..]);
+    offset += encode_string(&req.consumer_id, &mut buf[offset..]);
+    offset
+}
+
+/// Decode a LeaveGroupRequest.
+pub fn decode_leave_request(buf: &[u8]) -> Result<(LeaveGroupRequest, usize), DecodeError> {
+    let mut offset = 0;
+
+    let (group_id, len) = decode_string(&buf[offset..])?;
+    offset += len;
+
+    let (topic_id, len) = varint::decode_i64(&buf[offset..])?;
+    offset += len;
+
+    let (consumer_id, len) = decode_string(&buf[offset..])?;
+    offset += len;
+
+    Ok((
+        LeaveGroupRequest {
+            group_id,
+            topic_id: TopicId(topic_id as u32),
+            consumer_id,
+        },
+        offset,
+    ))
+}
+
+/// Encode a LeaveGroupResponse.
+pub fn encode_leave_response(resp: &LeaveGroupResponse, buf: &mut [u8]) -> usize {
+    buf[0] = if resp.success { 1 } else { 0 };
+    1
+}
+
+/// Decode a LeaveGroupResponse.
+pub fn decode_leave_response(buf: &[u8]) -> Result<(LeaveGroupResponse, usize), DecodeError> {
+    if buf.is_empty() {
+        return Err(DecodeError::UnexpectedEof { needed: 1 });
+    }
+    Ok((LeaveGroupResponse { success: buf[0] != 0 }, 1))
+}
+
+/// Encode a RejoinRequest.
+pub fn encode_rejoin_request(req: &RejoinRequest, buf: &mut [u8]) -> usize {
+    let mut offset = 0;
+    offset += encode_string(&req.group_id, &mut buf[offset..]);
+    offset += varint::encode_i64(req.topic_id.0 as i64, &mut buf[offset..]);
+    offset += encode_string(&req.consumer_id, &mut buf[offset..]);
+    offset += varint::encode_u64(req.generation.0, &mut buf[offset..]);
+    offset
+}
+
+/// Decode a RejoinRequest.
+pub fn decode_rejoin_request(buf: &[u8]) -> Result<(RejoinRequest, usize), DecodeError> {
+    let mut offset = 0;
+
+    let (group_id, len) = decode_string(&buf[offset..])?;
+    offset += len;
+
+    let (topic_id, len) = varint::decode_i64(&buf[offset..])?;
+    offset += len;
+
+    let (consumer_id, len) = decode_string(&buf[offset..])?;
+    offset += len;
+
+    let (generation, len) = varint::decode_u64(&buf[offset..])?;
+    offset += len;
+
+    Ok((
+        RejoinRequest {
+            group_id,
+            topic_id: TopicId(topic_id as u32),
+            consumer_id,
+            generation: Generation(generation),
+        },
+        offset,
+    ))
+}
+
+/// Encode a RejoinResponse.
+pub fn encode_rejoin_response(resp: &RejoinResponse, buf: &mut [u8]) -> usize {
+    let mut offset = 0;
+    offset += varint::encode_u64(resp.generation.0, &mut buf[offset..]);
+    buf[offset] = match resp.status {
+        RejoinStatus::Ok => 0,
+        RejoinStatus::RebalanceNeeded => 1,
+    };
+    offset += 1;
+    offset += varint::encode_i64(resp.assignments.len() as i64, &mut buf[offset..]);
+
+    for assignment in &resp.assignments {
+        offset += varint::encode_i64(assignment.topic_id.0 as i64, &mut buf[offset..]);
+        offset += varint::encode_i64(assignment.partition_id.0 as i64, &mut buf[offset..]);
+        offset += varint::encode_u64(assignment.committed_offset.0, &mut buf[offset..]);
+    }
+
+    offset
+}
+
+/// Decode a RejoinResponse.
+pub fn decode_rejoin_response(buf: &[u8]) -> Result<(RejoinResponse, usize), DecodeError> {
+    let mut offset = 0;
+
+    let (generation, len) = varint::decode_u64(&buf[offset..])?;
+    offset += len;
+
+    if offset >= buf.len() {
+        return Err(DecodeError::UnexpectedEof { needed: 1 });
+    }
+    let status = match buf[offset] {
+        0 => RejoinStatus::Ok,
+        _ => RejoinStatus::RebalanceNeeded,
+    };
+    offset += 1;
+
+    let (count, len) = varint::decode_i64(&buf[offset..])?;
+    offset += len;
+
+    let mut assignments = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let (topic_id, len) = varint::decode_i64(&buf[offset..])?;
+        offset += len;
+
+        let (partition_id, len) = varint::decode_i64(&buf[offset..])?;
+        offset += len;
+
+        let (committed_offset, len) = varint::decode_u64(&buf[offset..])?;
+        offset += len;
+
+        assignments.push(PartitionAssignment {
+            topic_id: TopicId(topic_id as u32),
+            partition_id: PartitionId(partition_id as u32),
+            committed_offset: Offset(committed_offset),
+        });
+    }
+
+    Ok((
+        RejoinResponse {
+            generation: Generation(generation),
+            status,
+            assignments,
+        },
+        offset,
+    ))
+}
+
+/// Encode a HeartbeatResponseExt.
+pub fn encode_heartbeat_response_ext(resp: &HeartbeatResponseExt, buf: &mut [u8]) -> usize {
+    let mut offset = 0;
+    offset += varint::encode_u64(resp.generation.0, &mut buf[offset..]);
+    buf[offset] = match resp.status {
+        HeartbeatStatus::Ok => 0,
+        HeartbeatStatus::RebalanceNeeded => 1,
+        HeartbeatStatus::UnknownMember => 2,
+    };
+    offset + 1
+}
+
+/// Decode a HeartbeatResponseExt.
+pub fn decode_heartbeat_response_ext(buf: &[u8]) -> Result<(HeartbeatResponseExt, usize), DecodeError> {
+    let mut offset = 0;
+
+    let (generation, len) = varint::decode_u64(&buf[offset..])?;
+    offset += len;
+
+    if offset >= buf.len() {
+        return Err(DecodeError::UnexpectedEof { needed: 1 });
+    }
+    let status = match buf[offset] {
+        0 => HeartbeatStatus::Ok,
+        1 => HeartbeatStatus::RebalanceNeeded,
+        _ => HeartbeatStatus::UnknownMember,
+    };
+    offset += 1;
+
+    Ok((
+        HeartbeatResponseExt {
+            generation: Generation(generation),
+            status,
+        },
+        offset,
+    ))
+}
+
 // ============ String Helpers ============
 
 fn encode_string(s: &str, buf: &mut [u8]) -> usize {
@@ -662,5 +903,115 @@ mod tests {
         let (decoded, decoded_len) = decode_string(&buf[..len]).unwrap();
         assert_eq!(decoded, "");
         assert_eq!(decoded_len, len);
+    }
+
+    #[test]
+    fn test_leave_group_roundtrip() {
+        let req = LeaveGroupRequest {
+            group_id: "my-group".to_string(),
+            topic_id: TopicId(42),
+            consumer_id: "consumer-123".to_string(),
+        };
+
+        let mut buf = [0u8; 64];
+        let encoded_len = encode_leave_request(&req, &mut buf);
+
+        let (decoded, decoded_len) = decode_leave_request(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded_len, encoded_len);
+        assert_eq!(decoded.group_id, "my-group");
+        assert_eq!(decoded.topic_id.0, 42);
+        assert_eq!(decoded.consumer_id, "consumer-123");
+
+        let resp = LeaveGroupResponse { success: true };
+        let encoded_len = encode_leave_response(&resp, &mut buf);
+        let (decoded_resp, _) = decode_leave_response(&buf[..encoded_len]).unwrap();
+        assert!(decoded_resp.success);
+    }
+
+    #[test]
+    fn test_rejoin_roundtrip() {
+        let req = RejoinRequest {
+            group_id: "rejoin-group".to_string(),
+            topic_id: TopicId(5),
+            consumer_id: "rejoin-consumer".to_string(),
+            generation: Generation(7),
+        };
+
+        let mut buf = [0u8; 128];
+        let encoded_len = encode_rejoin_request(&req, &mut buf);
+
+        let (decoded, decoded_len) = decode_rejoin_request(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded_len, encoded_len);
+        assert_eq!(decoded.group_id, "rejoin-group");
+        assert_eq!(decoded.topic_id.0, 5);
+        assert_eq!(decoded.generation.0, 7);
+
+        // Test Ok response
+        let resp = RejoinResponse {
+            generation: Generation(7),
+            status: RejoinStatus::Ok,
+            assignments: vec![
+                PartitionAssignment {
+                    topic_id: TopicId(5),
+                    partition_id: PartitionId(0),
+                    committed_offset: Offset(100),
+                },
+                PartitionAssignment {
+                    topic_id: TopicId(5),
+                    partition_id: PartitionId(1),
+                    committed_offset: Offset(200),
+                },
+            ],
+        };
+
+        let encoded_len = encode_rejoin_response(&resp, &mut buf);
+        let (decoded_resp, decoded_len) = decode_rejoin_response(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded_len, encoded_len);
+        assert_eq!(decoded_resp.generation.0, 7);
+        assert_eq!(decoded_resp.status, RejoinStatus::Ok);
+        assert_eq!(decoded_resp.assignments.len(), 2);
+
+        // Test RebalanceNeeded response
+        let resp = RejoinResponse {
+            generation: Generation(8),
+            status: RejoinStatus::RebalanceNeeded,
+            assignments: vec![],
+        };
+        let encoded_len = encode_rejoin_response(&resp, &mut buf);
+        let (decoded_resp, _) = decode_rejoin_response(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded_resp.status, RejoinStatus::RebalanceNeeded);
+    }
+
+    #[test]
+    fn test_heartbeat_response_ext_roundtrip() {
+        let mut buf = [0u8; 32];
+
+        // Test Ok
+        let resp = HeartbeatResponseExt {
+            generation: Generation(5),
+            status: HeartbeatStatus::Ok,
+        };
+        let encoded_len = encode_heartbeat_response_ext(&resp, &mut buf);
+        let (decoded, _) = decode_heartbeat_response_ext(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded.generation.0, 5);
+        assert_eq!(decoded.status, HeartbeatStatus::Ok);
+
+        // Test RebalanceNeeded
+        let resp = HeartbeatResponseExt {
+            generation: Generation(6),
+            status: HeartbeatStatus::RebalanceNeeded,
+        };
+        let encoded_len = encode_heartbeat_response_ext(&resp, &mut buf);
+        let (decoded, _) = decode_heartbeat_response_ext(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded.status, HeartbeatStatus::RebalanceNeeded);
+
+        // Test UnknownMember
+        let resp = HeartbeatResponseExt {
+            generation: Generation(0),
+            status: HeartbeatStatus::UnknownMember,
+        };
+        let encoded_len = encode_heartbeat_response_ext(&resp, &mut buf);
+        let (decoded, _) = decode_heartbeat_response_ext(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded.status, HeartbeatStatus::UnknownMember);
     }
 }

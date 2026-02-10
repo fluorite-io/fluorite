@@ -167,6 +167,64 @@ impl TestDb {
         .execute(pool)
         .await
         .expect("Failed to create topic_schemas table");
+
+        // Consumer group tables
+        sqlx::query(
+            r#"
+            CREATE TABLE consumer_groups (
+                group_id TEXT NOT NULL,
+                topic_id INT NOT NULL,
+                generation BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (group_id, topic_id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create consumer_groups table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE consumer_assignments (
+                group_id TEXT NOT NULL,
+                topic_id INT NOT NULL,
+                partition_id INT NOT NULL,
+                consumer_id TEXT,
+                lease_expiry TIMESTAMPTZ,
+                committed_offset BIGINT NOT NULL DEFAULT 0,
+                generation BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (group_id, topic_id, partition_id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create consumer_assignments table");
+
+        sqlx::query(
+            r#"
+            CREATE INDEX idx_assignments_by_consumer
+            ON consumer_assignments (group_id, topic_id, consumer_id)
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create assignments index");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE consumer_members (
+                group_id TEXT NOT NULL,
+                topic_id INT NOT NULL,
+                consumer_id TEXT NOT NULL,
+                last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (group_id, topic_id, consumer_id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create consumer_members table");
     }
 
     /// Create a test topic with partitions.
