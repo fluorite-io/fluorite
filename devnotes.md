@@ -105,14 +105,17 @@ crates/
 
 ## Test Counts (as of last run)
 
-| Crate | Tests |
-|-------|-------|
-| turbine-agent | 39 |
-| turbine-common | 20 |
-| turbine-core | 18 |
-| turbine-schema | 31 |
-| turbine-wire | 39 |
-| **Total** | **147** |
+| Crate | Unit Tests | Integration Tests |
+|-------|------------|-------------------|
+| turbine-agent | 39 | 5 |
+| turbine-common | 20 | - |
+| turbine-core | 18 | - |
+| turbine-schema | 31 | - |
+| turbine-sdk | 7 | - |
+| turbine-wire | 39 | - |
+| **Total** | **154** | **5** |
+
+**Grand Total: 159 tests + 3 doc tests = 162**
 
 ## Git Workflow
 
