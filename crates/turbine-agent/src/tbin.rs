@@ -102,9 +102,13 @@ impl TbinWriter {
     /// Returns the metadata for the added segment (offsets are provisional zeros).
     pub fn add_segment(&mut self, segment: &Segment) -> Result<SegmentMeta, TbinError> {
         // 1. Encode records as array
-        let mut record_bytes = BytesMut::with_capacity(segment.records.len() * 64);
+        let mut record_bytes = BytesMut::new();
         for rec in &segment.records {
-            let mut buf = [0u8; 1024];
+            // Calculate needed size: key + value + varint overhead
+            let key_len = rec.key.as_ref().map(|k| k.len()).unwrap_or(0);
+            let value_len = rec.value.len();
+            let buf_size = key_len + value_len + 20; // 20 bytes for varints
+            let mut buf = vec![0u8; buf_size];
             let len = record::encode(rec, &mut buf);
             record_bytes.extend_from_slice(&buf[..len]);
         }
@@ -592,5 +596,235 @@ mod tests {
 
         let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert!(records.is_empty());
+    }
+
+    // ============ Edge Case Tests ============
+
+    #[test]
+    fn test_tbin_many_segments() {
+        let mut writer = TbinWriter::new();
+
+        // Write 50 segments
+        for i in 0..50 {
+            let segment = Segment {
+                topic_id: TopicId(i),
+                partition_id: PartitionId(i % 8),
+                schema_id: SchemaId(100 + i),
+                records: vec![Record {
+                    key: Some(Bytes::from(format!("key-{}", i))),
+                    value: Bytes::from(format!("value-{}", i)),
+                }],
+            };
+            writer.add_segment(&segment).unwrap();
+        }
+
+        let file_bytes = writer.finish();
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+
+        assert_eq!(metas.len(), 50);
+
+        // Verify each segment
+        for (i, meta) in metas.iter().enumerate() {
+            assert_eq!(meta.topic_id.0, i as u32);
+            assert_eq!(meta.partition_id.0, (i % 8) as u32);
+            assert_eq!(meta.record_count, 1);
+
+            let records = TbinReader::read_segment(&file_bytes, meta, true).unwrap();
+            assert_eq!(records.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_tbin_large_record_values() {
+        // Test with 1MB values
+        let large_value = vec![0xABu8; 1024 * 1024];
+
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: Some(Bytes::from_static(b"large")),
+                value: Bytes::from(large_value.clone()),
+            }],
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].value.len(), 1024 * 1024);
+        assert_eq!(records[0].value.as_ref(), large_value.as_slice());
+    }
+
+    #[test]
+    fn test_tbin_binary_keys_and_values() {
+        // Non-UTF8 binary data
+        let binary_key = vec![0x00, 0xFF, 0x80, 0x7F, 0x01, 0xFE];
+        let binary_value = (0..=255u8).collect::<Vec<u8>>();
+
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: Some(Bytes::from(binary_key.clone())),
+                value: Bytes::from(binary_value.clone()),
+            }],
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+
+        assert_eq!(records[0].key.as_ref().unwrap().as_ref(), binary_key.as_slice());
+        assert_eq!(records[0].value.as_ref(), binary_value.as_slice());
+    }
+
+    #[test]
+    fn test_tbin_max_id_values() {
+        let segment = Segment {
+            topic_id: TopicId(u32::MAX),
+            partition_id: PartitionId(u32::MAX),
+            schema_id: SchemaId(u32::MAX),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from_static(b"test"),
+            }],
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        assert_eq!(metas[0].topic_id.0, u32::MAX);
+        assert_eq!(metas[0].partition_id.0, u32::MAX);
+        assert_eq!(metas[0].schema_id.0, u32::MAX);
+    }
+
+    #[test]
+    fn test_tbin_file_too_small() {
+        // File smaller than magic + footer length
+        let small_file = vec![0u8; 4];
+        let result = TbinReader::read_footer(&small_file);
+        assert!(matches!(result, Err(TbinError::InvalidFooter(_))));
+    }
+
+    #[test]
+    fn test_tbin_footer_length_exceeds_file() {
+        // Valid magic but footer length too large
+        let mut bad_file = vec![0u8; 16];
+        // Set footer length to 1000 (way more than file size)
+        bad_file[8..12].copy_from_slice(&1000u32.to_be_bytes());
+        // Set magic
+        bad_file[12..16].copy_from_slice(MAGIC);
+
+        let result = TbinReader::read_footer(&bad_file);
+        assert!(matches!(result, Err(TbinError::InvalidFooter(_))));
+    }
+
+    #[test]
+    fn test_tbin_segment_byte_range_validation() {
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from_static(b"test"),
+            }],
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+
+        // Create a fake meta with invalid byte range
+        let bad_meta = SegmentMeta {
+            byte_offset: 10000, // Way past end of file
+            byte_length: 100,
+            ..metas[0].clone()
+        };
+
+        let result = TbinReader::read_segment(&file_bytes, &bad_meta, false);
+        assert!(matches!(result, Err(TbinError::BufferTooSmall { .. })));
+    }
+
+    #[test]
+    fn test_tbin_skip_crc_validation() {
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from_static(b"test"),
+            }],
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let mut file_bytes = writer.finish().to_vec();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+
+        // Corrupt data
+        file_bytes[0] ^= 0xFF;
+
+        // With CRC check - should fail
+        let result = TbinReader::read_segment(&file_bytes, &metas[0], true);
+        assert!(matches!(result, Err(TbinError::CrcMismatch { .. })));
+
+        // Without CRC check - should succeed (but data is corrupted)
+        let result = TbinReader::read_segment(&file_bytes, &metas[0], false);
+        // This may or may not fail depending on what got corrupted
+        // The key point is we're not getting a CRC error
+        assert!(!matches!(result, Err(TbinError::CrcMismatch { .. })));
+    }
+
+    #[test]
+    fn test_tbin_many_records_per_segment() {
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: (0..1000)
+                .map(|i| Record {
+                    key: if i % 2 == 0 {
+                        Some(Bytes::from(format!("key-{}", i)))
+                    } else {
+                        None
+                    },
+                    value: Bytes::from(format!("value-{}", i)),
+                })
+                .collect(),
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        assert_eq!(metas[0].record_count, 1000);
+
+        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        assert_eq!(records.len(), 1000);
+
+        // Verify a sample of records
+        // Even indices have keys, odd indices don't
+        assert_eq!(records[0].key.as_ref().unwrap().as_ref(), b"key-0");
+        assert!(records[1].key.is_none());
+        assert_eq!(records[998].key.as_ref().unwrap().as_ref(), b"key-998");
+        assert!(records[999].key.is_none());
     }
 }

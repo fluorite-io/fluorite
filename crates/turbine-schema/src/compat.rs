@@ -56,46 +56,54 @@ fn check_iceberg_constraints(schema: &Value) -> Result<(), String> {
 }
 
 /// Check that unions are only ["null", T] (Iceberg doesn't support complex unions).
+///
+/// Unions in Avro are represented as arrays in the "type" field of a field definition.
+/// We need to check that any union has at most 2 types (for nullable fields: ["null", T]).
 fn check_no_complex_unions(value: &Value) -> Result<(), String> {
-    match value {
-        Value::Array(arr) => {
-            // This might be a union type
-            if arr.len() > 2 {
-                // Check if it's a union (array of type definitions)
-                let is_union = arr.iter().all(|v| {
-                    matches!(v, Value::String(_) | Value::Object(_))
-                });
-                if is_union {
-                    return Err(format!(
-                        "unions with more than 2 types are not supported (Iceberg constraint): {:?}",
-                        arr
-                    ));
-                }
-            }
-            // Recurse into array elements
-            for item in arr {
-                check_no_complex_unions(item)?;
+    if let Value::Object(map) = value {
+        // Check the "type" field - this is where unions appear
+        if let Some(type_val) = map.get("type") {
+            check_type_for_union(type_val)?;
+        }
+        // Recurse into "fields" if this is a record
+        if let Some(Value::Array(fields)) = map.get("fields") {
+            for field in fields {
+                check_no_complex_unions(field)?;
             }
         }
-        Value::Object(map) => {
-            // Check the "type" field if it's a union
-            if let Some(Value::Array(arr)) = map.get("type") {
-                if arr.len() > 2 {
-                    let is_union = arr.iter().all(|v| {
-                        matches!(v, Value::String(_) | Value::Object(_))
-                    });
-                    if is_union {
-                        return Err(format!(
-                            "unions with more than 2 types are not supported: {:?}",
-                            arr
-                        ));
-                    }
+        // Recurse into "items" for arrays
+        if let Some(items) = map.get("items") {
+            check_no_complex_unions(items)?;
+        }
+        // Recurse into "values" for maps
+        if let Some(values) = map.get("values") {
+            check_no_complex_unions(values)?;
+        }
+    }
+    Ok(())
+}
+
+/// Check if a type value is a complex union.
+fn check_type_for_union(type_val: &Value) -> Result<(), String> {
+    match type_val {
+        Value::Array(arr) => {
+            // This is a union type
+            if arr.len() > 2 {
+                return Err(format!(
+                    "unions with more than 2 types are not supported (Iceberg constraint): {:?}",
+                    arr
+                ));
+            }
+            // Recurse into union variants that might be complex types
+            for variant in arr {
+                if let Value::Object(_) = variant {
+                    check_no_complex_unions(variant)?;
                 }
             }
-            // Recurse into object values
-            for v in map.values() {
-                check_no_complex_unions(v)?;
-            }
+        }
+        Value::Object(_) => {
+            // Nested complex type (record, array, map, etc.)
+            check_no_complex_unions(type_val)?;
         }
         _ => {}
     }
@@ -432,5 +440,302 @@ mod tests {
 
         // Avro allows this, but Iceberg doesn't
         assert!(!is_backward_compatible(&new, &old).unwrap());
+    }
+
+    // ============ Real-World Schema Evolution Scenarios ============
+
+    #[test]
+    fn test_order_schema_evolution_v1_to_v2() {
+        // Version 1: Basic order
+        let v1 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {"name": "order_id", "type": "string"},
+                {"name": "amount", "type": "long"}
+            ]
+        });
+
+        // Version 2: Add currency with default
+        let v2 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {"name": "order_id", "type": "string"},
+                {"name": "amount", "type": "long"},
+                {"name": "currency", "type": "string", "default": "USD"}
+            ]
+        });
+
+        assert!(is_backward_compatible(&v2, &v1).unwrap());
+    }
+
+    #[test]
+    fn test_order_schema_evolution_v2_to_v3() {
+        // Version 2
+        let v2 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {"name": "order_id", "type": "string"},
+                {"name": "amount", "type": "long"},
+                {"name": "currency", "type": "string", "default": "USD"}
+            ]
+        });
+
+        // Version 3: Add optional customer_id, remove deprecated field
+        let v3 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {"name": "order_id", "type": "string"},
+                {"name": "amount", "type": "long"},
+                {"name": "customer_id", "type": ["null", "string"], "default": null}
+            ]
+        });
+
+        // currency was removed (OK), customer_id was added with null default (OK)
+        assert!(is_backward_compatible(&v3, &v2).unwrap());
+    }
+
+    #[test]
+    fn test_user_schema_multiple_evolutions() {
+        let v1 = json!({
+            "type": "record",
+            "name": "User",
+            "fields": [
+                {"name": "user_id", "type": "string"},
+                {"name": "age", "type": "int"}
+            ]
+        });
+
+        let v2 = json!({
+            "type": "record",
+            "name": "User",
+            "fields": [
+                {"name": "user_id", "type": "string"},
+                {"name": "age", "type": "long"}  // widened int -> long
+            ]
+        });
+
+        let v3 = json!({
+            "type": "record",
+            "name": "User",
+            "fields": [
+                {"name": "user_id", "type": "string"},
+                {"name": "age", "type": "long"},
+                {"name": "email", "type": ["null", "string"], "default": null}
+            ]
+        });
+
+        // Each step should be compatible
+        assert!(is_backward_compatible(&v2, &v1).unwrap());
+        assert!(is_backward_compatible(&v3, &v2).unwrap());
+
+        // Transitive compatibility: v3 should be able to read v1 data
+        assert!(is_backward_compatible(&v3, &v1).unwrap());
+    }
+
+    #[test]
+    fn test_nested_record_evolution() {
+        let v1 = json!({
+            "type": "record",
+            "name": "Event",
+            "fields": [
+                {"name": "event_id", "type": "string"},
+                {
+                    "name": "payload",
+                    "type": {
+                        "type": "record",
+                        "name": "Payload",
+                        "fields": [
+                            {"name": "data", "type": "string"}
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let v2 = json!({
+            "type": "record",
+            "name": "Event",
+            "fields": [
+                {"name": "event_id", "type": "string"},
+                {
+                    "name": "payload",
+                    "type": {
+                        "type": "record",
+                        "name": "Payload",
+                        "fields": [
+                            {"name": "data", "type": "string"},
+                            {"name": "metadata", "type": ["null", "string"], "default": null}
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert!(is_backward_compatible(&v2, &v1).unwrap());
+    }
+
+    #[test]
+    fn test_array_field_evolution() {
+        let v1 = json!({
+            "type": "record",
+            "name": "Container",
+            "fields": [
+                {"name": "items", "type": {"type": "array", "items": "int"}}
+            ]
+        });
+
+        // Widen array items from int to long
+        let v2 = json!({
+            "type": "record",
+            "name": "Container",
+            "fields": [
+                {"name": "items", "type": {"type": "array", "items": "long"}}
+            ]
+        });
+
+        assert!(is_backward_compatible(&v2, &v1).unwrap());
+    }
+
+    #[test]
+    fn test_map_field_evolution() {
+        let v1 = json!({
+            "type": "record",
+            "name": "Metrics",
+            "fields": [
+                {"name": "counters", "type": {"type": "map", "values": "int"}}
+            ]
+        });
+
+        // Widen map values from int to long
+        let v2 = json!({
+            "type": "record",
+            "name": "Metrics",
+            "fields": [
+                {"name": "counters", "type": {"type": "map", "values": "long"}}
+            ]
+        });
+
+        assert!(is_backward_compatible(&v2, &v1).unwrap());
+    }
+
+    #[test]
+    fn test_enum_evolution_add_symbol() {
+        let v1 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": {
+                        "type": "enum",
+                        "name": "Status",
+                        "symbols": ["PENDING", "COMPLETED"]
+                    }
+                }
+            ]
+        });
+
+        let v2 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": {
+                        "type": "enum",
+                        "name": "Status",
+                        "symbols": ["PENDING", "COMPLETED", "CANCELLED"]
+                    }
+                }
+            ]
+        });
+
+        // Adding enum symbols is backward compatible
+        // (reader can still read old values)
+        assert!(is_backward_compatible(&v2, &v1).unwrap());
+    }
+
+    #[test]
+    fn test_enum_evolution_remove_symbol_incompatible() {
+        let v1 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": {
+                        "type": "enum",
+                        "name": "Status",
+                        "symbols": ["PENDING", "COMPLETED", "CANCELLED"]
+                    }
+                }
+            ]
+        });
+
+        let v2 = json!({
+            "type": "record",
+            "name": "Order",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": {
+                        "type": "enum",
+                        "name": "Status",
+                        "symbols": ["PENDING", "COMPLETED"]
+                    }
+                }
+            ]
+        });
+
+        // Removing enum symbols is NOT backward compatible
+        // (reader can't handle old "CANCELLED" values)
+        assert!(!is_backward_compatible(&v2, &v1).unwrap());
+    }
+
+    // ============ Invalid Schema Tests ============
+
+    #[test]
+    fn test_invalid_schema_syntax() {
+        let valid = json!({
+            "type": "record",
+            "name": "Test",
+            "fields": [{"name": "id", "type": "string"}]
+        });
+
+        let invalid = json!({
+            "type": "record",
+            "name": "Test"
+            // missing "fields"
+        });
+
+        let result = is_backward_compatible(&invalid, &valid);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("schema"));
+    }
+
+    #[test]
+    fn test_incompatible_type_in_nullable() {
+        let v1 = json!({
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "value", "type": ["null", "string"]}
+            ]
+        });
+
+        let v2 = json!({
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "value", "type": ["null", "long"]}
+            ]
+        });
+
+        // Changing the type inside a nullable is incompatible
+        assert!(!is_backward_compatible(&v2, &v1).unwrap());
     }
 }
