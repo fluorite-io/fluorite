@@ -1,0 +1,394 @@
+//! WebSocket server for handling produce/fetch requests.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use futures::{SinkExt, StreamExt};
+use sqlx::PgPool;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tracing::{error, info, warn};
+
+use turbine_common::ids::{Offset, SchemaId};
+use turbine_wire::{consumer, producer};
+
+use crate::object_store::ObjectStore;
+use crate::tbin::{TbinReader, TbinWriter};
+use crate::AgentError;
+
+/// Agent server configuration.
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    /// Address to bind to.
+    pub bind_addr: SocketAddr,
+    /// S3 bucket for storing TBIN files.
+    pub bucket: String,
+    /// S3 key prefix for TBIN files.
+    pub key_prefix: String,
+}
+
+/// Agent server state shared across connections.
+pub struct AgentState<S: ObjectStore> {
+    pub pool: PgPool,
+    pub store: Arc<S>,
+    pub config: AgentConfig,
+}
+
+impl<S: ObjectStore> AgentState<S> {
+    pub fn new(pool: PgPool, store: S, config: AgentConfig) -> Self {
+        Self {
+            pool,
+            store: Arc::new(store),
+            config,
+        }
+    }
+}
+
+/// Run the agent server.
+pub async fn run<S: ObjectStore + Send + Sync + 'static>(
+    state: Arc<AgentState<S>>,
+) -> Result<(), AgentError> {
+    let listener = TcpListener::bind(&state.config.bind_addr).await?;
+    info!("Agent listening on {}", state.config.bind_addr);
+
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        let state = state.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(stream, addr, state).await {
+                error!("Connection error from {}: {}", addr, e);
+            }
+        });
+    }
+}
+
+/// Handle a single WebSocket connection.
+async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
+    stream: TcpStream,
+    addr: SocketAddr,
+    state: Arc<AgentState<S>>,
+) -> Result<(), AgentError> {
+    let ws_stream = accept_async(stream).await?;
+    info!("New WebSocket connection from {}", addr);
+
+    let (mut write, mut read) = ws_stream.split();
+
+    while let Some(msg) = read.next().await {
+        let msg = match msg {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("WebSocket error from {}: {}", addr, e);
+                break;
+            }
+        };
+
+        match msg {
+            Message::Binary(data) => {
+                let response = handle_message(&data, &state).await;
+                if let Err(e) = write.send(Message::Binary(response)).await {
+                    warn!("Failed to send response to {}: {}", addr, e);
+                    break;
+                }
+            }
+            Message::Ping(data) => {
+                if write.send(Message::Pong(data)).await.is_err() {
+                    break;
+                }
+            }
+            Message::Close(_) => {
+                info!("Connection closed by {}", addr);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle a binary message and return the response.
+async fn handle_message<S: ObjectStore + Send + Sync>(
+    data: &[u8],
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    // Try to decode as ProduceRequest first
+    if let Ok((req, _)) = producer::decode_request(data) {
+        return handle_produce_request(req, state).await;
+    }
+
+    // Try to decode as FetchRequest
+    if let Ok((req, _)) = consumer::decode_fetch_request(data) {
+        return handle_fetch_request(req, state).await;
+    }
+
+    // Unknown message type - return error
+    let mut buf = vec![0u8; 256];
+    let error_resp = producer::ProduceResponse {
+        seq: turbine_common::ids::SeqNum(0),
+        acks: vec![],
+    };
+    let len = producer::encode_response(&error_resp, &mut buf);
+    buf.truncate(len);
+    buf
+}
+
+/// Handle a ProduceRequest.
+async fn handle_produce_request<S: ObjectStore + Send + Sync>(
+    req: producer::ProduceRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    let result = process_produce(req.clone(), state).await;
+
+    let response = match result {
+        Ok(acks) => producer::ProduceResponse {
+            seq: req.seq,
+            acks,
+        },
+        Err(e) => {
+            error!("Produce error: {}", e);
+            producer::ProduceResponse {
+                seq: req.seq,
+                acks: vec![],
+            }
+        }
+    };
+
+    let mut buf = vec![0u8; 8192];
+    let len = producer::encode_response(&response, &mut buf);
+    buf.truncate(len);
+    buf
+}
+
+/// Process a produce request: write to S3, update DB.
+async fn process_produce<S: ObjectStore + Send + Sync>(
+    req: producer::ProduceRequest,
+    state: &AgentState<S>,
+) -> Result<Vec<turbine_common::types::SegmentAck>, AgentError> {
+    if req.segments.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Generate S3 key
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let key = format!(
+        "{}/{}/{}.tbin",
+        state.config.key_prefix,
+        chrono::Utc::now().format("%Y-%m-%d"),
+        timestamp
+    );
+
+    // Build TBIN file
+    let mut writer = TbinWriter::new();
+    for segment in &req.segments {
+        writer.add_segment(segment)?;
+    }
+    let tbin_data = writer.finish();
+
+    // Write to S3
+    state.store.put(&key, tbin_data).await?;
+
+    // Start transaction
+    let mut tx = state.pool.begin().await?;
+
+    let mut acks = Vec::with_capacity(req.segments.len());
+    let ingest_time = chrono::Utc::now();
+
+    for segment in &req.segments {
+        // Get current offset for partition (with lock)
+        let current_offset: i64 = sqlx::query_scalar(
+            r#"
+            SELECT next_offset FROM partition_offsets
+            WHERE topic_id = $1 AND partition_id = $2
+            FOR UPDATE
+            "#,
+        )
+        .bind(segment.topic_id.0 as i32)
+        .bind(segment.partition_id.0 as i32)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(0);
+
+        let record_count = segment.records.len() as i64;
+        let start_offset = current_offset;
+        let end_offset = current_offset + record_count;
+
+        // Update partition offset
+        sqlx::query(
+            r#"
+            INSERT INTO partition_offsets (topic_id, partition_id, next_offset)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (topic_id, partition_id)
+            DO UPDATE SET next_offset = $3
+            "#,
+        )
+        .bind(segment.topic_id.0 as i32)
+        .bind(segment.partition_id.0 as i32)
+        .bind(end_offset)
+        .execute(&mut *tx)
+        .await?;
+
+        // Insert into topic_batches
+        sqlx::query(
+            r#"
+            INSERT INTO topic_batches (
+                topic_id, partition_id, schema_id,
+                start_offset, end_offset, record_count,
+                s3_key, ingest_time
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(segment.topic_id.0 as i32)
+        .bind(segment.partition_id.0 as i32)
+        .bind(segment.schema_id.0 as i32)
+        .bind(start_offset)
+        .bind(end_offset)
+        .bind(record_count as i32)
+        .bind(&key)
+        .bind(ingest_time)
+        .execute(&mut *tx)
+        .await?;
+
+        acks.push(turbine_common::types::SegmentAck {
+            topic_id: segment.topic_id,
+            partition_id: segment.partition_id,
+            schema_id: segment.schema_id,
+            start_offset: Offset(start_offset as u64),
+            end_offset: Offset(end_offset as u64),
+        });
+    }
+
+    // Update producer state for deduplication
+    sqlx::query(
+        r#"
+        INSERT INTO producer_state (producer_id, last_seq_num, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (producer_id)
+        DO UPDATE SET last_seq_num = $2, updated_at = NOW()
+        "#,
+    )
+    .bind(req.producer_id.0)
+    .bind(req.seq.0 as i64)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(acks)
+}
+
+/// Handle a FetchRequest.
+async fn handle_fetch_request<S: ObjectStore + Send + Sync>(
+    req: consumer::FetchRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    let result = process_fetch(req, state).await;
+
+    let response = match result {
+        Ok(results) => consumer::FetchResponse { results },
+        Err(e) => {
+            error!("Fetch error: {}", e);
+            consumer::FetchResponse { results: vec![] }
+        }
+    };
+
+    let mut buf = vec![0u8; 64 * 1024];
+    let len = consumer::encode_fetch_response(&response, &mut buf);
+    buf.truncate(len);
+    buf
+}
+
+/// Process a fetch request: query DB, read from S3.
+async fn process_fetch<S: ObjectStore + Send + Sync>(
+    req: consumer::FetchRequest,
+    state: &AgentState<S>,
+) -> Result<Vec<consumer::PartitionResult>, AgentError> {
+    let mut results = Vec::with_capacity(req.fetches.len());
+
+    for fetch in &req.fetches {
+        // Query topic_batches for segments covering the requested offset
+        let batches: Vec<(i32, i64, i64, String)> = sqlx::query_as(
+            r#"
+            SELECT schema_id, start_offset, end_offset, s3_key
+            FROM topic_batches
+            WHERE topic_id = $1
+              AND partition_id = $2
+              AND start_offset <= $3
+              AND end_offset > $3
+            ORDER BY start_offset
+            LIMIT 10
+            "#,
+        )
+        .bind(fetch.topic_id.0 as i32)
+        .bind(fetch.partition_id.0 as i32)
+        .bind(fetch.offset.0 as i64)
+        .fetch_all(&state.pool)
+        .await?;
+
+        // Get high watermark
+        let high_watermark: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        )
+        .bind(fetch.topic_id.0 as i32)
+        .bind(fetch.partition_id.0 as i32)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or(0);
+
+        let mut all_records = vec![];
+        let mut schema_id = SchemaId(0);
+
+        for (sid, start_offset, _end_offset, s3_key) in batches {
+            schema_id = SchemaId(sid as u32);
+
+            // Read TBIN file from S3
+            let data = state.store.get(&s3_key).await?;
+
+            // Parse footer to get segment metadata
+            let segment_metas = TbinReader::read_footer(&data)?;
+
+            // Find matching segment and read records
+            for seg_meta in &segment_metas {
+                if seg_meta.topic_id == fetch.topic_id
+                    && seg_meta.partition_id == fetch.partition_id
+                {
+                    let records = TbinReader::read_segment(&data, seg_meta, true)?;
+                    // Skip records before requested offset
+                    let skip = (fetch.offset.0 as i64 - start_offset).max(0) as usize;
+                    all_records.extend(records.into_iter().skip(skip));
+                }
+            }
+
+            // Respect max_bytes limit
+            let total_bytes: usize = all_records.iter().map(|r| r.value.len()).sum();
+            if total_bytes >= fetch.max_bytes as usize {
+                break;
+            }
+        }
+
+        results.push(consumer::PartitionResult {
+            topic_id: fetch.topic_id,
+            partition_id: fetch.partition_id,
+            schema_id,
+            high_watermark: Offset(high_watermark as u64),
+            records: all_records,
+        });
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_config() {
+        let config = AgentConfig {
+            bind_addr: "127.0.0.1:9000".parse().unwrap(),
+            bucket: "test-bucket".to_string(),
+            key_prefix: "data".to_string(),
+        };
+        assert_eq!(config.bind_addr.port(), 9000);
+    }
+}

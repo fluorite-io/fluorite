@@ -1,0 +1,37 @@
+//! Agent error types.
+
+use thiserror::Error;
+
+/// Agent error type.
+#[derive(Debug, Error)]
+pub enum AgentError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("WebSocket error: {0}")]
+    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("Object store error: {0}")]
+    ObjectStore(String),
+
+    #[error("TBIN error: {0}")]
+    Tbin(String),
+
+    #[error("Wire protocol error: {0}")]
+    Wire(String),
+}
+
+impl From<crate::object_store::ObjectStoreError> for AgentError {
+    fn from(e: crate::object_store::ObjectStoreError) -> Self {
+        AgentError::ObjectStore(e.to_string())
+    }
+}
+
+impl From<crate::tbin::TbinError> for AgentError {
+    fn from(e: crate::tbin::TbinError) -> Self {
+        AgentError::Tbin(e.to_string())
+    }
+}
