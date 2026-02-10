@@ -105,17 +105,38 @@ crates/
 
 ## Test Counts (as of last run)
 
-| Crate | Unit Tests | Integration Tests |
-|-------|------------|-------------------|
-| turbine-agent | 39 | 5 |
-| turbine-common | 20 | - |
-| turbine-core | 18 | - |
-| turbine-schema | 31 | - |
-| turbine-sdk | 7 | - |
-| turbine-wire | 39 | - |
-| **Total** | **154** | **5** |
+| Crate | Unit Tests | Integration | DB Integration | E2E WebSocket |
+|-------|------------|-------------|----------------|---------------|
+| turbine-agent | 39 | 5 | 7 | 4 |
+| turbine-common | 20 | - | - | - |
+| turbine-core | 18 | - | - | - |
+| turbine-schema | 31 | - | - | - |
+| turbine-sdk | 7 | - | - | - |
+| turbine-wire | 39 | - | - | - |
+| **Total** | **154** | **5** | **7** | **4** |
 
-**Grand Total: 159 tests + 3 doc tests = 162**
+**Grand Total: 170 tests + 3 doc tests = 173**
+
+## Running Integration Tests
+
+```bash
+# Run all tests (requires DATABASE_URL)
+cargo test --workspace
+
+# Run only unit tests (no DB required)
+cargo test -p turbine-agent --lib
+cargo test -p turbine-wire
+cargo test -p turbine-schema
+
+# Run integration tests (no DB required)
+cargo test -p turbine-agent --test integration
+
+# Run DB integration tests (requires DATABASE_URL)
+DATABASE_URL=postgres://postgres:turbine@localhost:5433 cargo test -p turbine-agent --test db_integration
+
+# Run E2E WebSocket tests (requires DATABASE_URL)
+DATABASE_URL=postgres://postgres:turbine@localhost:5433 cargo test -p turbine-agent --test e2e_websocket
+```
 
 ## Git Workflow
 
