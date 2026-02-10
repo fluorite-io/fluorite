@@ -381,6 +381,9 @@ async fn process_fetch<S: ObjectStore + Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use turbine_common::ids::{PartitionId, ProducerId, SchemaId, SeqNum, TopicId};
+    use turbine_common::types::{Record, Segment};
 
     #[test]
     fn test_agent_config() {
@@ -390,5 +393,215 @@ mod tests {
             key_prefix: "data".to_string(),
         };
         assert_eq!(config.bind_addr.port(), 9000);
+    }
+
+    #[test]
+    fn test_produce_request_wire_roundtrip() {
+        // Create a produce request
+        let req = producer::ProduceRequest {
+            producer_id: ProducerId(uuid::Uuid::new_v4()),
+            seq: SeqNum(42),
+            segments: vec![Segment {
+                topic_id: TopicId(1),
+                partition_id: PartitionId(0),
+                schema_id: SchemaId(100),
+                records: vec![
+                    Record {
+                        key: Some(Bytes::from("key1")),
+                        value: Bytes::from("value1"),
+                    },
+                    Record {
+                        key: None,
+                        value: Bytes::from("value2"),
+                    },
+                ],
+            }],
+        };
+
+        // Encode
+        let mut buf = vec![0u8; 8192];
+        let len = producer::encode_request(&req, &mut buf);
+
+        // Decode
+        let (decoded, decoded_len) = producer::decode_request(&buf[..len]).unwrap();
+
+        assert_eq!(decoded_len, len);
+        assert_eq!(decoded.seq.0, req.seq.0);
+        assert_eq!(decoded.segments.len(), 1);
+        assert_eq!(decoded.segments[0].records.len(), 2);
+    }
+
+    #[test]
+    fn test_tbin_produce_flow() {
+        // Simulate the produce flow: create segments -> write TBIN -> read back
+
+        let segments = vec![
+            Segment {
+                topic_id: TopicId(1),
+                partition_id: PartitionId(0),
+                schema_id: SchemaId(100),
+                records: vec![
+                    Record {
+                        key: Some(Bytes::from("user-1")),
+                        value: Bytes::from(r#"{"name":"Alice","age":30}"#),
+                    },
+                    Record {
+                        key: Some(Bytes::from("user-2")),
+                        value: Bytes::from(r#"{"name":"Bob","age":25}"#),
+                    },
+                ],
+            },
+            Segment {
+                topic_id: TopicId(1),
+                partition_id: PartitionId(1),
+                schema_id: SchemaId(100),
+                records: vec![Record {
+                    key: Some(Bytes::from("user-3")),
+                    value: Bytes::from(r#"{"name":"Charlie","age":35}"#),
+                }],
+            },
+        ];
+
+        // Write TBIN
+        let mut writer = TbinWriter::new();
+        for segment in &segments {
+            writer.add_segment(segment).unwrap();
+        }
+        let tbin_data = writer.finish();
+
+        // Read back
+        let metas = TbinReader::read_footer(&tbin_data).unwrap();
+        assert_eq!(metas.len(), 2);
+
+        // Verify first segment
+        let records0 = TbinReader::read_segment(&tbin_data, &metas[0], true).unwrap();
+        assert_eq!(records0.len(), 2);
+        assert_eq!(records0[0].key, Some(Bytes::from("user-1")));
+        assert_eq!(records0[1].key, Some(Bytes::from("user-2")));
+
+        // Verify second segment
+        let records1 = TbinReader::read_segment(&tbin_data, &metas[1], true).unwrap();
+        assert_eq!(records1.len(), 1);
+        assert_eq!(records1[0].key, Some(Bytes::from("user-3")));
+    }
+
+    #[test]
+    fn test_fetch_response_wire_roundtrip() {
+        // Create a fetch response
+        let resp = consumer::FetchResponse {
+            results: vec![consumer::PartitionResult {
+                topic_id: TopicId(1),
+                partition_id: PartitionId(0),
+                schema_id: SchemaId(100),
+                high_watermark: Offset(1000),
+                records: vec![
+                    Record {
+                        key: Some(Bytes::from("key1")),
+                        value: Bytes::from("value1"),
+                    },
+                    Record {
+                        key: None,
+                        value: Bytes::from("value2"),
+                    },
+                ],
+            }],
+        };
+
+        // Encode
+        let mut buf = vec![0u8; 8192];
+        let len = consumer::encode_fetch_response(&resp, &mut buf);
+
+        // Decode
+        let (decoded, decoded_len) = consumer::decode_fetch_response(&buf[..len]).unwrap();
+
+        assert_eq!(decoded_len, len);
+        assert_eq!(decoded.results.len(), 1);
+        assert_eq!(decoded.results[0].high_watermark.0, 1000);
+        assert_eq!(decoded.results[0].records.len(), 2);
+    }
+
+    #[test]
+    fn test_end_to_end_data_flow() {
+        // This test simulates the complete data flow without a database:
+        // 1. Producer sends records
+        // 2. Agent writes to TBIN
+        // 3. Agent reads from TBIN
+        // 4. Consumer receives records
+
+        // Step 1: Create produce request with 100 records
+        let producer_id = ProducerId(uuid::Uuid::new_v4());
+        let mut records = Vec::with_capacity(100);
+        for i in 0..100 {
+            records.push(Record {
+                key: Some(Bytes::from(format!("key-{:03}", i))),
+                value: Bytes::from(format!(r#"{{"id":{},"data":"test-{}"}}"#, i, i)),
+            });
+        }
+
+        let req = producer::ProduceRequest {
+            producer_id,
+            seq: SeqNum(1),
+            segments: vec![Segment {
+                topic_id: TopicId(1),
+                partition_id: PartitionId(0),
+                schema_id: SchemaId(100),
+                records: records.clone(),
+            }],
+        };
+
+        // Step 2: Encode produce request (simulates network)
+        let mut wire_buf = vec![0u8; 64 * 1024];
+        let wire_len = producer::encode_request(&req, &mut wire_buf);
+        let (decoded_req, _) = producer::decode_request(&wire_buf[..wire_len]).unwrap();
+
+        // Step 3: Write to TBIN (simulates S3 write)
+        let mut writer = TbinWriter::new();
+        for segment in &decoded_req.segments {
+            writer.add_segment(segment).unwrap();
+        }
+        let tbin_data = writer.finish();
+
+        // Step 4: Read from TBIN (simulates S3 read)
+        let metas = TbinReader::read_footer(&tbin_data).unwrap();
+        assert_eq!(metas.len(), 1);
+
+        let fetched_records = TbinReader::read_segment(&tbin_data, &metas[0], true).unwrap();
+        assert_eq!(fetched_records.len(), 100);
+
+        // Step 5: Build fetch response
+        let fetch_resp = consumer::FetchResponse {
+            results: vec![consumer::PartitionResult {
+                topic_id: TopicId(1),
+                partition_id: PartitionId(0),
+                schema_id: SchemaId(100),
+                high_watermark: Offset(100),
+                records: fetched_records,
+            }],
+        };
+
+        // Step 6: Encode fetch response (simulates network)
+        let mut resp_buf = vec![0u8; 64 * 1024];
+        let resp_len = consumer::encode_fetch_response(&fetch_resp, &mut resp_buf);
+        let (decoded_resp, _) = consumer::decode_fetch_response(&resp_buf[..resp_len]).unwrap();
+
+        // Step 7: Verify data integrity
+        assert_eq!(decoded_resp.results.len(), 1);
+        assert_eq!(decoded_resp.results[0].records.len(), 100);
+
+        // Verify first and last records
+        assert_eq!(
+            decoded_resp.results[0].records[0].key,
+            Some(Bytes::from("key-000"))
+        );
+        assert_eq!(
+            decoded_resp.results[0].records[99].key,
+            Some(Bytes::from("key-099"))
+        );
+
+        // Verify values match
+        for (i, record) in decoded_resp.results[0].records.iter().enumerate() {
+            let expected_value = format!(r#"{{"id":{},"data":"test-{}"}}"#, i, i);
+            assert_eq!(record.value, Bytes::from(expected_value));
+        }
     }
 }
