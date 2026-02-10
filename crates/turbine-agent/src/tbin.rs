@@ -1,0 +1,596 @@
+//! TBIN file format: footer-indexed container for Avro segments.
+//!
+//! File structure:
+//! ```text
+//! ┌──────────────────────────────────┐
+//! │ Segment 0 data (ZSTD compressed) │
+//! ├──────────────────────────────────┤
+//! │ Segment 1 data (ZSTD compressed) │
+//! ├──────────────────────────────────┤
+//! │ ...                              │
+//! ├──────────────────────────────────┤
+//! │ Footer (segment index)           │
+//! │ Footer length (4B, big-endian)   │
+//! │ Magic (4B): "TBIN"               │
+//! └──────────────────────────────────┘
+//! ```
+
+use bytes::{Bytes, BytesMut};
+use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+use turbine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
+use turbine_common::types::{Record, Segment};
+use turbine_wire::{record, varint};
+
+/// Magic bytes for TBIN format.
+const MAGIC: &[u8; 4] = b"TBIN";
+
+/// ZSTD compression level.
+const ZSTD_LEVEL: i32 = 3;
+
+/// Error type for TBIN operations.
+#[derive(Debug, Error)]
+pub enum TbinError {
+    #[error("invalid magic: expected TBIN")]
+    InvalidMagic,
+
+    #[error("invalid footer: {0}")]
+    InvalidFooter(String),
+
+    #[error("compression error: {0}")]
+    Compression(String),
+
+    #[error("decompression error: {0}")]
+    Decompression(String),
+
+    #[error("crc32 mismatch: expected {expected}, got {actual}")]
+    CrcMismatch { expected: u32, actual: u32 },
+
+    #[error("decode error: {0}")]
+    Decode(String),
+
+    #[error("buffer too small: need {needed}, have {available}")]
+    BufferTooSmall { needed: usize, available: usize },
+}
+
+/// Compression codec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Codec {
+    Zstd = 0,
+}
+
+/// Metadata for a single segment within a TBIN file.
+#[derive(Debug, Clone)]
+pub struct SegmentMeta {
+    pub topic_id: TopicId,
+    pub partition_id: PartitionId,
+    pub schema_id: SchemaId,
+    pub start_offset: Offset,
+    pub end_offset: Offset,
+    pub record_count: u32,
+    pub byte_offset: u64,
+    pub byte_length: u64,
+    pub ingest_time: u64, // micros since epoch
+    pub compression: Codec,
+    pub crc32: u32,
+}
+
+/// TBIN file writer.
+pub struct TbinWriter {
+    buffer: BytesMut,
+    segment_metas: Vec<SegmentMeta>,
+}
+
+impl Default for TbinWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TbinWriter {
+    /// Create a new TBIN writer.
+    pub fn new() -> Self {
+        Self {
+            buffer: BytesMut::new(),
+            segment_metas: Vec::new(),
+        }
+    }
+
+    /// Add a segment to the file.
+    ///
+    /// Returns the metadata for the added segment (offsets are provisional zeros).
+    pub fn add_segment(&mut self, segment: &Segment) -> Result<SegmentMeta, TbinError> {
+        // 1. Encode records as array
+        let mut record_bytes = BytesMut::with_capacity(segment.records.len() * 64);
+        for rec in &segment.records {
+            let mut buf = [0u8; 1024];
+            let len = record::encode(rec, &mut buf);
+            record_bytes.extend_from_slice(&buf[..len]);
+        }
+
+        // 2. Compress with ZSTD
+        let compressed = zstd::encode_all(record_bytes.as_ref(), ZSTD_LEVEL)
+            .map_err(|e| TbinError::Compression(e.to_string()))?;
+
+        // 3. Calculate CRC32
+        let crc = crc32fast::hash(&compressed);
+
+        // 4. Record byte offset and write
+        let byte_offset = self.buffer.len() as u64;
+        self.buffer.extend_from_slice(&compressed);
+        let byte_length = compressed.len() as u64;
+
+        // 5. Get current time in micros
+        let ingest_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        let meta = SegmentMeta {
+            topic_id: segment.topic_id,
+            partition_id: segment.partition_id,
+            schema_id: segment.schema_id,
+            start_offset: Offset(0), // Provisional, filled by DB commit
+            end_offset: Offset(0),   // Provisional, filled by DB commit
+            record_count: segment.records.len() as u32,
+            byte_offset,
+            byte_length,
+            ingest_time,
+            compression: Codec::Zstd,
+            crc32: crc,
+        };
+
+        self.segment_metas.push(meta.clone());
+        Ok(meta)
+    }
+
+    /// Finish writing and return the complete file contents.
+    pub fn finish(mut self) -> Bytes {
+        // 1. Encode segment metadata as footer
+        let footer_bytes = encode_footer(&self.segment_metas);
+        let footer_start = self.buffer.len();
+        self.buffer.extend_from_slice(&footer_bytes);
+        let footer_length = self.buffer.len() - footer_start;
+
+        // 2. Write footer length (4 bytes, big-endian)
+        self.buffer
+            .extend_from_slice(&(footer_length as u32).to_be_bytes());
+
+        // 3. Write magic
+        self.buffer.extend_from_slice(MAGIC);
+
+        self.buffer.freeze()
+    }
+
+    /// Get the current segment metadata.
+    pub fn segment_metas(&self) -> &[SegmentMeta] {
+        &self.segment_metas
+    }
+}
+
+/// TBIN file reader.
+pub struct TbinReader;
+
+impl TbinReader {
+    /// Read and parse the footer from a TBIN file.
+    pub fn read_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
+        if data.len() < 8 {
+            return Err(TbinError::InvalidFooter("file too small".into()));
+        }
+
+        // 1. Check magic
+        let magic = &data[data.len() - 4..];
+        if magic != MAGIC {
+            return Err(TbinError::InvalidMagic);
+        }
+
+        // 2. Read footer length
+        let footer_len_bytes = &data[data.len() - 8..data.len() - 4];
+        let footer_length = u32::from_be_bytes(footer_len_bytes.try_into().unwrap()) as usize;
+
+        // 3. Read footer data
+        let footer_end = data.len() - 8;
+        if footer_length > footer_end {
+            return Err(TbinError::InvalidFooter("footer length exceeds file size".into()));
+        }
+        let footer_start = footer_end - footer_length;
+        let footer_bytes = &data[footer_start..footer_end];
+
+        // 4. Decode footer
+        decode_footer(footer_bytes)
+    }
+
+    /// Read a segment's records given its metadata.
+    ///
+    /// The `data` parameter should contain the raw file bytes.
+    pub fn read_segment(
+        data: &[u8],
+        meta: &SegmentMeta,
+        verify_crc: bool,
+    ) -> Result<Vec<Record>, TbinError> {
+        let start = meta.byte_offset as usize;
+        let end = start + meta.byte_length as usize;
+
+        if end > data.len() {
+            return Err(TbinError::BufferTooSmall {
+                needed: end,
+                available: data.len(),
+            });
+        }
+
+        let compressed = &data[start..end];
+
+        // Verify CRC32 if requested
+        if verify_crc {
+            let actual_crc = crc32fast::hash(compressed);
+            if actual_crc != meta.crc32 {
+                return Err(TbinError::CrcMismatch {
+                    expected: meta.crc32,
+                    actual: actual_crc,
+                });
+            }
+        }
+
+        // Decompress
+        let decompressed = zstd::decode_all(compressed)
+            .map_err(|e| TbinError::Decompression(e.to_string()))?;
+
+        // Decode records
+        let mut records = Vec::with_capacity(meta.record_count as usize);
+        let mut offset = 0;
+        while offset < decompressed.len() {
+            match record::decode(&decompressed[offset..]) {
+                Ok((rec, len)) => {
+                    records.push(rec);
+                    offset += len;
+                }
+                Err(e) => {
+                    // If we've read the expected number of records, we're done
+                    if records.len() == meta.record_count as usize {
+                        break;
+                    }
+                    return Err(TbinError::Decode(e.to_string()));
+                }
+            }
+        }
+
+        Ok(records)
+    }
+}
+
+/// Encode segment metadata as footer bytes.
+fn encode_footer(metas: &[SegmentMeta]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(metas.len() * 64);
+    let mut varint_buf = [0u8; 10];
+
+    // Write count
+    let len = varint::encode_i64(metas.len() as i64, &mut varint_buf);
+    buf.extend_from_slice(&varint_buf[..len]);
+
+    for meta in metas {
+        // topic_id
+        let len = varint::encode_i64(meta.topic_id.0 as i64, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // partition_id
+        let len = varint::encode_i64(meta.partition_id.0 as i64, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // schema_id
+        let len = varint::encode_i64(meta.schema_id.0 as i64, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // start_offset
+        let len = varint::encode_u64(meta.start_offset.0, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // end_offset
+        let len = varint::encode_u64(meta.end_offset.0, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // record_count
+        let len = varint::encode_i64(meta.record_count as i64, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // byte_offset
+        let len = varint::encode_u64(meta.byte_offset, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // byte_length
+        let len = varint::encode_u64(meta.byte_length, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // ingest_time
+        let len = varint::encode_u64(meta.ingest_time, &mut varint_buf);
+        buf.extend_from_slice(&varint_buf[..len]);
+
+        // compression (single byte)
+        buf.push(meta.compression as u8);
+
+        // crc32 (4 bytes, big-endian)
+        buf.extend_from_slice(&meta.crc32.to_be_bytes());
+    }
+
+    buf
+}
+
+/// Decode footer bytes into segment metadata.
+fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
+    let mut offset = 0;
+
+    // Read count
+    let (count, len) = varint::decode_i64(data)
+        .map_err(|e| TbinError::InvalidFooter(format!("count: {}", e)))?;
+    offset += len;
+
+    let mut metas = Vec::with_capacity(count as usize);
+
+    for _ in 0..count {
+        // topic_id
+        let (topic_id, len) = varint::decode_i64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("topic_id: {}", e)))?;
+        offset += len;
+
+        // partition_id
+        let (partition_id, len) = varint::decode_i64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("partition_id: {}", e)))?;
+        offset += len;
+
+        // schema_id
+        let (schema_id, len) = varint::decode_i64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("schema_id: {}", e)))?;
+        offset += len;
+
+        // start_offset
+        let (start_offset, len) = varint::decode_u64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("start_offset: {}", e)))?;
+        offset += len;
+
+        // end_offset
+        let (end_offset, len) = varint::decode_u64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("end_offset: {}", e)))?;
+        offset += len;
+
+        // record_count
+        let (record_count, len) = varint::decode_i64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("record_count: {}", e)))?;
+        offset += len;
+
+        // byte_offset
+        let (byte_offset, len) = varint::decode_u64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("byte_offset: {}", e)))?;
+        offset += len;
+
+        // byte_length
+        let (byte_length, len) = varint::decode_u64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("byte_length: {}", e)))?;
+        offset += len;
+
+        // ingest_time
+        let (ingest_time, len) = varint::decode_u64(&data[offset..])
+            .map_err(|e| TbinError::InvalidFooter(format!("ingest_time: {}", e)))?;
+        offset += len;
+
+        // compression
+        if offset >= data.len() {
+            return Err(TbinError::InvalidFooter("unexpected end of footer".into()));
+        }
+        let compression = match data[offset] {
+            0 => Codec::Zstd,
+            _ => return Err(TbinError::InvalidFooter("unknown compression codec".into())),
+        };
+        offset += 1;
+
+        // crc32
+        if offset + 4 > data.len() {
+            return Err(TbinError::InvalidFooter("crc32 truncated".into()));
+        }
+        let crc32 = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+
+        metas.push(SegmentMeta {
+            topic_id: TopicId(topic_id as u32),
+            partition_id: PartitionId(partition_id as u32),
+            schema_id: SchemaId(schema_id as u32),
+            start_offset: Offset(start_offset),
+            end_offset: Offset(end_offset),
+            record_count: record_count as u32,
+            byte_offset,
+            byte_length,
+            ingest_time,
+            compression,
+            crc32,
+        });
+    }
+
+    Ok(metas)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_segment() -> Segment {
+        Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![
+                Record {
+                    key: Some(Bytes::from_static(b"key1")),
+                    value: Bytes::from_static(b"value1"),
+                },
+                Record {
+                    key: None,
+                    value: Bytes::from_static(b"value2"),
+                },
+                Record {
+                    key: Some(Bytes::from_static(b"key3")),
+                    value: Bytes::from_static(b"value3value3value3"),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_tbin_write_read_roundtrip() {
+        let segment = sample_segment();
+
+        // Write
+        let mut writer = TbinWriter::new();
+        let meta = writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        // Verify magic
+        assert_eq!(&file_bytes[file_bytes.len() - 4..], MAGIC);
+
+        // Read footer
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].topic_id.0, 1);
+        assert_eq!(metas[0].partition_id.0, 0);
+        assert_eq!(metas[0].record_count, 3);
+        assert_eq!(metas[0].byte_offset, meta.byte_offset);
+        assert_eq!(metas[0].byte_length, meta.byte_length);
+
+        // Read segment
+        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].key.as_ref().unwrap().as_ref(), b"key1");
+        assert_eq!(records[0].value.as_ref(), b"value1");
+        assert!(records[1].key.is_none());
+        assert_eq!(records[1].value.as_ref(), b"value2");
+    }
+
+    #[test]
+    fn test_tbin_multiple_segments() {
+        let segment1 = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from_static(b"segment1"),
+            }],
+        };
+
+        let segment2 = Segment {
+            topic_id: TopicId(2),
+            partition_id: PartitionId(1),
+            schema_id: SchemaId(200),
+            records: vec![
+                Record {
+                    key: None,
+                    value: Bytes::from_static(b"segment2a"),
+                },
+                Record {
+                    key: None,
+                    value: Bytes::from_static(b"segment2b"),
+                },
+            ],
+        };
+
+        // Write
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment1).unwrap();
+        writer.add_segment(&segment2).unwrap();
+        let file_bytes = writer.finish();
+
+        // Read footer
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        assert_eq!(metas.len(), 2);
+
+        // First segment
+        assert_eq!(metas[0].topic_id.0, 1);
+        assert_eq!(metas[0].record_count, 1);
+
+        // Second segment
+        assert_eq!(metas[1].topic_id.0, 2);
+        assert_eq!(metas[1].record_count, 2);
+
+        // Read both segments
+        let records1 = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        assert_eq!(records1.len(), 1);
+
+        let records2 = TbinReader::read_segment(&file_bytes, &metas[1], true).unwrap();
+        assert_eq!(records2.len(), 2);
+    }
+
+    #[test]
+    fn test_tbin_crc_validation() {
+        let segment = sample_segment();
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let mut file_bytes = writer.finish().to_vec();
+
+        // Read footer first to get metadata
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+
+        // Corrupt the data
+        file_bytes[0] ^= 0xFF;
+
+        // CRC check should fail
+        let result = TbinReader::read_segment(&file_bytes, &metas[0], true);
+        assert!(matches!(result, Err(TbinError::CrcMismatch { .. })));
+    }
+
+    #[test]
+    fn test_tbin_invalid_magic() {
+        let mut data = vec![0u8; 16];
+        data[12..16].copy_from_slice(b"NOPE");
+
+        let result = TbinReader::read_footer(&data);
+        assert!(matches!(result, Err(TbinError::InvalidMagic)));
+    }
+
+    #[test]
+    fn test_tbin_compression_ratio() {
+        // Create a segment with repetitive data (should compress well)
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: (0..100)
+                .map(|i| Record {
+                    key: Some(Bytes::from(format!("key{}", i))),
+                    value: Bytes::from("this is a value that repeats many times".repeat(10)),
+                })
+                .collect(),
+        };
+
+        let mut writer = TbinWriter::new();
+        let meta = writer.add_segment(&segment).unwrap();
+
+        // Compressed size should be significantly smaller than uncompressed
+        let estimated_uncompressed = 100 * (10 + 400);  // rough estimate
+        assert!(
+            meta.byte_length < estimated_uncompressed as u64 / 2,
+            "compression ratio should be at least 2x, got {} vs {}",
+            meta.byte_length,
+            estimated_uncompressed
+        );
+    }
+
+    #[test]
+    fn test_tbin_empty_segment() {
+        let segment = Segment {
+            topic_id: TopicId(1),
+            partition_id: PartitionId(0),
+            schema_id: SchemaId(100),
+            records: vec![],
+        };
+
+        let mut writer = TbinWriter::new();
+        writer.add_segment(&segment).unwrap();
+        let file_bytes = writer.finish();
+
+        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].record_count, 0);
+
+        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        assert!(records.is_empty());
+    }
+}

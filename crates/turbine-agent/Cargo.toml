@@ -1,0 +1,38 @@
+[package]
+name = "turbine-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+turbine-common = { path = "../turbine-common" }
+turbine-wire = { path = "../turbine-wire" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = "0.1"
+
+# Data handling
+bytes = { workspace = true }
+uuid = { workspace = true }
+
+# Compression
+zstd = "0.13"
+
+# Checksums
+crc32fast = "1"
+
+# AWS SDK for S3
+aws-sdk-s3 = "1"
+aws-config = "1"
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
