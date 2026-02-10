@@ -1,28 +1,29 @@
-[package]
-name = "turbine"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 
-[lib]
-name = "turbine"
-path = "src/lib.rs"
-
-[[bin]]
-name = "turbine"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# HTTP server
-axum = { version = "0.7", features = ["macros"] }
+# HTTP/WebSocket
+axum = { version = "0.7", features = ["macros", "ws"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "compression-gzip"] }
+tokio-tungstenite = "0.24"
 
-# Arrow and Parquet
-arrow = { version = "53" }
-parquet = { version = "53", features = ["arrow", "snap", "zstd", "lz4"] }
+# Storage
+aws-sdk-s3 = "1"
+aws-config = "1"
+object_store = { version = "0.11", features = ["aws"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -30,48 +31,22 @@ serde_json = "1"
 
 # Avro
 apache-avro = "0.17"
-integer-encoding = { version = "4", default-features = false }
-num-traits = "0.2"
-rust_decimal = { version = "1", default-features = false, features = ["serde-with-str"] }
-serde_derive = "1"
-serde_serializer_quick_unsupported = "0.1"
-serde-transcode = "1"
 
 # Error handling
 thiserror = "1"
 anyhow = "1"
 
-# Logging
+# Logging/Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# CLI
-clap = { version = "4", features = ["derive"] }
-
 # Utilities
 bytes = "1"
-uuid = { version = "1", features = ["v4"] }
-chrono = "0.4"
-parking_lot = "0.12"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
-# Arena allocation
-bumpalo = { version = "3", features = ["collections"] }
+# Compression
+zstd = "0.13"
 
-[dev-dependencies]
-tempfile = "3"
-tokio-test = "0.4"
-tower = { version = "0.4", features = ["util"] }
-http-body-util = "0.1"
-criterion = "0.5"
-pretty_assertions = "1"
-
-[[bench]]
-name = "avro_value"
-harness = false
-
-[[bin]]
-name = "profile_deser"
-path = "benches/profile_deser.rs"
-
-[profile.release]
-debug = true
+# Testing
+proptest = "1"
