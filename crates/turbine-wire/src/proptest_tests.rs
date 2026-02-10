@@ -291,11 +291,13 @@ proptest! {
     #[test]
     fn prop_heartbeat_roundtrip(
         group_id in "[a-z]{1,20}",
+        topic_id: u32,
         consumer_id in "[a-z0-9]{1,30}",
         generation: u64
     ) {
         let req = consumer::HeartbeatRequest {
             group_id: group_id.clone(),
+            topic_id: TopicId(topic_id),
             consumer_id: consumer_id.clone(),
             generation: Generation(generation),
         };
@@ -306,6 +308,7 @@ proptest! {
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.group_id, group_id);
+        prop_assert_eq!(decoded.topic_id.0, topic_id);
         prop_assert_eq!(decoded.consumer_id, consumer_id);
         prop_assert_eq!(decoded.generation.0, generation);
     }

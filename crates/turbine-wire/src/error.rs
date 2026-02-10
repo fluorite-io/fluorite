@@ -26,4 +26,7 @@ pub enum DecodeError {
 
     #[error("invalid utf-8 string")]
     InvalidUtf8,
+
+    #[error("invalid message type: {tag}")]
+    InvalidMessageType { tag: u8 },
 }

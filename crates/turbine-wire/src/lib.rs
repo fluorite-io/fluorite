@@ -5,6 +5,7 @@
 
 pub mod consumer;
 pub mod error;
+pub mod message;
 pub mod producer;
 pub mod record;
 pub mod varint;
@@ -13,3 +14,4 @@ pub mod varint;
 mod proptest_tests;
 
 pub use error::{DecodeError, EncodeError};
+pub use message::{peek_message_type, write_message_type, MessageType};

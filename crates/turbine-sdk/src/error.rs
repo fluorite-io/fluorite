@@ -31,4 +31,10 @@ pub enum SdkError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("invalid state: {0}")]
+    InvalidState(String),
+
+    #[error("commit failed")]
+    CommitFailed,
 }

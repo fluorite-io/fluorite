@@ -66,6 +66,7 @@ pub struct PartitionAssignment {
 #[derive(Debug, Clone)]
 pub struct HeartbeatRequest {
     pub group_id: String,
+    pub topic_id: TopicId,
     pub consumer_id: String,
     pub generation: Generation,
 }
@@ -382,6 +383,7 @@ pub fn decode_join_response(buf: &[u8]) -> Result<(JoinGroupResponse, usize), De
 pub fn encode_heartbeat_request(req: &HeartbeatRequest, buf: &mut [u8]) -> usize {
     let mut offset = 0;
     offset += encode_string(&req.group_id, &mut buf[offset..]);
+    offset += varint::encode_i64(req.topic_id.0 as i64, &mut buf[offset..]);
     offset += encode_string(&req.consumer_id, &mut buf[offset..]);
     offset += varint::encode_u64(req.generation.0, &mut buf[offset..]);
     offset
@@ -394,6 +396,9 @@ pub fn decode_heartbeat_request(buf: &[u8]) -> Result<(HeartbeatRequest, usize),
     let (group_id, len) = decode_string(&buf[offset..])?;
     offset += len;
 
+    let (topic_id, len) = varint::decode_i64(&buf[offset..])?;
+    offset += len;
+
     let (consumer_id, len) = decode_string(&buf[offset..])?;
     offset += len;
 
@@ -403,6 +408,7 @@ pub fn decode_heartbeat_request(buf: &[u8]) -> Result<(HeartbeatRequest, usize),
     Ok((
         HeartbeatRequest {
             group_id,
+            topic_id: TopicId(topic_id as u32),
             consumer_id,
             generation: Generation(generation),
         },
@@ -832,6 +838,7 @@ mod tests {
     fn test_heartbeat_roundtrip() {
         let req = HeartbeatRequest {
             group_id: "hb-group".to_string(),
+            topic_id: TopicId(42),
             consumer_id: "hb-consumer".to_string(),
             generation: Generation(10),
         };
@@ -842,6 +849,7 @@ mod tests {
         let (decoded, decoded_len) = decode_heartbeat_request(&buf[..encoded_len]).unwrap();
         assert_eq!(decoded_len, encoded_len);
         assert_eq!(decoded.group_id, "hb-group");
+        assert_eq!(decoded.topic_id.0, 42);
         assert_eq!(decoded.generation.0, 10);
 
         // Response with rebalance

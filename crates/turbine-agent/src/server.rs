@@ -9,9 +9,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
-use turbine_common::ids::{Offset, SchemaId};
-use turbine_wire::{consumer, producer};
+use turbine_common::ids::{Generation, Offset, SchemaId, TopicId};
+use turbine_wire::{consumer, peek_message_type, producer, MessageType};
 
+use crate::coordinator::{Coordinator, CoordinatorConfig};
 use crate::object_store::ObjectStore;
 use crate::tbin::{TbinReader, TbinWriter};
 use crate::AgentError;
@@ -32,14 +33,33 @@ pub struct AgentState<S: ObjectStore> {
     pub pool: PgPool,
     pub store: Arc<S>,
     pub config: AgentConfig,
+    pub coordinator: Coordinator,
 }
 
 impl<S: ObjectStore> AgentState<S> {
     pub fn new(pool: PgPool, store: S, config: AgentConfig) -> Self {
+        let coordinator = Coordinator::new(pool.clone(), CoordinatorConfig::default());
         Self {
             pool,
             store: Arc::new(store),
             config,
+            coordinator,
+        }
+    }
+
+    /// Create with custom coordinator config.
+    pub fn with_coordinator_config(
+        pool: PgPool,
+        store: S,
+        config: AgentConfig,
+        coordinator_config: CoordinatorConfig,
+    ) -> Self {
+        let coordinator = Coordinator::new(pool.clone(), coordinator_config);
+        Self {
+            pool,
+            store: Arc::new(store),
+            config,
+            coordinator,
         }
     }
 }
@@ -112,17 +132,72 @@ async fn handle_message<S: ObjectStore + Send + Sync>(
     data: &[u8],
     state: &AgentState<S>,
 ) -> Vec<u8> {
-    // Try to decode as ProduceRequest first
-    if let Ok((req, _)) = producer::decode_request(data) {
-        return handle_produce_request(req, state).await;
-    }
+    // Peek message type
+    let msg_type = match peek_message_type(data) {
+        Ok(t) => t,
+        Err(_) => {
+            // Legacy path: try without message type prefix for backwards compatibility
+            if let Ok((req, _)) = producer::decode_request(data) {
+                return handle_produce_request(req, state).await;
+            }
+            if let Ok((req, _)) = consumer::decode_fetch_request(data) {
+                return handle_fetch_request(req, state).await;
+            }
+            return encode_error_response();
+        }
+    };
 
-    // Try to decode as FetchRequest
-    if let Ok((req, _)) = consumer::decode_fetch_request(data) {
-        return handle_fetch_request(req, state).await;
-    }
+    // Skip the message type byte
+    let payload = &data[1..];
 
-    // Unknown message type - return error
+    match msg_type {
+        MessageType::Produce => {
+            match producer::decode_request(payload) {
+                Ok((req, _)) => handle_produce_request(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        MessageType::Fetch => {
+            match consumer::decode_fetch_request(payload) {
+                Ok((req, _)) => handle_fetch_request(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        MessageType::JoinGroup => {
+            match consumer::decode_join_request(payload) {
+                Ok((req, _)) => handle_join_group(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        MessageType::Heartbeat => {
+            match consumer::decode_heartbeat_request(payload) {
+                Ok((req, _)) => handle_heartbeat(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        MessageType::Rejoin => {
+            match consumer::decode_rejoin_request(payload) {
+                Ok((req, _)) => handle_rejoin(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        MessageType::LeaveGroup => {
+            match consumer::decode_leave_request(payload) {
+                Ok((req, _)) => handle_leave_group(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        MessageType::Commit => {
+            match consumer::decode_commit_request(payload) {
+                Ok((req, _)) => handle_commit(req, state).await,
+                Err(_) => encode_error_response(),
+            }
+        }
+        _ => encode_error_response(),
+    }
+}
+
+fn encode_error_response() -> Vec<u8> {
     let mut buf = vec![0u8; 256];
     let error_resp = producer::ProduceResponse {
         seq: turbine_common::ids::SeqNum(0),
@@ -376,6 +451,208 @@ async fn process_fetch<S: ObjectStore + Send + Sync>(
     }
 
     Ok(results)
+}
+
+// ============ Consumer Group Handlers ============
+
+/// Handle a JoinGroupRequest.
+async fn handle_join_group<S: ObjectStore + Send + Sync>(
+    req: consumer::JoinGroupRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    // For now, we only support single topic joins
+    let topic_id = req.topic_ids.first().copied().unwrap_or(TopicId(0));
+
+    let result = state
+        .coordinator
+        .join_group(&req.group_id, topic_id, &req.consumer_id)
+        .await;
+
+    let response = match result {
+        Ok(join_result) => consumer::JoinGroupResponse {
+            generation: join_result.generation,
+            assignments: join_result
+                .assignments
+                .into_iter()
+                .map(|a| consumer::PartitionAssignment {
+                    topic_id,
+                    partition_id: a.partition_id,
+                    committed_offset: a.committed_offset,
+                })
+                .collect(),
+        },
+        Err(e) => {
+            error!("JoinGroup error: {}", e);
+            consumer::JoinGroupResponse {
+                generation: Generation(0),
+                assignments: vec![],
+            }
+        }
+    };
+
+    let mut buf = vec![0u8; 8192];
+    buf[0] = MessageType::JoinGroupResponse.to_byte();
+    let len = consumer::encode_join_response(&response, &mut buf[1..]);
+    buf.truncate(len + 1);
+    buf
+}
+
+/// Handle a HeartbeatRequest.
+async fn handle_heartbeat<S: ObjectStore + Send + Sync>(
+    req: consumer::HeartbeatRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    // HeartbeatRequest doesn't have topic_id, so we need to look it up
+    // For now, use generation to find the group (or we could add topic_id to the request)
+    // We'll use a simplified approach - heartbeat only checks membership
+
+    let result = state
+        .coordinator
+        .heartbeat(&req.group_id, req.topic_id, &req.consumer_id, req.generation)
+        .await;
+
+    let response = match result {
+        Ok(hb_result) => consumer::HeartbeatResponseExt {
+            generation: hb_result.generation,
+            status: match hb_result.status {
+                crate::coordinator::HeartbeatStatus::Ok => consumer::HeartbeatStatus::Ok,
+                crate::coordinator::HeartbeatStatus::RebalanceNeeded => {
+                    consumer::HeartbeatStatus::RebalanceNeeded
+                }
+                crate::coordinator::HeartbeatStatus::UnknownMember => {
+                    consumer::HeartbeatStatus::UnknownMember
+                }
+            },
+        },
+        Err(e) => {
+            error!("Heartbeat error: {}", e);
+            consumer::HeartbeatResponseExt {
+                generation: Generation(0),
+                status: consumer::HeartbeatStatus::UnknownMember,
+            }
+        }
+    };
+
+    let mut buf = vec![0u8; 64];
+    buf[0] = MessageType::HeartbeatResponse.to_byte();
+    let len = consumer::encode_heartbeat_response_ext(&response, &mut buf[1..]);
+    buf.truncate(len + 1);
+    buf
+}
+
+/// Handle a RejoinRequest.
+async fn handle_rejoin<S: ObjectStore + Send + Sync>(
+    req: consumer::RejoinRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    let result = state
+        .coordinator
+        .rejoin(&req.group_id, req.topic_id, &req.consumer_id, req.generation)
+        .await;
+
+    let response = match result {
+        Ok(rejoin_result) => consumer::RejoinResponse {
+            generation: rejoin_result.generation,
+            status: match rejoin_result.status {
+                crate::coordinator::RejoinStatus::Ok => consumer::RejoinStatus::Ok,
+                crate::coordinator::RejoinStatus::RebalanceNeeded => {
+                    consumer::RejoinStatus::RebalanceNeeded
+                }
+            },
+            assignments: rejoin_result
+                .assignments
+                .into_iter()
+                .map(|a| consumer::PartitionAssignment {
+                    topic_id: req.topic_id,
+                    partition_id: a.partition_id,
+                    committed_offset: a.committed_offset,
+                })
+                .collect(),
+        },
+        Err(e) => {
+            error!("Rejoin error: {}", e);
+            consumer::RejoinResponse {
+                generation: Generation(0),
+                status: consumer::RejoinStatus::RebalanceNeeded,
+                assignments: vec![],
+            }
+        }
+    };
+
+    let mut buf = vec![0u8; 8192];
+    buf[0] = MessageType::RejoinResponse.to_byte();
+    let len = consumer::encode_rejoin_response(&response, &mut buf[1..]);
+    buf.truncate(len + 1);
+    buf
+}
+
+/// Handle a LeaveGroupRequest.
+async fn handle_leave_group<S: ObjectStore + Send + Sync>(
+    req: consumer::LeaveGroupRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    let result = state
+        .coordinator
+        .leave_group(&req.group_id, req.topic_id, &req.consumer_id)
+        .await;
+
+    let response = consumer::LeaveGroupResponse {
+        success: result.is_ok(),
+    };
+
+    if let Err(e) = result {
+        error!("LeaveGroup error: {}", e);
+    }
+
+    let mut buf = vec![0u8; 16];
+    buf[0] = MessageType::LeaveGroupResponse.to_byte();
+    let len = consumer::encode_leave_response(&response, &mut buf[1..]);
+    buf.truncate(len + 1);
+    buf
+}
+
+/// Handle a CommitRequest.
+async fn handle_commit<S: ObjectStore + Send + Sync>(
+    req: consumer::CommitRequest,
+    state: &AgentState<S>,
+) -> Vec<u8> {
+    let mut all_ok = true;
+
+    for commit in &req.commits {
+        let result = state
+            .coordinator
+            .commit_offset(
+                &req.group_id,
+                commit.topic_id,
+                &req.consumer_id,
+                commit.partition_id,
+                commit.offset,
+            )
+            .await;
+
+        match result {
+            Ok(crate::coordinator::CommitStatus::Ok) => {}
+            Ok(crate::coordinator::CommitStatus::NotOwner) => {
+                warn!(
+                    "Commit rejected: consumer {} doesn't own partition {}",
+                    req.consumer_id, commit.partition_id.0
+                );
+                all_ok = false;
+            }
+            Err(e) => {
+                error!("Commit error: {}", e);
+                all_ok = false;
+            }
+        }
+    }
+
+    let response = consumer::CommitResponse { success: all_ok };
+
+    let mut buf = vec![0u8; 16];
+    buf[0] = MessageType::CommitResponse.to_byte();
+    let len = consumer::encode_commit_response(&response, &mut buf[1..]);
+    buf.truncate(len + 1);
+    buf
 }
 
 #[cfg(test)]
