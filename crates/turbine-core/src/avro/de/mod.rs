@@ -13,8 +13,8 @@
 //! # Example
 //!
 //! ```
-//! use turbine::avro::Schema;
-//! use turbine::avro::value::{from_datum_slice_bump, BumpValue};
+//! use turbine_core::avro::Schema;
+//! use turbine_core::avro::value::{from_datum_slice_bump, BumpValue};
 //!
 //! let schema: Schema = r#"
 //! {

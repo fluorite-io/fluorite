@@ -472,8 +472,8 @@ pub enum LogicalType {
 	/// is guaranteed to keep working from one release to another:
 	///
 	/// ```rust
-	/// # use turbine::avro::schema::LogicalType;
-	/// # let logical_type = LogicalType::Unknown(turbine::avro::schema::UnknownLogicalType::new("foo"));
+	/// # use turbine_core::avro::schema::LogicalType;
+	/// # let logical_type = LogicalType::Unknown(turbine_core::avro::schema::UnknownLogicalType::new("foo"));
 	/// match logical_type {
 	/// 	LogicalType::Uuid => { /* ... */ }
 	/// 	LogicalType::TimestampMillis => { /* ... */ }

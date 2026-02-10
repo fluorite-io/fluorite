@@ -10,8 +10,8 @@
 //! # Example
 //!
 //! ```
-//! use turbine::avro::Schema;
-//! use turbine::avro::value::{Value, from_datum_slice_bump};
+//! use turbine_core::avro::Schema;
+//! use turbine_core::avro::value::{Value, from_datum_slice_bump};
 //!
 //! let schema: Schema = r#"
 //! {
@@ -28,7 +28,7 @@
 //! let bump = bumpalo::Bump::new();
 //! let value = from_datum_slice_bump(data, &schema, &bump).unwrap();
 //!
-//! use turbine::avro::value::BumpValue;
+//! use turbine_core::avro::value::BumpValue;
 //! if let BumpValue::Record(fields) = value {
 //!     // Access fields by index (O(1))
 //!     assert!(matches!(fields[0], BumpValue::Int(2)));

@@ -2464,6 +2464,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbine-wire"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "proptest",
+ "thiserror",
+ "turbine-common",
+ "uuid",
+]
+
+[[package]]
 name = "twox-hash"
 version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

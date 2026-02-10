@@ -1,0 +1,14 @@
+[package]
+name = "turbine-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+turbine-common = { path = "../turbine-common" }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
