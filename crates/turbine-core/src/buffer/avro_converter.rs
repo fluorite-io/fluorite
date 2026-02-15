@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use apache_avro::types::Value as AvroValue;
-use apache_avro::{from_avro_datum, Schema as AvroSchema};
+use apache_avro::{Schema as AvroSchema, from_avro_datum};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -40,7 +40,9 @@ fn avro_type_to_arrow(avro_schema: &AvroSchema) -> Result<DataType> {
         AvroSchema::String => Ok(DataType::Utf8),
         AvroSchema::Array(array_schema) => {
             let inner_type = avro_type_to_arrow(&array_schema.items)?;
-            Ok(DataType::List(Arc::new(Field::new("item", inner_type, true))))
+            Ok(DataType::List(Arc::new(Field::new(
+                "item", inner_type, true,
+            ))))
         }
         AvroSchema::Map(map_schema) => {
             let value_type = avro_type_to_arrow(&map_schema.types)?;
@@ -85,7 +87,10 @@ fn avro_type_to_arrow(avro_schema: &AvroSchema) -> Result<DataType> {
         }
         AvroSchema::Enum { .. } => Ok(DataType::Utf8),
         AvroSchema::Fixed(fixed) => Ok(DataType::FixedSizeBinary(fixed.size as i32)),
-        AvroSchema::Decimal(decimal) => Ok(DataType::Decimal128(decimal.precision as u8, decimal.scale as i8)),
+        AvroSchema::Decimal(decimal) => Ok(DataType::Decimal128(
+            decimal.precision as u8,
+            decimal.scale as i8,
+        )),
         AvroSchema::Uuid => Ok(DataType::Utf8),
         AvroSchema::Date => Ok(DataType::Date32),
         AvroSchema::TimeMillis => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -99,7 +104,9 @@ fn avro_type_to_arrow(avro_schema: &AvroSchema) -> Result<DataType> {
         AvroSchema::TimestampNanos | AvroSchema::LocalTimestampNanos => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
-        AvroSchema::Duration => Ok(DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano)),
+        AvroSchema::Duration => Ok(DataType::Interval(
+            arrow::datatypes::IntervalUnit::MonthDayNano,
+        )),
         AvroSchema::BigDecimal => Ok(DataType::Utf8),
         AvroSchema::Ref { name } => Err(TurbineError::InvalidSchema(format!(
             "Schema reference '{}' not supported",
@@ -119,7 +126,12 @@ impl RecordBatchBuilder {
     pub fn new(avro_schema: AvroSchema) -> Result<Self> {
         let arrow_schema = Arc::new(avro_schema_to_arrow(&avro_schema)?);
         let builders = create_builders(&arrow_schema)?;
-        Ok(Self { arrow_schema, avro_schema, builders, row_count: 0 })
+        Ok(Self {
+            arrow_schema,
+            avro_schema,
+            builders,
+            row_count: 0,
+        })
     }
 
     pub fn append_avro_bytes(&mut self, data: &[u8]) -> Result<()> {
@@ -136,7 +148,9 @@ impl RecordBatchBuilder {
             self.row_count += 1;
             Ok(())
         } else {
-            Err(TurbineError::Conversion("Expected Avro Record value".to_string()))
+            Err(TurbineError::Conversion(
+                "Expected Avro Record value".to_string(),
+            ))
         }
     }
 
@@ -151,7 +165,11 @@ impl RecordBatchBuilder {
 }
 
 fn create_builders(schema: &ArrowSchema) -> Result<Vec<Box<dyn ArrayBuilder>>> {
-    schema.fields().iter().map(|f| create_builder(f.data_type())).collect()
+    schema
+        .fields()
+        .iter()
+        .map(|f| create_builder(f.data_type()))
+        .collect()
 }
 
 fn create_builder(data_type: &DataType) -> Result<Box<dyn ArrayBuilder>> {
@@ -168,8 +186,12 @@ fn create_builder(data_type: &DataType) -> Result<Box<dyn ArrayBuilder>> {
         DataType::Time32(TimeUnit::Millisecond) => Box::new(Time32MillisecondBuilder::new()),
         DataType::Time64(TimeUnit::Microsecond) => Box::new(Time64MicrosecondBuilder::new()),
         DataType::Time64(TimeUnit::Nanosecond) => Box::new(Time64NanosecondBuilder::new()),
-        DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(TimestampMillisecondBuilder::new()),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(TimestampMicrosecondBuilder::new()),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            Box::new(TimestampMillisecondBuilder::new())
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            Box::new(TimestampMicrosecondBuilder::new())
+        }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(TimestampNanosecondBuilder::new()),
         DataType::FixedSizeBinary(size) => Box::new(FixedSizeBinaryBuilder::new(*size)),
         DataType::List(field) => Box::new(ListBuilder::new(create_builder(field.data_type())?)),
@@ -200,7 +222,10 @@ fn append_value_to_builder(builder: &mut Box<dyn ArrayBuilder>, value: &AvroValu
         AvroValue::String(v) | AvroValue::Enum(_, v) => try_append!(builder, StringBuilder, v),
         AvroValue::Union(_, inner) => return append_value_to_builder(builder, inner),
         AvroValue::Fixed(_, v) => {
-            if let Some(b) = builder.as_any_mut().downcast_mut::<FixedSizeBinaryBuilder>() {
+            if let Some(b) = builder
+                .as_any_mut()
+                .downcast_mut::<FixedSizeBinaryBuilder>()
+            {
                 b.append_value(v)?;
             }
         }
@@ -235,7 +260,15 @@ fn append_null(builder: &mut Box<dyn ArrayBuilder>) {
             $(if let Some(b) = builder.as_any_mut().downcast_mut::<$type>() { b.append_null(); return; })*
         };
     }
-    try_null!(StringBuilder, Int32Builder, Int64Builder, Float32Builder, Float64Builder, BooleanBuilder, BinaryBuilder);
+    try_null!(
+        StringBuilder,
+        Int32Builder,
+        Int64Builder,
+        Float32Builder,
+        Float64Builder,
+        BooleanBuilder,
+        BinaryBuilder
+    );
 }
 
 #[cfg(test)]
@@ -244,7 +277,8 @@ mod tests {
     use apache_avro::to_avro_datum;
 
     fn sample_schema() -> AvroSchema {
-        AvroSchema::parse_str(r#"{
+        AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "User",
             "fields": [
@@ -255,7 +289,9 @@ mod tests {
                 {"name": "active", "type": "boolean"},
                 {"name": "score", "type": "double"}
             ]
-        }"#).unwrap()
+        }"#,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -303,7 +339,13 @@ mod tests {
         let record = AvroValue::Record(vec![
             ("id".to_string(), AvroValue::Long(1)),
             ("name".to_string(), AvroValue::String("Alice".to_string())),
-            ("email".to_string(), AvroValue::Union(1, Box::new(AvroValue::String("alice@example.com".to_string())))),
+            (
+                "email".to_string(),
+                AvroValue::Union(
+                    1,
+                    Box::new(AvroValue::String("alice@example.com".to_string())),
+                ),
+            ),
             ("age".to_string(), AvroValue::Int(30)),
             ("active".to_string(), AvroValue::Boolean(true)),
             ("score".to_string(), AvroValue::Double(95.5)),
@@ -319,12 +361,14 @@ mod tests {
 
     #[test]
     fn test_avro_bytes_parsing() {
-        let schema = AvroSchema::parse_str(r#"{
+        let schema = AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "Simple",
             "fields": [{"name": "id", "type": "long"}, {"name": "name", "type": "string"}]
-        }"#).unwrap();
-
+        }"#,
+        )
+        .unwrap();
 
         let mut builder = RecordBatchBuilder::new(schema.clone()).unwrap();
         let record = AvroValue::Record(vec![

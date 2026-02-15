@@ -1,10 +1,10 @@
-//! Agent error types.
+//! Broker error types.
 
 use thiserror::Error;
 
-/// Agent error type.
+/// Broker error type.
 #[derive(Debug, Error)]
-pub enum AgentError {
+pub enum BrokerError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -24,14 +24,14 @@ pub enum AgentError {
     Wire(String),
 }
 
-impl From<crate::object_store::ObjectStoreError> for AgentError {
+impl From<crate::object_store::ObjectStoreError> for BrokerError {
     fn from(e: crate::object_store::ObjectStoreError) -> Self {
-        AgentError::ObjectStore(e.to_string())
+        BrokerError::ObjectStore(e.to_string())
     }
 }
 
-impl From<crate::tbin::TbinError> for AgentError {
+impl From<crate::tbin::TbinError> for BrokerError {
     fn from(e: crate::tbin::TbinError) -> Self {
-        AgentError::Tbin(e.to_string())
+        BrokerError::Tbin(e.to_string())
     }
 }

@@ -4,4 +4,4 @@ pub mod parquet_writer;
 pub mod service;
 
 pub use parquet_writer::ParquetWriterConfig;
-pub use service::{build_router, AppState};
+pub use service::{AppState, build_router};

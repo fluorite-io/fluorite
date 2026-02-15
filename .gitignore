@@ -1,3 +1,18 @@
+# Rust
 /target
+
+# Java
+*.class
+*.jar
+**/target/
+
+# Python
+*.pyc
+**/__pycache__/
+*.egg-info/
+
+# OS
 .DS_Store
+
+# IDE
 .idea/

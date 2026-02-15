@@ -1,15 +1,15 @@
-//! TBIN file format: footer-indexed container for Avro segments.
+//! TBIN file format: footer-indexed container for Avro batches.
 //!
 //! File structure:
 //! ```text
 //! ┌──────────────────────────────────┐
-//! │ Segment 0 data (ZSTD compressed) │
+//! │ RecordBatch 0 data (ZSTD compressed) │
 //! ├──────────────────────────────────┤
-//! │ Segment 1 data (ZSTD compressed) │
+//! │ RecordBatch 1 data (ZSTD compressed) │
 //! ├──────────────────────────────────┤
 //! │ ...                              │
 //! ├──────────────────────────────────┤
-//! │ Footer (segment index)           │
+//! │ Footer (batch index)           │
 //! │ Footer length (4B, big-endian)   │
 //! │ Magic (4B): "TBIN"               │
 //! └──────────────────────────────────┘
@@ -19,7 +19,7 @@ use bytes::{Bytes, BytesMut};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use turbine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
-use turbine_common::types::{Record, Segment};
+use turbine_common::types::{Record, RecordBatch};
 use turbine_wire::{record, varint};
 
 /// Magic bytes for TBIN format.
@@ -60,7 +60,7 @@ pub enum Codec {
     Zstd = 0,
 }
 
-/// Metadata for a single segment within a TBIN file.
+/// Metadata for a single batch within a TBIN file.
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub topic_id: TopicId,
@@ -97,13 +97,13 @@ impl TbinWriter {
         }
     }
 
-    /// Add a segment to the file.
+    /// Add a batch to the file.
     ///
-    /// Returns the metadata for the added segment (offsets are provisional zeros).
-    pub fn add_segment(&mut self, segment: &Segment) -> Result<SegmentMeta, TbinError> {
+    /// Returns the metadata for the added batch (offsets are provisional zeros).
+    pub fn add_segment(&mut self, batch: &RecordBatch) -> Result<SegmentMeta, TbinError> {
         // 1. Encode records as array
         let mut record_bytes = BytesMut::new();
-        for rec in &segment.records {
+        for rec in &batch.records {
             // Calculate needed size: key + value + varint overhead
             let key_len = rec.key.as_ref().map(|k| k.len()).unwrap_or(0);
             let value_len = rec.value.len();
@@ -132,12 +132,12 @@ impl TbinWriter {
             .as_micros() as u64;
 
         let meta = SegmentMeta {
-            topic_id: segment.topic_id,
-            partition_id: segment.partition_id,
-            schema_id: segment.schema_id,
+            topic_id: batch.topic_id,
+            partition_id: batch.partition_id,
+            schema_id: batch.schema_id,
             start_offset: Offset(0), // Provisional, filled by DB commit
             end_offset: Offset(0),   // Provisional, filled by DB commit
-            record_count: segment.records.len() as u32,
+            record_count: batch.records.len() as u32,
             byte_offset,
             byte_length,
             ingest_time,
@@ -151,7 +151,7 @@ impl TbinWriter {
 
     /// Finish writing and return the complete file contents.
     pub fn finish(mut self) -> Bytes {
-        // 1. Encode segment metadata as footer
+        // 1. Encode batch metadata as footer
         let footer_bytes = encode_footer(&self.segment_metas);
         let footer_start = self.buffer.len();
         self.buffer.extend_from_slice(&footer_bytes);
@@ -167,7 +167,7 @@ impl TbinWriter {
         self.buffer.freeze()
     }
 
-    /// Get the current segment metadata.
+    /// Get the current batch metadata.
     pub fn segment_metas(&self) -> &[SegmentMeta] {
         &self.segment_metas
     }
@@ -196,7 +196,9 @@ impl TbinReader {
         // 3. Read footer data
         let footer_end = data.len() - 8;
         if footer_length > footer_end {
-            return Err(TbinError::InvalidFooter("footer length exceeds file size".into()));
+            return Err(TbinError::InvalidFooter(
+                "footer length exceeds file size".into(),
+            ));
         }
         let footer_start = footer_end - footer_length;
         let footer_bytes = &data[footer_start..footer_end];
@@ -205,7 +207,7 @@ impl TbinReader {
         decode_footer(footer_bytes)
     }
 
-    /// Read a segment's records given its metadata.
+    /// Read a batch's records given its metadata.
     ///
     /// The `data` parameter should contain the raw file bytes.
     pub fn read_segment(
@@ -237,8 +239,8 @@ impl TbinReader {
         }
 
         // Decompress
-        let decompressed = zstd::decode_all(compressed)
-            .map_err(|e| TbinError::Decompression(e.to_string()))?;
+        let decompressed =
+            zstd::decode_all(compressed).map_err(|e| TbinError::Decompression(e.to_string()))?;
 
         // Decode records
         let mut records = Vec::with_capacity(meta.record_count as usize);
@@ -263,7 +265,7 @@ impl TbinReader {
     }
 }
 
-/// Encode segment metadata as footer bytes.
+/// Encode batch metadata as footer bytes.
 fn encode_footer(metas: &[SegmentMeta]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(metas.len() * 64);
     let mut varint_buf = [0u8; 10];
@@ -319,13 +321,13 @@ fn encode_footer(metas: &[SegmentMeta]) -> Vec<u8> {
     buf
 }
 
-/// Decode footer bytes into segment metadata.
+/// Decode footer bytes into batch metadata.
 fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
     let mut offset = 0;
 
     // Read count
-    let (count, len) = varint::decode_i64(data)
-        .map_err(|e| TbinError::InvalidFooter(format!("count: {}", e)))?;
+    let (count, len) =
+        varint::decode_i64(data).map_err(|e| TbinError::InvalidFooter(format!("count: {}", e)))?;
     offset += len;
 
     let mut metas = Vec::with_capacity(count as usize);
@@ -415,8 +417,8 @@ fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
 mod tests {
     use super::*;
 
-    fn sample_segment() -> Segment {
-        Segment {
+    fn sample_segment() -> RecordBatch {
+        RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -439,11 +441,11 @@ mod tests {
 
     #[test]
     fn test_tbin_write_read_roundtrip() {
-        let segment = sample_segment();
+        let batch = sample_segment();
 
         // Write
         let mut writer = TbinWriter::new();
-        let meta = writer.add_segment(&segment).unwrap();
+        let meta = writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         // Verify magic
@@ -458,7 +460,7 @@ mod tests {
         assert_eq!(metas[0].byte_offset, meta.byte_offset);
         assert_eq!(metas[0].byte_length, meta.byte_length);
 
-        // Read segment
+        // Read batch
         let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].key.as_ref().unwrap().as_ref(), b"key1");
@@ -469,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_tbin_multiple_segments() {
-        let segment1 = Segment {
+        let segment1 = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -479,7 +481,7 @@ mod tests {
             }],
         };
 
-        let segment2 = Segment {
+        let segment2 = RecordBatch {
             topic_id: TopicId(2),
             partition_id: PartitionId(1),
             schema_id: SchemaId(200),
@@ -505,15 +507,15 @@ mod tests {
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas.len(), 2);
 
-        // First segment
+        // First batch
         assert_eq!(metas[0].topic_id.0, 1);
         assert_eq!(metas[0].record_count, 1);
 
-        // Second segment
+        // Second batch
         assert_eq!(metas[1].topic_id.0, 2);
         assert_eq!(metas[1].record_count, 2);
 
-        // Read both segments
+        // Read both batches
         let records1 = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert_eq!(records1.len(), 1);
 
@@ -523,10 +525,10 @@ mod tests {
 
     #[test]
     fn test_tbin_crc_validation() {
-        let segment = sample_segment();
+        let batch = sample_segment();
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let mut file_bytes = writer.finish().to_vec();
 
         // Read footer first to get metadata
@@ -551,8 +553,8 @@ mod tests {
 
     #[test]
     fn test_tbin_compression_ratio() {
-        // Create a segment with repetitive data (should compress well)
-        let segment = Segment {
+        // Create a batch with repetitive data (should compress well)
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -565,10 +567,10 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        let meta = writer.add_segment(&segment).unwrap();
+        let meta = writer.add_segment(&batch).unwrap();
 
         // Compressed size should be significantly smaller than uncompressed
-        let estimated_uncompressed = 100 * (10 + 400);  // rough estimate
+        let estimated_uncompressed = 100 * (10 + 400); // rough estimate
         assert!(
             meta.byte_length < estimated_uncompressed as u64 / 2,
             "compression ratio should be at least 2x, got {} vs {}",
@@ -579,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_tbin_empty_segment() {
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -587,7 +589,7 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
@@ -604,9 +606,9 @@ mod tests {
     fn test_tbin_many_segments() {
         let mut writer = TbinWriter::new();
 
-        // Write 50 segments
+        // Write 50 batches
         for i in 0..50 {
-            let segment = Segment {
+            let batch = RecordBatch {
                 topic_id: TopicId(i),
                 partition_id: PartitionId(i % 8),
                 schema_id: SchemaId(100 + i),
@@ -615,7 +617,7 @@ mod tests {
                     value: Bytes::from(format!("value-{}", i)),
                 }],
             };
-            writer.add_segment(&segment).unwrap();
+            writer.add_segment(&batch).unwrap();
         }
 
         let file_bytes = writer.finish();
@@ -623,7 +625,7 @@ mod tests {
 
         assert_eq!(metas.len(), 50);
 
-        // Verify each segment
+        // Verify each batch
         for (i, meta) in metas.iter().enumerate() {
             assert_eq!(meta.topic_id.0, i as u32);
             assert_eq!(meta.partition_id.0, (i % 8) as u32);
@@ -639,7 +641,7 @@ mod tests {
         // Test with 1MB values
         let large_value = vec![0xABu8; 1024 * 1024];
 
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -650,7 +652,7 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
@@ -667,7 +669,7 @@ mod tests {
         let binary_key = vec![0x00, 0xFF, 0x80, 0x7F, 0x01, 0xFE];
         let binary_value = (0..=255u8).collect::<Vec<u8>>();
 
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -678,19 +680,22 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
         let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
 
-        assert_eq!(records[0].key.as_ref().unwrap().as_ref(), binary_key.as_slice());
+        assert_eq!(
+            records[0].key.as_ref().unwrap().as_ref(),
+            binary_key.as_slice()
+        );
         assert_eq!(records[0].value.as_ref(), binary_value.as_slice());
     }
 
     #[test]
     fn test_tbin_max_id_values() {
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(u32::MAX),
             partition_id: PartitionId(u32::MAX),
             schema_id: SchemaId(u32::MAX),
@@ -701,7 +706,7 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
@@ -733,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_tbin_segment_byte_range_validation() {
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -744,7 +749,7 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
@@ -762,7 +767,7 @@ mod tests {
 
     #[test]
     fn test_tbin_skip_crc_validation() {
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -773,7 +778,7 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let mut file_bytes = writer.finish().to_vec();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();
@@ -794,7 +799,7 @@ mod tests {
 
     #[test]
     fn test_tbin_many_records_per_segment() {
-        let segment = Segment {
+        let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -811,7 +816,7 @@ mod tests {
         };
 
         let mut writer = TbinWriter::new();
-        writer.add_segment(&segment).unwrap();
+        writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         let metas = TbinReader::read_footer(&file_bytes).unwrap();

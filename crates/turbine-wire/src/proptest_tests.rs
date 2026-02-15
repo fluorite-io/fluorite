@@ -4,10 +4,10 @@
 
 use bytes::Bytes;
 use proptest::prelude::*;
-use turbine_common::ids::{Generation, Offset, PartitionId, ProducerId, SchemaId, SeqNum, TopicId};
-use turbine_common::types::{Record, Segment, SegmentAck};
+use turbine_common::ids::{Generation, Offset, PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use turbine_common::types::{Record, RecordBatch, BatchAck};
 
-use crate::{consumer, producer, record, varint};
+use crate::{reader, writer, record, varint};
 
 // ============ Varint Property Tests ============
 
@@ -90,16 +90,16 @@ proptest! {
     }
 }
 
-// ============ Segment Property Tests ============
+// ============ RecordBatch Property Tests ============
 
-fn arb_segment() -> impl Strategy<Value = Segment> {
+fn arb_segment() -> impl Strategy<Value = RecordBatch> {
     (
         any::<u32>(),
         any::<u32>(),
         any::<u32>(),
         prop::collection::vec(arb_record(), 0..20),
     )
-        .prop_map(|(topic_id, partition_id, schema_id, records)| Segment {
+        .prop_map(|(topic_id, partition_id, schema_id, records)| RecordBatch {
             topic_id: TopicId(topic_id),
             partition_id: PartitionId(partition_id),
             schema_id: SchemaId(schema_id),
@@ -107,7 +107,7 @@ fn arb_segment() -> impl Strategy<Value = Segment> {
         })
 }
 
-fn arb_segment_ack() -> impl Strategy<Value = SegmentAck> {
+fn arb_segment_ack() -> impl Strategy<Value = BatchAck> {
     (
         any::<u32>(),
         any::<u32>(),
@@ -116,7 +116,7 @@ fn arb_segment_ack() -> impl Strategy<Value = SegmentAck> {
         any::<u64>(),
     )
         .prop_map(
-            |(topic_id, partition_id, schema_id, start_offset, end_offset)| SegmentAck {
+            |(topic_id, partition_id, schema_id, start_offset, end_offset)| BatchAck {
                 topic_id: TopicId(topic_id),
                 partition_id: PartitionId(partition_id),
                 schema_id: SchemaId(schema_id),
@@ -126,31 +126,36 @@ fn arb_segment_ack() -> impl Strategy<Value = SegmentAck> {
         )
 }
 
-// ============ ProduceRequest/Response Property Tests ============
+// ============ AppendRequest/Response Property Tests ============
 
-fn arb_produce_request() -> impl Strategy<Value = producer::ProduceRequest> {
+fn arb_produce_request() -> impl Strategy<Value = writer::AppendRequest> {
     (
         prop::collection::vec(any::<u8>(), 16..=16), // UUID bytes
         any::<u64>(),
         prop::collection::vec(arb_segment(), 0..5),
     )
-        .prop_map(|(uuid_bytes, seq, segments)| {
+        .prop_map(|(uuid_bytes, append_seq, batches)| {
             let uuid = uuid::Uuid::from_bytes(uuid_bytes.try_into().unwrap());
-            producer::ProduceRequest {
-                producer_id: ProducerId(uuid),
-                seq: SeqNum(seq),
-                segments,
+            writer::AppendRequest {
+                writer_id: WriterId(uuid),
+                append_seq: AppendSeq(append_seq),
+                batches,
             }
         })
 }
 
-fn arb_produce_response() -> impl Strategy<Value = producer::ProduceResponse> {
-    (any::<u64>(), prop::collection::vec(arb_segment_ack(), 0..10)).prop_map(|(seq, acks)| {
-        producer::ProduceResponse {
-            seq: SeqNum(seq),
-            acks,
-        }
-    })
+fn arb_produce_response() -> impl Strategy<Value = writer::AppendResponse> {
+    (
+        any::<u64>(),
+        prop::collection::vec(arb_segment_ack(), 0..10),
+    )
+        .prop_map(|(append_seq, append_acks)| writer::AppendResponse {
+            append_seq: AppendSeq(append_seq),
+            success: true,
+            error_code: 0,
+            error_message: String::new(),
+            append_acks,
+        })
 }
 
 proptest! {
@@ -159,30 +164,30 @@ proptest! {
     #[test]
     fn prop_produce_request_roundtrip(req in arb_produce_request()) {
         let mut buf = vec![0u8; 64 * 1024]; // 64KB buffer
-        let encoded_len = producer::encode_request(&req, &mut buf);
-        let (decoded, decoded_len) = producer::decode_request(&buf[..encoded_len]).unwrap();
+        let encoded_len = writer::encode_request(&req, &mut buf);
+        let (decoded, decoded_len) = writer::decode_request(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
-        prop_assert_eq!(decoded.producer_id.0, req.producer_id.0);
-        prop_assert_eq!(decoded.seq.0, req.seq.0);
-        prop_assert_eq!(decoded.segments.len(), req.segments.len());
+        prop_assert_eq!(decoded.writer_id.0, req.writer_id.0);
+        prop_assert_eq!(decoded.append_seq.0, req.append_seq.0);
+        prop_assert_eq!(decoded.batches.len(), req.batches.len());
     }
 
     #[test]
     fn prop_produce_response_roundtrip(resp in arb_produce_response()) {
         let mut buf = vec![0u8; 8 * 1024];
-        let encoded_len = producer::encode_response(&resp, &mut buf);
-        let (decoded, decoded_len) = producer::decode_response(&buf[..encoded_len]).unwrap();
+        let encoded_len = writer::encode_response(&resp, &mut buf);
+        let (decoded, decoded_len) = writer::decode_response(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
-        prop_assert_eq!(decoded.seq.0, resp.seq.0);
-        prop_assert_eq!(decoded.acks.len(), resp.acks.len());
+        prop_assert_eq!(decoded.append_seq.0, resp.append_seq.0);
+        prop_assert_eq!(decoded.append_acks.len(), resp.append_acks.len());
     }
 }
 
-// ============ Consumer Message Property Tests ============
+// ============ Reader Message Property Tests ============
 
-fn arb_fetch_request() -> impl Strategy<Value = consumer::FetchRequest> {
+fn arb_fetch_request() -> impl Strategy<Value = reader::ReadRequest> {
     (
         "[a-z]{1,20}",
         "[a-z0-9]{1,30}",
@@ -192,23 +197,25 @@ fn arb_fetch_request() -> impl Strategy<Value = consumer::FetchRequest> {
             0..10,
         ),
     )
-        .prop_map(|(group_id, consumer_id, generation, fetches)| consumer::FetchRequest {
-            group_id,
-            consumer_id,
-            generation: Generation(generation),
-            fetches: fetches
-                .into_iter()
-                .map(|(tid, pid, offset, max_bytes)| consumer::PartitionFetch {
-                    topic_id: TopicId(tid),
-                    partition_id: PartitionId(pid),
-                    offset: Offset(offset),
-                    max_bytes,
-                })
-                .collect(),
-        })
+        .prop_map(
+            |(group_id, reader_id, generation, reads)| reader::ReadRequest {
+                group_id,
+                reader_id,
+                generation: Generation(generation),
+                reads: reads
+                    .into_iter()
+                    .map(|(tid, pid, offset, max_bytes)| reader::PartitionRead {
+                        topic_id: TopicId(tid),
+                        partition_id: PartitionId(pid),
+                        offset: Offset(offset),
+                        max_bytes,
+                    })
+                    .collect(),
+            },
+        )
 }
 
-fn arb_partition_result() -> impl Strategy<Value = consumer::PartitionResult> {
+fn arb_partition_result() -> impl Strategy<Value = reader::PartitionResult> {
     (
         any::<u32>(),
         any::<u32>(),
@@ -218,7 +225,7 @@ fn arb_partition_result() -> impl Strategy<Value = consumer::PartitionResult> {
     )
         .prop_map(
             |(topic_id, partition_id, schema_id, high_watermark, records)| {
-                consumer::PartitionResult {
+                reader::PartitionResult {
                     topic_id: TopicId(topic_id),
                     partition_id: PartitionId(partition_id),
                     schema_id: SchemaId(schema_id),
@@ -229,9 +236,15 @@ fn arb_partition_result() -> impl Strategy<Value = consumer::PartitionResult> {
         )
 }
 
-fn arb_fetch_response() -> impl Strategy<Value = consumer::FetchResponse> {
-    prop::collection::vec(arb_partition_result(), 0..5)
-        .prop_map(|results| consumer::FetchResponse { results })
+fn arb_fetch_response() -> impl Strategy<Value = reader::ReadResponse> {
+    prop::collection::vec(arb_partition_result(), 0..5).prop_map(|results| {
+        reader::ReadResponse {
+            success: true,
+            error_code: 0,
+            error_message: String::new(),
+            results,
+        }
+    })
 }
 
 proptest! {
@@ -240,28 +253,28 @@ proptest! {
     #[test]
     fn prop_fetch_request_roundtrip(req in arb_fetch_request()) {
         let mut buf = vec![0u8; 8 * 1024];
-        let encoded_len = consumer::encode_fetch_request(&req, &mut buf);
-        let (decoded, decoded_len) = consumer::decode_fetch_request(&buf[..encoded_len]).unwrap();
+        let encoded_len = reader::encode_read_request(&req, &mut buf);
+        let (decoded, decoded_len) = reader::decode_read_request(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.group_id, req.group_id);
-        prop_assert_eq!(decoded.consumer_id, req.consumer_id);
+        prop_assert_eq!(decoded.reader_id, req.reader_id);
         prop_assert_eq!(decoded.generation.0, req.generation.0);
-        prop_assert_eq!(decoded.fetches.len(), req.fetches.len());
+        prop_assert_eq!(decoded.reads.len(), req.reads.len());
     }
 
     #[test]
     fn prop_fetch_response_roundtrip(resp in arb_fetch_response()) {
         let mut buf = vec![0u8; 64 * 1024];
-        let encoded_len = consumer::encode_fetch_response(&resp, &mut buf);
-        let (decoded, decoded_len) = consumer::decode_fetch_response(&buf[..encoded_len]).unwrap();
+        let encoded_len = reader::encode_read_response(&resp, &mut buf);
+        let (decoded, decoded_len) = reader::decode_read_response(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.results.len(), resp.results.len());
     }
 }
 
-// ============ Consumer Group Messages ============
+// ============ Reader Group Messages ============
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
@@ -269,22 +282,22 @@ proptest! {
     #[test]
     fn prop_join_group_roundtrip(
         group_id in "[a-z]{1,20}",
-        consumer_id in "[a-z0-9]{1,30}",
+        reader_id in "[a-z0-9]{1,30}",
         topic_ids in prop::collection::vec(any::<u32>(), 0..10)
     ) {
-        let req = consumer::JoinGroupRequest {
+        let req = reader::JoinGroupRequest {
             group_id: group_id.clone(),
-            consumer_id: consumer_id.clone(),
+            reader_id: reader_id.clone(),
             topic_ids: topic_ids.iter().map(|&id| TopicId(id)).collect(),
         };
 
         let mut buf = vec![0u8; 1024];
-        let encoded_len = consumer::encode_join_request(&req, &mut buf);
-        let (decoded, decoded_len) = consumer::decode_join_request(&buf[..encoded_len]).unwrap();
+        let encoded_len = reader::encode_join_request(&req, &mut buf);
+        let (decoded, decoded_len) = reader::decode_join_request(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.group_id, group_id);
-        prop_assert_eq!(decoded.consumer_id, consumer_id);
+        prop_assert_eq!(decoded.reader_id, reader_id);
         prop_assert_eq!(decoded.topic_ids.len(), topic_ids.len());
     }
 
@@ -292,34 +305,34 @@ proptest! {
     fn prop_heartbeat_roundtrip(
         group_id in "[a-z]{1,20}",
         topic_id: u32,
-        consumer_id in "[a-z0-9]{1,30}",
+        reader_id in "[a-z0-9]{1,30}",
         generation: u64
     ) {
-        let req = consumer::HeartbeatRequest {
+        let req = reader::HeartbeatRequest {
             group_id: group_id.clone(),
             topic_id: TopicId(topic_id),
-            consumer_id: consumer_id.clone(),
+            reader_id: reader_id.clone(),
             generation: Generation(generation),
         };
 
         let mut buf = vec![0u8; 256];
-        let encoded_len = consumer::encode_heartbeat_request(&req, &mut buf);
-        let (decoded, decoded_len) = consumer::decode_heartbeat_request(&buf[..encoded_len]).unwrap();
+        let encoded_len = reader::encode_heartbeat_request(&req, &mut buf);
+        let (decoded, decoded_len) = reader::decode_heartbeat_request(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.group_id, group_id);
         prop_assert_eq!(decoded.topic_id.0, topic_id);
-        prop_assert_eq!(decoded.consumer_id, consumer_id);
+        prop_assert_eq!(decoded.reader_id, reader_id);
         prop_assert_eq!(decoded.generation.0, generation);
     }
 
     #[test]
     fn prop_heartbeat_response_roundtrip(rebalance_needed: bool) {
-        let resp = consumer::HeartbeatResponse { rebalance_needed };
+        let resp = reader::HeartbeatResponse { rebalance_needed };
 
         let mut buf = vec![0u8; 8];
-        let encoded_len = consumer::encode_heartbeat_response(&resp, &mut buf);
-        let (decoded, _) = consumer::decode_heartbeat_response(&buf[..encoded_len]).unwrap();
+        let encoded_len = reader::encode_heartbeat_response(&resp, &mut buf);
+        let (decoded, _) = reader::decode_heartbeat_response(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded.rebalance_needed, rebalance_needed);
     }

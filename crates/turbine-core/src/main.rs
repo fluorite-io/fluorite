@@ -5,10 +5,10 @@ use clap::Parser;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::EnvFilter;
 
-use turbine_core::buffer::{build_router, AppState, ParquetWriterConfig};
+use turbine_core::buffer::{AppState, ParquetWriterConfig, build_router};
 
 #[derive(Parser, Debug)]
 #[command(name = "turbine")]

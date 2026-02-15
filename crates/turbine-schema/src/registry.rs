@@ -6,9 +6,9 @@ use serde_json::Value;
 use sqlx::PgPool;
 use turbine_common::ids::{SchemaId, TopicId};
 
+use crate::SchemaError;
 use crate::canonical::schema_hash;
 use crate::compat::is_backward_compatible;
-use crate::SchemaError;
 
 /// Schema registry backed by Postgres.
 #[derive(Clone)]
@@ -52,12 +52,11 @@ impl SchemaRegistry {
         let mut tx = self.pool.begin().await?;
 
         // 1. Check if topic exists
-        let topic_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM topics WHERE topic_id = $1)"
-        )
-        .bind(topic_id.0 as i32)
-        .fetch_one(&mut *tx)
-        .await?;
+        let topic_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM topics WHERE topic_id = $1)")
+                .bind(topic_id.0 as i32)
+                .fetch_one(&mut *tx)
+                .await?;
 
         if !topic_exists {
             return Err(SchemaError::TopicNotFound { topic_id });
@@ -85,7 +84,7 @@ impl SchemaRegistry {
 
         // 3. Check if already registered for topic (idempotent)
         let already_registered: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM topic_schemas WHERE topic_id = $1 AND schema_id = $2)"
+            "SELECT EXISTS(SELECT 1 FROM topic_schemas WHERE topic_id = $1 AND schema_id = $2)",
         )
         .bind(topic_id.0 as i32)
         .bind(schema_id)
@@ -107,7 +106,7 @@ impl SchemaRegistry {
             ORDER BY ts.created_at DESC
             LIMIT 1
             FOR UPDATE
-            "#
+            "#,
         )
         .bind(topic_id.0 as i32)
         .fetch_optional(&mut *tx)
@@ -117,19 +116,18 @@ impl SchemaRegistry {
         if let Some((_, old_schema)) = latest {
             if !is_backward_compatible(schema, &old_schema)? {
                 return Err(SchemaError::IncompatibleSchema {
-                    message: "new schema is not backward compatible with the previous schema".into(),
+                    message: "new schema is not backward compatible with the previous schema"
+                        .into(),
                 });
             }
         }
 
         // 6. Register for topic
-        sqlx::query(
-            "INSERT INTO topic_schemas (topic_id, schema_id) VALUES ($1, $2)"
-        )
-        .bind(topic_id.0 as i32)
-        .bind(schema_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("INSERT INTO topic_schemas (topic_id, schema_id) VALUES ($1, $2)")
+            .bind(topic_id.0 as i32)
+            .bind(schema_id)
+            .execute(&mut *tx)
+            .await?;
 
         tx.commit().await?;
         Ok(SchemaId(schema_id as u32))
@@ -138,7 +136,7 @@ impl SchemaRegistry {
     /// Get a schema by ID.
     pub async fn get_schema(&self, schema_id: SchemaId) -> Result<SchemaRecord, SchemaError> {
         let row: Option<(i32, Value, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-            "SELECT schema_id, schema_json, created_at FROM schemas WHERE schema_id = $1"
+            "SELECT schema_id, schema_json, created_at FROM schemas WHERE schema_id = $1",
         )
         .bind(schema_id.0 as i32)
         .fetch_optional(&self.pool)
@@ -165,7 +163,7 @@ impl SchemaRegistry {
             FROM topic_schemas
             WHERE topic_id = $1
             ORDER BY created_at DESC
-            "#
+            "#,
         )
         .bind(topic_id.0 as i32)
         .fetch_all(&self.pool)
@@ -194,7 +192,7 @@ impl SchemaRegistry {
             WHERE ts.topic_id = $1
             ORDER BY ts.created_at DESC
             LIMIT 1
-            "#
+            "#,
         )
         .bind(topic_id.0 as i32)
         .fetch_optional(&self.pool)
@@ -222,13 +220,15 @@ impl SchemaRegistry {
     }
 
     /// Get schema ID by hash (for deduplication lookup).
-    pub async fn get_schema_id_by_hash(&self, hash: &[u8; 32]) -> Result<Option<SchemaId>, SchemaError> {
-        let id: Option<i32> = sqlx::query_scalar(
-            "SELECT schema_id FROM schemas WHERE schema_hash = $1"
-        )
-        .bind(&hash[..])
-        .fetch_optional(&self.pool)
-        .await?;
+    pub async fn get_schema_id_by_hash(
+        &self,
+        hash: &[u8; 32],
+    ) -> Result<Option<SchemaId>, SchemaError> {
+        let id: Option<i32> =
+            sqlx::query_scalar("SELECT schema_id FROM schemas WHERE schema_hash = $1")
+                .bind(&hash[..])
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(id.map(|id| SchemaId(id as u32)))
     }

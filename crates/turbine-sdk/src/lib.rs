@@ -1,23 +1,31 @@
 //! Turbine SDK for producing and consuming messages.
 //!
-//! # Producer Example
+//! # Writer Example
 //!
 //! ```ignore
-//! let producer = Producer::connect("ws://localhost:9000").await?;
-//! producer.send(topic_id, partition_id, schema_id, records).await?;
+//! let writer = Writer::connect("ws://localhost:9000").await?;
+//! writer.append(topic_id, partition_id, schema_id, records).await?;
 //! ```
 //!
-//! # Consumer Example
+//! # Reader Example
 //!
 //! ```ignore
-//! let consumer = Consumer::connect("ws://localhost:9000", "group-1", "consumer-1").await?;
-//! let records = consumer.fetch(topic_id, partition_id, offset, max_bytes).await?;
+//! let config = ReaderConfig {
+//!     url: "ws://localhost:9000".to_string(),
+//!     group_id: "group-1".to_string(),
+//!     reader_id: "reader-1".to_string(),
+//!     topic_id,
+//!     ..Default::default()
+//! };
+//! let reader = Reader::join(config).await?;
+//! let records = reader.poll().await?;
 //! ```
 
-pub mod consumer;
+pub mod reader;
 pub mod error;
-pub mod producer;
+pub mod writer;
 
-pub use consumer::Consumer;
+pub use reader::Reader;
+pub use reader::ReaderConfig;
 pub use error::SdkError;
-pub use producer::Producer;
+pub use writer::Writer;

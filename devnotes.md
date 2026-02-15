@@ -3,6 +3,9 @@
 ## Build Commands
 
 ```bash
+# Preferred unified task runner
+cargo xtask help
+
 # Build entire workspace
 cargo build --workspace
 
@@ -16,11 +19,66 @@ cargo build -p turbine-common
 cargo build --workspace --release
 ```
 
+## Unified Cargo Automation (`xtask`)
+
+```bash
+# Show all unified commands
+cargo xtask help
+
+# Regenerate protobuf code for Java/Python + rebuild Rust wire proto
+cargo xtask gen-proto
+
+# Build Rust workspace
+cargo xtask build
+
+# Run Rust tests
+cargo xtask test-rust
+
+# Run all turbine-agent integration suites (includes ignored tests)
+# Auto-detects suites from crates/turbine-agent/tests/*.rs.
+# Note: this includes cross_language_e2e, which requires Java + Python SDK toolchains.
+# Uses DATABASE_URL if set, otherwise defaults to postgres://postgres:postgres@localhost:5433
+cargo xtask test-db
+
+# Run SDK tests (Java + Python)
+cargo xtask test-sdk
+
+# Run all tests across all modules/languages (Rust + Java + Python + DB suites)
+# Uses DATABASE_URL if set, otherwise defaults to postgres://postgres:postgres@localhost:5433
+cargo xtask test-all
+
+# Full local CI: gen-proto + build + all tests
+cargo xtask ci
+```
+
+## Adding New Modules / Suites
+
+```bash
+# 1) New Rust crate/module in workspace
+# Put it under crates/<name>; workspace membership is auto-detected by:
+# members = ["crates/*", "xtask"]
+
+# 2) New turbine-agent integration test suite
+# Add crates/turbine-agent/tests/<suite_name>.rs
+# No xtask code change needed: `cargo xtask test-db` auto-detects *.rs suites.
+
+# 3) New protobuf schema file
+# Add proto/<name>.proto and update language wiring if used by SDK/runtime code.
+# Current `cargo xtask gen-proto` regenerates from proto/turbine_wire.proto.
+
+# 4) New SDK language
+# Add it under sdks/<language>/ and then extend `xtask test-sdk`
+# (currently runs Java + Python explicitly).
+```
+
 ## Test Commands
 
 ```bash
 # Run all tests
 cargo test --workspace
+
+# Run all tests across all modules/languages (Rust + Java + Python + DB suites)
+cargo xtask test-all
 
 # Run tests for specific crate
 cargo test -p turbine-agent
@@ -60,7 +118,7 @@ cargo fmt --all -- --check
 ```bash
 # Start Postgres (assuming Docker)
 docker run -d --name turbine-postgres \
-  -e POSTGRES_PASSWORD=turbine \
+  -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=turbine \
   -p 5433:5432 \
   postgres:16
@@ -68,21 +126,22 @@ docker run -d --name turbine-postgres \
 # Connect to Postgres
 psql -h localhost -p 5433 -U postgres -d turbine
 
-# Run migrations (using sqlx)
-sqlx migrate run
+# Apply authoritative schema migration (single consolidated file)
+psql -h localhost -p 5433 -U postgres -d turbine -f migrations/001_init.sql
 
-# Create new migration
-sqlx migrate add <migration_name>
+# Reset schema quickly (local/dev only)
+psql -h localhost -p 5433 -U postgres -d turbine -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+psql -h localhost -p 5433 -U postgres -d turbine -f migrations/001_init.sql
 ```
 
 ## Crate Structure
 
 ```
 crates/
-├── turbine-common/     # Shared types: IDs, errors, Record, Segment
-├── turbine-wire/       # Wire protocol: varint, producer/consumer encoding
+├── turbine-common/     # Shared types: IDs, errors, Record, RecordBatch, BatchAck
+├── turbine-wire/       # Wire protocol: varint, writer/reader encoding
 ├── turbine-schema/     # Schema registry: canonicalization, compatibility, HTTP API
-├── turbine-agent/      # Agent server: batching, TBIN, S3, WebSocket
+├── turbine-agent/      # Broker server: batching, TBIN, S3, WebSocket
 └── turbine-core/       # Core Avro handling (existing)
 ```
 
@@ -91,36 +150,35 @@ crates/
 | Crate | File | Purpose |
 |-------|------|---------|
 | turbine-wire | `varint.rs` | Zigzag varint encoding (Avro-compatible) |
-| turbine-wire | `producer.rs` | ProduceRequest/Response encoding |
-| turbine-wire | `consumer.rs` | FetchRequest/Response encoding |
+| turbine-wire | `writer.rs` | AppendRequest/Response encoding |
+| turbine-wire | `reader.rs` | Read/group protocol encoding (read, join, heartbeat, rejoin, commit) |
 | turbine-agent | `tbin.rs` | TBIN file format (ZSTD + footer index) |
 | turbine-agent | `buffer.rs` | Request batching and merging |
 | turbine-agent | `dedup.rs` | LRU dedup cache |
-| turbine-agent | `server.rs` | Simple WebSocket server |
-| turbine-agent | `batched_server.rs` | Batched server with flush loop |
+| turbine-agent | `batched_server.rs` | WebSocket server with batching + flush loop |
+| turbine-agent | `coordinator.rs` | Reader-group coordination and assignment |
+| turbine-agent | `admin/topics.rs` | Admin API topic lifecycle endpoints |
+| turbine-agent | `bin/turbine-agent.rs` | Broker binary (WebSocket + Admin API + shutdown) |
 | turbine-schema | `canonical.rs` | Schema canonicalization + SHA-256 |
 | turbine-schema | `compat.rs` | Backward compatibility checking |
 | turbine-schema | `registry.rs` | Database-backed schema registry |
 | turbine-schema | `api.rs` | HTTP API endpoints |
 
-## Test Counts (as of last run)
+## Test Suite Discovery
 
-| Crate | Unit Tests | Integration | DB Integration | E2E WebSocket | Coordinator |
-|-------|------------|-------------|----------------|---------------|-------------|
-| turbine-agent | 49 | 5 | 7 | 4 | 10 |
-| turbine-common | 20 | - | - | - | - |
-| turbine-core | 18 | - | - | - | - |
-| turbine-schema | 31 | - | - | - | - |
-| turbine-sdk | 7 | - | - | - | - |
-| turbine-wire | 42 | - | - | - | - |
-| **Total** | **167** | **5** | **7** | **4** | **10** |
+```bash
+# List turbine-agent integration suites
+ls crates/turbine-agent/tests/*.rs | xargs -n1 basename | sed 's/\.rs$//'
 
-**Grand Total: 193 tests + 3 doc tests = 196**
+# Only ignored suites (currently cross_language_e2e)
+rg -n "#\\[ignore" crates/turbine-agent/tests
+```
 
 ## Running Integration Tests
 
 ```bash
-# Run all tests (requires DATABASE_URL)
+# Run all tests in workspace
+# Note: turbine-agent integration tests require local Postgres on :5433
 cargo test --workspace
 
 # Run only unit tests (no DB required)
@@ -128,17 +186,51 @@ cargo test -p turbine-agent --lib
 cargo test -p turbine-wire
 cargo test -p turbine-schema
 
-# Run integration tests (no DB required)
+# Run turbine-agent integration tests that do not need external SDK toolchains
+# DATABASE_URL must NOT include a database name; tests create/drop per-test DBs.
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --tests -- --nocapture
+
+# Run integration tests without DB setup (pure in-memory suite)
 cargo test -p turbine-agent --test integration
 
-# Run DB integration tests (requires DATABASE_URL)
-DATABASE_URL=postgres://postgres:turbine@localhost:5433 cargo test -p turbine-agent --test db_integration
+# Run specific test suites with database:
 
-# Run E2E WebSocket tests (requires DATABASE_URL)
-DATABASE_URL=postgres://postgres:turbine@localhost:5433 cargo test -p turbine-agent --test e2e_websocket
+# Admin API integration tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test admin_api_integration -- --nocapture
 
-# Run coordinator integration tests (requires DATABASE_URL)
-DATABASE_URL=postgres://postgres:turbine@localhost:5433 cargo test -p turbine-agent --test coordinator_integration
+# Auth integration tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test auth_integration -- --nocapture
+
+# DB integration tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test db_integration -- --nocapture
+
+# E2E WebSocket tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test e2e_websocket -- --nocapture
+
+# E2E Reader Groups tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test e2e_reader_groups -- --nocapture
+
+# Cross-language E2E tests (requires Java + Python SDK toolchains)
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test cross_language_e2e -- --include-ignored
+
+# Coordinator integration tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test coordinator_integration -- --nocapture
+
+# Jepsen-inspired tests (run each suite explicitly)
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test jepsen_reader_groups -- --nocapture
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test jepsen_crash -- --nocapture
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test jepsen_linearizability -- --nocapture
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test jepsen_offset -- --nocapture
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test jepsen_partition -- --nocapture
+
+# Negative/error handling tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test negative_tests -- --nocapture
+
+# One-shot full DB suite run (continues after individual suite failures)
+/bin/zsh -lc 'export DATABASE_URL=postgres://postgres:postgres@localhost:5433; tests=(admin_api_integration auth_integration coordinator_integration db_integration e2e_reader_groups e2e_websocket integration jepsen_reader_groups jepsen_crash jepsen_linearizability jepsen_offset jepsen_partition negative_tests); for t in $tests; do echo "=== $t ==="; cargo test -q -p turbine-agent --test $t -- --nocapture || true; done'
+
+# Cross-language suite run (ignored by default)
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test -p turbine-agent --test cross_language_e2e -- --include-ignored --nocapture
 ```
 
 ## Git Workflow
@@ -165,11 +257,52 @@ git commit --amend -m "new message"
 ## Performance Profiling
 
 ```bash
+# Benchmark (broker e2e load test)
+# Notes:
+# - DATABASE_URL must not include a database name (tests create isolated DBs)
+# - test_e2e_load_one_million_requests is ignored by default; run with --ignored
+#
+# 300k request benchmark (faster iteration)
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 \
+TURBINE_LOAD_PRODUCERS=30 \
+TURBINE_LOAD_BATCHES_PER_PRODUCER=10000 \
+TURBINE_LOAD_PARTITIONS=32 \
+TURBINE_LOAD_RECORDS_PER_BATCH=128 \
+TURBINE_LOAD_PAYLOAD_BYTES=32 \
+TURBINE_LOAD_MAX_IN_FLIGHT=64 \
+TURBINE_LOAD_FETCH_TIMEOUT_SECS=600 \
+TURBINE_LOAD_ENABLE_OTEL=1 \
+cargo test -p turbine-agent --test e2e_load test_e2e_load_one_million_requests -- --ignored --nocapture
+
+# 1M request benchmark
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 \
+TURBINE_LOAD_PRODUCERS=40 \
+TURBINE_LOAD_BATCHES_PER_PRODUCER=25000 \
+TURBINE_LOAD_PARTITIONS=32 \
+TURBINE_LOAD_RECORDS_PER_BATCH=128 \
+TURBINE_LOAD_PAYLOAD_BYTES=32 \
+TURBINE_LOAD_MAX_IN_FLIGHT=64 \
+TURBINE_LOAD_FETCH_TIMEOUT_SECS=1200 \
+TURBINE_LOAD_ENABLE_OTEL=0 \
+cargo test -p turbine-agent --test e2e_load test_e2e_load_one_million_requests -- --ignored --nocapture
+
 # Generate flamegraph (requires cargo-flamegraph)
-cargo flamegraph --bin turbine -- <args>
+cargo flamegraph -p turbine-agent --bin turbine-agent -- <args>
+
+# Flamegraph with 1.2M request load test (40 * 30,000, records_per_batch=128)
+DATABASE_URL=postgres://postgres:postgres@localhost:5433 \
+TURBINE_LOAD_PRODUCERS=40 \
+TURBINE_LOAD_BATCHES_PER_PRODUCER=30000 \
+TURBINE_LOAD_PARTITIONS=32 \
+TURBINE_LOAD_RECORDS_PER_BATCH=128 \
+TURBINE_LOAD_PAYLOAD_BYTES=32 \
+TURBINE_LOAD_MAX_IN_FLIGHT=64 \
+TURBINE_LOAD_FETCH_TIMEOUT_SECS=1800 \
+TURBINE_LOAD_ENABLE_OTEL=0 \
+cargo flamegraph -p turbine-agent --test e2e_load -- test_e2e_load_one_million_requests --ignored --nocapture
 
 # Profile with perf
-perf record -g cargo run --release -- <args>
+perf record -g cargo run -p turbine-agent --bin turbine-agent --release -- <args>
 perf report
 ```
 
@@ -177,7 +310,7 @@ perf report
 
 ```bash
 # Database
-DATABASE_URL=postgres://postgres:turbine@localhost:5433/turbine
+DATABASE_URL=postgres://postgres:postgres@localhost:5433
 
 # AWS S3 (for local testing with MinIO)
 AWS_ACCESS_KEY_ID=minioadmin
@@ -222,3 +355,35 @@ cargo outdated
 # Generate docs
 cargo doc --workspace --open
 ```
+
+## Pending
+
+- [ ] Focus next optimization on reducing append ack path queueing: `flush_buffer_residency` and `flush_queue_wait` are the largest controllable contributors after dedup.
+- [ ] Keep writer batching enabled in perf goals; `records_per_batch=1` dramatically underutilizes throughput.
+- [ ] Evaluate dedup lock contention under high in-flight single-writer load (`dedup_check` remains material in request-heavy runs).
+- [ ] Decide whether to add an explicit writer benchmark profile in CI: `1 writer + batched requests` with `records/sec` and `bytes/sec` targets.
+
+### Latest Findings (2026-02-13)
+
+- 1.2M request flamegraph run (`40 x 30,000`, `records_per_batch=1`):
+  - `req_rps=70,895`, `payload_Bps=2,268,639`, `payload_MiBps=2.16`
+  - `req_p50=37.951ms`, `req_p95=46.015ms`, `req_p99=50.047ms`
+  - Hot metrics:
+    - `append_enqueue_to_ack` avg `20.705ms`
+    - `flush_buffer_residency` avg `12.079ms`
+    - `dedup_check` avg `6.672ms`
+    - `flush_queue_wait` avg `2.788ms`
+- Batched writer confirmation (`records_per_batch=100`) with same 300k records:
+  - `30 writers`: `rec_rps=744,982`, `payload_MiBps=22.74`
+  - `1 writer`: `rec_rps=449,469`, `payload_MiBps=13.72`
+  - Conclusion: use `records/sec` and `bytes/sec` as primary throughput metrics; request/sec is no longer the primary KPI when batching is enabled.
+
+### Latest Findings (2026-02-14)
+
+- Expanded load sweep (`20 writers`, payload `32B`, `max_in_flight=64`) confirms batching is a dominant lever:
+  - `records_per_batch=1` (`80,000 req`): `rec_rps=37,906`, `payload_MiBps=1.16`, `req_p95=41.343ms`
+  - `records_per_batch=100` (`80,000 req`): `rec_rps=2,265,236`, `payload_MiBps=69.13`, `req_p95=67.199ms`
+  - `records_per_batch=250` (`30,000 req`): `rec_rps=2,980,241`, `payload_MiBps=90.95`, `req_p95=131.839ms`
+  - `records_per_batch=500` (`20,000 req`): `rec_rps=3,009,584`, `payload_MiBps=91.85`, `req_p95=384.255ms`
+- Throughput gains flatten above `250` while request latency and queueing rise sharply.
+- Default for `test_e2e_load_one_million_requests` is now `records_per_batch=128` unless overridden by `TURBINE_LOAD_RECORDS_PER_BATCH`.

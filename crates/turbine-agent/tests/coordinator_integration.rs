@@ -1,46 +1,34 @@
-//! Integration tests for the consumer group coordinator.
+//! Integration tests for the reader group coordinator.
 //!
 //! These tests require a running PostgreSQL instance.
 //!
 //! ```bash
-//! DATABASE_URL=postgres://postgres:turbine@localhost:5433 cargo test --test coordinator_integration
+//! DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo test --test coordinator_integration
 //! ```
 
 mod common;
 
 use std::time::Duration;
-use turbine_agent::{
-    CommitStatus, Coordinator, CoordinatorConfig, HeartbeatStatus, RejoinStatus,
-};
+use turbine_agent::{CommitStatus, Coordinator, CoordinatorConfig, HeartbeatStatus, RejoinStatus};
 use turbine_common::ids::{Generation, Offset, PartitionId, TopicId};
 
 use common::TestDb;
 
-/// Skip test if DATABASE_URL is not set.
-fn skip_if_no_db() -> bool {
-    std::env::var("DATABASE_URL").is_err()
-}
-
-/// Test single consumer joins and gets all partitions.
+/// Test single reader joins and gets all partitions.
 #[tokio::test]
 async fn test_single_consumer_join() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-1", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
     let result = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
     assert_eq!(result.generation.0, 1);
-    assert_eq!(result.assignments.len(), 4); // Single consumer gets all partitions
+    assert_eq!(result.assignments.len(), 4); // Single reader gets all partitions
 
     let mut partitions: Vec<u32> = result
         .assignments
@@ -54,28 +42,23 @@ async fn test_single_consumer_join() {
 /// Test two consumers join and partitions are split.
 #[tokio::test]
 async fn test_two_consumers_join() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-2", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer A joins first
+    // Reader A joins first
     let result_a = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
     assert_eq!(result_a.generation.0, 1);
     assert_eq!(result_a.assignments.len(), 4); // Gets all initially
 
-    // Consumer B joins - triggers rebalance
+    // Reader B joins - triggers rebalance
     let result_b = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-b")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("join_group failed");
 
@@ -88,7 +71,7 @@ async fn test_two_consumers_join() {
         .heartbeat(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-a",
+            "reader-a",
             Generation(1),
         )
         .await
@@ -101,25 +84,20 @@ async fn test_two_consumers_join() {
 /// Test rejoin after rebalance notification.
 #[tokio::test]
 async fn test_rejoin_after_rebalance() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-3", 10).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer A joins and gets all 10 partitions
+    // Reader A joins and gets all 10 partitions
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
-    // Consumer B joins
+    // Reader B joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-b")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("join_group failed");
 
@@ -128,7 +106,7 @@ async fn test_rejoin_after_rebalance() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-a",
+            "reader-a",
             Generation(2),
         )
         .await
@@ -150,7 +128,7 @@ async fn test_rejoin_after_rebalance() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
             Generation(2),
         )
         .await
@@ -171,25 +149,20 @@ async fn test_rejoin_after_rebalance() {
 /// Test leave group releases partitions.
 #[tokio::test]
 async fn test_leave_group() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-4", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer A joins
+    // Reader A joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
-    // Consumer B joins
+    // Reader B joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-b")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("join_group failed");
 
@@ -198,7 +171,7 @@ async fn test_leave_group() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-a",
+            "reader-a",
             Generation(2),
         )
         .await
@@ -209,7 +182,7 @@ async fn test_leave_group() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
             Generation(2),
         )
         .await
@@ -217,7 +190,7 @@ async fn test_leave_group() {
 
     // A leaves
     coordinator
-        .leave_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .leave_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("leave_group failed");
 
@@ -226,7 +199,7 @@ async fn test_leave_group() {
         .heartbeat(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
             Generation(2),
         )
         .await
@@ -240,7 +213,7 @@ async fn test_leave_group() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
             Generation(3),
         )
         .await
@@ -249,22 +222,17 @@ async fn test_leave_group() {
     assert_eq!(rejoin_b.assignments.len(), 4);
 }
 
-/// Test commit offset succeeds when consumer owns partition.
+/// Test commit offset succeeds when reader owns partition.
 #[tokio::test]
 async fn test_commit_offset_success() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-5", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer joins and gets all partitions
+    // Reader joins and gets all partitions
     let result = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
@@ -275,7 +243,8 @@ async fn test_commit_offset_success() {
         .commit_offset(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-a",
+            "reader-a",
+            result.generation,
             PartitionId(0),
             Offset(100),
         )
@@ -289,7 +258,7 @@ async fn test_commit_offset_success() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-a",
+            "reader-a",
             Generation(1),
         )
         .await
@@ -303,31 +272,27 @@ async fn test_commit_offset_success() {
     assert_eq!(partition_0.committed_offset.0, 100);
 }
 
-/// Test commit offset fails when consumer doesn't own partition.
+/// Test commit offset fails when reader doesn't own partition.
 #[tokio::test]
 async fn test_commit_offset_not_owner() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-6", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer A joins
-    let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+    // Reader A joins
+    let join = coordinator
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
-    // Consumer B tries to commit (never joined)
+    // Reader B tries to commit (never joined)
     let status = coordinator
         .commit_offset(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
+            join.generation,
             PartitionId(0),
             Offset(100),
         )
@@ -340,28 +305,23 @@ async fn test_commit_offset_not_owner() {
 /// Test heartbeat for unknown member.
 #[tokio::test]
 async fn test_heartbeat_unknown_member() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-7", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer A joins
+    // Reader A joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
-    // Unknown consumer sends heartbeat
+    // Unknown reader sends heartbeat
     let result = coordinator
         .heartbeat(
             "test-group",
             TopicId(topic_id as u32),
-            "unknown-consumer",
+            "unknown-reader",
             Generation(1),
         )
         .await
@@ -373,31 +333,26 @@ async fn test_heartbeat_unknown_member() {
 /// Test rejoin with stale generation.
 #[tokio::test]
 async fn test_rejoin_stale_generation() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-8", 4).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    // Consumer A joins
+    // Reader A joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
-    // Consumer B joins (bumps to gen 2)
+    // Reader B joins (bumps to gen 2)
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-b")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("join_group failed");
 
-    // Consumer C joins (bumps to gen 3)
+    // Reader C joins (bumps to gen 3)
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-c")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-c")
         .await
         .expect("join_group failed");
 
@@ -406,7 +361,7 @@ async fn test_rejoin_stale_generation() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-a",
+            "reader-a",
             Generation(2),
         )
         .await
@@ -420,11 +375,6 @@ async fn test_rejoin_stale_generation() {
 /// Test heartbeat detects and removes expired members.
 #[tokio::test]
 async fn test_heartbeat_removes_expired_members() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-9", 4).await;
 
@@ -432,18 +382,19 @@ async fn test_heartbeat_removes_expired_members() {
     let config = CoordinatorConfig {
         session_timeout: Duration::from_millis(100),
         lease_duration: Duration::from_secs(45),
+        ..Default::default()
     };
     let coordinator = Coordinator::new(db.pool.clone(), config);
 
-    // Consumer A joins
+    // Reader A joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-a")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("join_group failed");
 
-    // Consumer B joins
+    // Reader B joins
     let _ = coordinator
-        .join_group("test-group", TopicId(topic_id as u32), "consumer-b")
+        .join_group("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("join_group failed");
 
@@ -455,7 +406,7 @@ async fn test_heartbeat_removes_expired_members() {
         .heartbeat(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
             Generation(2),
         )
         .await
@@ -470,7 +421,7 @@ async fn test_heartbeat_removes_expired_members() {
         .rejoin(
             "test-group",
             TopicId(topic_id as u32),
-            "consumer-b",
+            "reader-b",
             Generation(3),
         )
         .await
@@ -483,11 +434,6 @@ async fn test_heartbeat_removes_expired_members() {
 /// Test three consumers with uneven partition distribution.
 #[tokio::test]
 async fn test_three_consumers_uneven_partitions() {
-    if skip_if_no_db() {
-        eprintln!("Skipping test: DATABASE_URL not set");
-        return;
-    }
-
     let db = TestDb::new().await;
     let topic_id = db.create_topic("cg-test-10", 10).await;
 

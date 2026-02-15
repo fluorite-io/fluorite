@@ -8,11 +8,11 @@
 //! - POST /topics/:topic_id/schemas/check - Check compatibility
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,7 +82,10 @@ pub fn router(state: AppState) -> Router {
         .route("/schemas/{id}", get(get_schema))
         .route("/topics/{topic_id}/schemas", get(list_topic_schemas))
         .route("/topics/{topic_id}/schemas/latest", get(get_latest_schema))
-        .route("/topics/{topic_id}/schemas/check", post(check_compatibility))
+        .route(
+            "/topics/{topic_id}/schemas/check",
+            post(check_compatibility),
+        )
         .route("/health", get(health_check))
         .with_state(Arc::new(state))
 }
@@ -192,9 +195,7 @@ impl IntoResponse for ApiError {
             SchemaError::SchemaNotFound { .. } => {
                 (StatusCode::NOT_FOUND, 40401, self.0.to_string())
             }
-            SchemaError::TopicNotFound { .. } => {
-                (StatusCode::NOT_FOUND, 40402, self.0.to_string())
-            }
+            SchemaError::TopicNotFound { .. } => (StatusCode::NOT_FOUND, 40402, self.0.to_string()),
             SchemaError::IncompatibleSchema { .. } => {
                 (StatusCode::CONFLICT, 40901, self.0.to_string())
             }
@@ -206,11 +207,7 @@ impl IntoResponse for ApiError {
                 50001,
                 "database error".to_string(),
             ),
-            SchemaError::Avro(_) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                42202,
-                self.0.to_string(),
-            ),
+            SchemaError::Avro(_) => (StatusCode::UNPROCESSABLE_ENTITY, 42202, self.0.to_string()),
         };
 
         let body = Json(ErrorResponse {

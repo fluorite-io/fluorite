@@ -14,7 +14,7 @@ pub mod compat;
 pub mod error;
 pub mod registry;
 
-pub use api::{router, AppState};
+pub use api::{AppState, router};
 pub use canonical::{canonicalize, schema_hash};
 pub use compat::is_backward_compatible;
 pub use error::SchemaError;

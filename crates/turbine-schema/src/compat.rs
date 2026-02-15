@@ -120,34 +120,37 @@ fn check_read_compatibility(reader: &Schema, writer: &Schema) -> bool {
             check_record_compatibility(r_rec, w_rec)
         }
         // For primitive types, check promotion rules
-        (Schema::Long, Schema::Int) => true,   // int → long is OK
+        (Schema::Long, Schema::Int) => true, // int → long is OK
         (Schema::Double, Schema::Float) => true, // float → double is OK
-        (Schema::Double, Schema::Int) => false,  // int → double NOT OK (Iceberg)
+        (Schema::Double, Schema::Int) => false, // int → double NOT OK (Iceberg)
         (Schema::Double, Schema::Long) => false, // long → double NOT OK (Iceberg)
-        (Schema::Float, Schema::Int) => false,   // int → float NOT OK (Iceberg)
-        (Schema::Float, Schema::Long) => false,  // long → float NOT OK (Iceberg)
+        (Schema::Float, Schema::Int) => false, // int → float NOT OK (Iceberg)
+        (Schema::Float, Schema::Long) => false, // long → float NOT OK (Iceberg)
         // Same types are compatible
         _ if reader == writer => true,
         // Union handling
         (Schema::Union(r_union), Schema::Union(w_union)) => {
             // Each writer variant must be readable by some reader variant
             w_union.variants().iter().all(|w_var| {
-                r_union.variants().iter().any(|r_var| {
-                    check_read_compatibility(r_var, w_var)
-                })
+                r_union
+                    .variants()
+                    .iter()
+                    .any(|r_var| check_read_compatibility(r_var, w_var))
             })
         }
         (Schema::Union(r_union), writer) => {
             // Writer is not a union, reader is - writer type must match a variant
-            r_union.variants().iter().any(|r_var| {
-                check_read_compatibility(r_var, writer)
-            })
+            r_union
+                .variants()
+                .iter()
+                .any(|r_var| check_read_compatibility(r_var, writer))
         }
         (reader, Schema::Union(w_union)) => {
             // Writer is a union, reader is not - all writer variants must be readable
-            w_union.variants().iter().all(|w_var| {
-                w_var == &Schema::Null || check_read_compatibility(reader, w_var)
-            })
+            w_union
+                .variants()
+                .iter()
+                .all(|w_var| w_var == &Schema::Null || check_read_compatibility(reader, w_var))
         }
         // Arrays
         (Schema::Array(r_arr), Schema::Array(w_arr)) => {
@@ -199,9 +202,7 @@ fn check_record_compatibility(
 /// Check if a schema is nullable (union with null as first or second element).
 fn is_nullable_schema(schema: &Schema) -> bool {
     match schema {
-        Schema::Union(union) => {
-            union.variants().iter().any(|v| matches!(v, Schema::Null))
-        }
+        Schema::Union(union) => union.variants().iter().any(|v| matches!(v, Schema::Null)),
         _ => false,
     }
 }

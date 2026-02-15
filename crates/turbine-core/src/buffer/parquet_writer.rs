@@ -86,7 +86,11 @@ pub struct StreamingParquetWriter {
 }
 
 impl StreamingParquetWriter {
-    pub fn new(path: impl Into<PathBuf>, schema: Arc<arrow::datatypes::Schema>, config: &ParquetWriterConfig) -> Result<Self> {
+    pub fn new(
+        path: impl Into<PathBuf>,
+        schema: Arc<arrow::datatypes::Schema>,
+        config: &ParquetWriterConfig,
+    ) -> Result<Self> {
         let path = path.into();
         let file = File::create(&path)?;
 
@@ -99,7 +103,11 @@ impl StreamingParquetWriter {
             .build();
 
         let writer = ArrowWriter::try_new(file, schema, Some(props))?;
-        Ok(Self { writer, path, rows_written: 0 })
+        Ok(Self {
+            writer,
+            path,
+            rows_written: 0,
+        })
     }
 
     pub fn write_batch(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -137,10 +145,17 @@ mod tests {
             schema,
             vec![
                 Arc::new(Int64Array::from((0..num_rows as i64).collect::<Vec<_>>())),
-                Arc::new(StringArray::from((0..num_rows).map(|i| format!("user_{}", i)).collect::<Vec<_>>())),
-                Arc::new(Float64Array::from((0..num_rows).map(|i| i as f64 * 1.5).collect::<Vec<_>>())),
+                Arc::new(StringArray::from(
+                    (0..num_rows)
+                        .map(|i| format!("user_{}", i))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    (0..num_rows).map(|i| i as f64 * 1.5).collect::<Vec<_>>(),
+                )),
             ],
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     #[test]
@@ -153,7 +168,10 @@ mod tests {
         let path = writer.write_batch(&batch, "test.parquet").unwrap();
 
         let file = std::fs::File::open(&path).unwrap();
-        let reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap().build().unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
         let total_rows: usize = reader.map(|r| r.unwrap().num_rows()).sum();
         assert_eq!(total_rows, 100);
     }
@@ -178,7 +196,10 @@ mod tests {
 
         let final_path = writer.close().unwrap();
         let file = std::fs::File::open(&final_path).unwrap();
-        let reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap().build().unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
         let total_rows: usize = reader.map(|r| r.unwrap().num_rows()).sum();
         assert_eq!(total_rows, 1000);
     }
@@ -186,11 +207,20 @@ mod tests {
     #[test]
     fn test_compression_codecs() {
         let temp_dir = tempdir().unwrap();
-        for (i, compression) in [Compression::UNCOMPRESSED, Compression::SNAPPY, Compression::ZSTD(Default::default())].into_iter().enumerate() {
+        for (i, compression) in [
+            Compression::UNCOMPRESSED,
+            Compression::SNAPPY,
+            Compression::ZSTD(Default::default()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut config = ParquetWriterConfig::default().with_output_dir(temp_dir.path());
             config.compression = compression;
             let writer = ParquetFileWriter::new(config).unwrap();
-            let path = writer.write_batch(&create_test_batch(50), &format!("c{}.parquet", i)).unwrap();
+            let path = writer
+                .write_batch(&create_test_batch(50), &format!("c{}.parquet", i))
+                .unwrap();
             assert!(path.exists());
         }
     }

@@ -1,30 +1,28 @@
-//! Integration tests for the agent.
+//! Integration tests for the broker.
 //!
 //! These tests require a running PostgreSQL instance.
 //! Set DATABASE_URL environment variable to run.
 //!
 //! ```bash
-//! DATABASE_URL=postgres://postgres:turbine@localhost:5433/turbine_test cargo test --test integration
+//! DATABASE_URL=postgres://postgres:postgres@localhost:5433/turbine_test cargo test --test integration
 //! ```
 
 use bytes::Bytes;
 use tempfile::TempDir;
 
-use turbine_agent::{
-    AgentBuffer, BufferConfig, LocalFsStore, ObjectStore, TbinReader, TbinWriter,
-};
-use turbine_common::ids::{PartitionId, ProducerId, SchemaId, SeqNum, TopicId};
-use turbine_common::types::{Record, Segment};
+use turbine_agent::{BrokerBuffer, BufferConfig, LocalFsStore, ObjectStore, TbinReader, TbinWriter};
+use turbine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use turbine_common::types::{Record, RecordBatch};
 
-/// Test the full produce flow without database (TBIN + ObjectStore).
+/// Test the full append flow without database (TBIN + ObjectStore).
 #[tokio::test]
 async fn test_produce_flow_tbin_s3() {
     let temp_dir = TempDir::new().unwrap();
     let store = LocalFsStore::new(temp_dir.path().to_path_buf());
 
-    // Create segments from multiple "producers"
-    let segments = vec![
-        Segment {
+    // Create batches from multiple "writers"
+    let batches = vec![
+        RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -39,7 +37,7 @@ async fn test_produce_flow_tbin_s3() {
                 },
             ],
         },
-        Segment {
+        RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(1),
             schema_id: SchemaId(100),
@@ -52,8 +50,8 @@ async fn test_produce_flow_tbin_s3() {
 
     // Write TBIN
     let mut writer = TbinWriter::new();
-    for segment in &segments {
-        writer.add_segment(segment).unwrap();
+    for batch in &batches {
+        writer.add_segment(batch).unwrap();
     }
     let tbin_data = writer.finish();
 
@@ -69,18 +67,18 @@ async fn test_produce_flow_tbin_s3() {
     let metas = TbinReader::read_footer(&read_data).unwrap();
     assert_eq!(metas.len(), 2);
 
-    // Verify first segment
+    // Verify first batch
     let records0 = TbinReader::read_segment(&read_data, &metas[0], true).unwrap();
     assert_eq!(records0.len(), 2);
     assert_eq!(records0[0].key, Some(Bytes::from("user-1")));
 
-    // Verify second segment
+    // Verify second batch
     let records1 = TbinReader::read_segment(&read_data, &metas[1], true).unwrap();
     assert_eq!(records1.len(), 1);
     assert_eq!(records1[0].key, Some(Bytes::from("user-3")));
 }
 
-/// Test buffer merging from multiple producers.
+/// Test buffer merging from multiple writers.
 #[tokio::test]
 async fn test_buffer_merge_multiple_producers() {
     use std::time::Duration;
@@ -92,14 +90,14 @@ async fn test_buffer_merge_multiple_producers() {
         low_water_bytes: 5 * 1024 * 1024,
     };
 
-    let mut buffer = AgentBuffer::with_config(config);
+    let mut buffer = BrokerBuffer::with_config(config);
 
-    // Producer 1 sends to partition 0
-    let p1 = ProducerId::new();
+    // Writer 1 sends to partition 0
+    let p1 = WriterId::new();
     let mut rx1 = buffer.insert(
         p1,
-        SeqNum(1),
-        vec![Segment {
+        AppendSeq(1),
+        vec![RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -116,12 +114,12 @@ async fn test_buffer_merge_multiple_producers() {
         }],
     );
 
-    // Producer 2 sends to same partition 0
-    let p2 = ProducerId::new();
+    // Writer 2 sends to same partition 0
+    let p2 = WriterId::new();
     let mut rx2 = buffer.insert(
         p2,
-        SeqNum(1),
-        vec![Segment {
+        AppendSeq(1),
+        vec![RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),
@@ -132,12 +130,12 @@ async fn test_buffer_merge_multiple_producers() {
         }],
     );
 
-    // Producer 3 sends to partition 1
-    let p3 = ProducerId::new();
+    // Writer 3 sends to partition 1
+    let p3 = WriterId::new();
     let mut rx3 = buffer.insert(
         p3,
-        SeqNum(1),
-        vec![Segment {
+        AppendSeq(1),
+        vec![RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(1),
             schema_id: SchemaId(100),
@@ -151,25 +149,25 @@ async fn test_buffer_merge_multiple_producers() {
     // Drain buffer
     let result = buffer.drain();
 
-    // Should have 2 merged segments (partition 0 and partition 1)
-    assert_eq!(result.segments.len(), 2);
-    assert_eq!(result.pending_producers.len(), 3);
+    // Should have 2 merged batches (partition 0 and partition 1)
+    assert_eq!(result.batches.len(), 2);
+    assert_eq!(result.pending_writers.len(), 3);
 
-    // Find partition 0 segment - should have 3 records (2 from p1 + 1 from p2)
+    // Find partition 0 batch - should have 3 records (2 from p1 + 1 from p2)
     let partition0_idx = result
-        .segments
+        .batches
         .iter()
         .position(|s| s.partition_id == PartitionId(0))
         .unwrap();
-    assert_eq!(result.segments[partition0_idx].records.len(), 3);
+    assert_eq!(result.batches[partition0_idx].records.len(), 3);
 
-    // Find partition 1 segment - should have 1 record
+    // Find partition 1 batch - should have 1 record
     let partition1_idx = result
-        .segments
+        .batches
         .iter()
         .position(|s| s.partition_id == PartitionId(1))
         .unwrap();
-    assert_eq!(result.segments[partition1_idx].records.len(), 1);
+    assert_eq!(result.batches[partition1_idx].records.len(), 1);
 
     // Simulate offset assignment
     // Partition 0: offsets 0-3, Partition 1: offsets 0-1
@@ -177,10 +175,10 @@ async fn test_buffer_merge_multiple_producers() {
     segment_offsets[partition0_idx] = (0, 3);
     segment_offsets[partition1_idx] = (0, 1);
 
-    // Distribute acks
-    AgentBuffer::distribute_acks(result, &segment_offsets);
+    // Distribute append_acks
+    BrokerBuffer::distribute_acks(result, &segment_offsets);
 
-    // Verify acks
+    // Verify append_acks
     let acks1 = rx1.try_recv().unwrap();
     assert_eq!(acks1.len(), 1);
     assert_eq!(acks1[0].start_offset.0, 0);
@@ -200,7 +198,7 @@ async fn test_buffer_merge_multiple_producers() {
 /// Test TBIN compression efficiency.
 #[tokio::test]
 async fn test_tbin_compression_efficiency() {
-    // Create a segment with repetitive data (should compress well)
+    // Create a batch with repetitive data (should compress well)
     let mut records = Vec::with_capacity(1000);
     for i in 0..1000 {
         records.push(Record {
@@ -209,7 +207,7 @@ async fn test_tbin_compression_efficiency() {
         });
     }
 
-    let segment = Segment {
+    let batch = RecordBatch {
         topic_id: TopicId(1),
         partition_id: PartitionId(0),
         schema_id: SchemaId(100),
@@ -217,7 +215,7 @@ async fn test_tbin_compression_efficiency() {
     };
 
     // Calculate uncompressed size
-    let uncompressed_size: usize = segment
+    let uncompressed_size: usize = batch
         .records
         .iter()
         .map(|r| r.key.as_ref().map(|k| k.len()).unwrap_or(0) + r.value.len())
@@ -225,7 +223,7 @@ async fn test_tbin_compression_efficiency() {
 
     // Write TBIN
     let mut writer = TbinWriter::new();
-    writer.add_segment(&segment).unwrap();
+    writer.add_segment(&batch).unwrap();
     let tbin_data = writer.finish();
 
     let compressed_size = tbin_data.len();
@@ -257,10 +255,10 @@ async fn test_tbin_compression_efficiency() {
 /// Test wire protocol roundtrip with large payloads.
 #[tokio::test]
 async fn test_wire_protocol_large_payload() {
-    use turbine_wire::producer;
+    use turbine_wire::writer;
 
-    // Create a large produce request
-    let mut segments = Vec::new();
+    // Create a large append request
+    let mut batches = Vec::new();
     for topic in 0..5 {
         for partition in 0..10 {
             let mut records = Vec::new();
@@ -268,12 +266,12 @@ async fn test_wire_protocol_large_payload() {
                 records.push(Record {
                     key: Some(Bytes::from(format!("t{}-p{}-k{}", topic, partition, i))),
                     value: Bytes::from(format!(
-                        r#"{{"topic":{},"partition":{},"seq":{}}}"#,
+                        r#"{{"topic":{},"partition":{},"append_seq":{}}}"#,
                         topic, partition, i
                     )),
                 });
             }
-            segments.push(Segment {
+            batches.push(RecordBatch {
                 topic_id: TopicId(topic),
                 partition_id: PartitionId(partition),
                 schema_id: SchemaId(100),
@@ -282,29 +280,29 @@ async fn test_wire_protocol_large_payload() {
         }
     }
 
-    let req = producer::ProduceRequest {
-        producer_id: ProducerId::new(),
-        seq: SeqNum(42),
-        segments,
+    let req = writer::AppendRequest {
+        writer_id: WriterId::new(),
+        append_seq: AppendSeq(42),
+        batches,
     };
 
     // Encode
     let mut buf = vec![0u8; 4 * 1024 * 1024]; // 4 MB buffer
-    let len = producer::encode_request(&req, &mut buf);
+    let len = writer::encode_request(&req, &mut buf);
     buf.truncate(len);
 
-    println!("Encoded {} segments, {} bytes", req.segments.len(), len);
+    println!("Encoded {} batches, {} bytes", req.batches.len(), len);
 
     // Decode
-    let (decoded, decoded_len) = producer::decode_request(&buf).unwrap();
+    let (decoded, decoded_len) = writer::decode_request(&buf).unwrap();
 
     assert_eq!(decoded_len, len);
-    assert_eq!(decoded.seq.0, 42);
-    assert_eq!(decoded.segments.len(), 50); // 5 topics * 10 partitions
+    assert_eq!(decoded.append_seq.0, 42);
+    assert_eq!(decoded.batches.len(), 50); // 5 topics * 10 partitions
 
     // Verify record counts
-    for segment in &decoded.segments {
-        assert_eq!(segment.records.len(), 100);
+    for batch in &decoded.batches {
+        assert_eq!(batch.records.len(), 100);
     }
 }
 
@@ -323,21 +321,21 @@ async fn test_e2e_buffer_to_s3() {
         low_water_bytes: 5 * 1024 * 1024,
     };
 
-    let mut buffer = AgentBuffer::with_config(config);
+    let mut buffer = BrokerBuffer::with_config(config);
 
-    // Simulate 10 producers sending data
+    // Simulate 10 writers sending data
     let mut receivers = Vec::new();
     for i in 0..10 {
-        let producer_id = ProducerId::new();
+        let writer_id = WriterId::new();
         let rx = buffer.insert(
-            producer_id,
-            SeqNum(i as u64),
-            vec![Segment {
+            writer_id,
+            AppendSeq(i as u64),
+            vec![RecordBatch {
                 topic_id: TopicId(1),
                 partition_id: PartitionId((i % 3) as u32), // Spread across 3 partitions
                 schema_id: SchemaId(100),
                 records: vec![Record {
-                    key: Some(Bytes::from(format!("producer-{}", i))),
+                    key: Some(Bytes::from(format!("writer-{}", i))),
                     value: Bytes::from(format!(r#"{{"id":{}}}"#, i)),
                 }],
             }],
@@ -347,11 +345,11 @@ async fn test_e2e_buffer_to_s3() {
 
     // Drain and write to S3
     let result = buffer.drain();
-    assert_eq!(result.segments.len(), 3); // 3 partitions
+    assert_eq!(result.batches.len(), 3); // 3 partitions
 
     let mut writer = TbinWriter::new();
-    for segment in &result.segments {
-        writer.add_segment(segment).unwrap();
+    for batch in &result.batches {
+        writer.add_segment(batch).unwrap();
     }
     let tbin_data = writer.finish();
 
@@ -360,21 +358,21 @@ async fn test_e2e_buffer_to_s3() {
 
     // Simulate offset assignment
     let segment_offsets: Vec<(u64, u64)> = result
-        .segments
+        .batches
         .iter()
         .map(|s| (0, s.records.len() as u64))
         .collect();
 
-    // Distribute acks
-    AgentBuffer::distribute_acks(result, &segment_offsets);
+    // Distribute append_acks
+    BrokerBuffer::distribute_acks(result, &segment_offsets);
 
-    // Verify all producers got acks
+    // Verify all writers got append_acks
     for mut rx in receivers {
-        let acks = rx.try_recv().unwrap();
-        assert_eq!(acks.len(), 1);
+        let append_acks = rx.try_recv().unwrap();
+        assert_eq!(append_acks.len(), 1);
     }
 
-    // Simulate consumer fetch: read from S3
+    // Simulate reader read: read from S3
     let read_data = store.get(key).await.unwrap();
     let metas = TbinReader::read_footer(&read_data).unwrap();
     assert_eq!(metas.len(), 3);

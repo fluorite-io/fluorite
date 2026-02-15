@@ -1,7 +1,7 @@
 //! Core data types for Turbine eventbus
 
+use crate::{Offset, PartitionId, SchemaId, TopicId};
 use bytes::Bytes;
-use crate::{TopicId, PartitionId, SchemaId, Offset};
 
 /// A single record (key-value pair)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,21 +37,21 @@ impl Record {
 
 /// A batch of records for a specific topic/partition/schema
 #[derive(Debug, Clone)]
-pub struct Segment {
-    /// Topic this segment belongs to
+pub struct RecordBatch {
+    /// Topic this batch belongs to
     pub topic_id: TopicId,
     /// Partition within the topic
     pub partition_id: PartitionId,
     /// Schema ID for the record values
     pub schema_id: SchemaId,
-    /// Records in this segment
+    /// Records in this batch
     pub records: Vec<Record>,
 }
 
-impl Segment {
-    /// Create a new empty segment
+impl RecordBatch {
+    /// Create a new empty batch
     pub fn new(topic_id: TopicId, partition_id: PartitionId, schema_id: SchemaId) -> Self {
-        Segment {
+        RecordBatch {
             topic_id,
             partition_id,
             schema_id,
@@ -59,17 +59,17 @@ impl Segment {
         }
     }
 
-    /// Add a record to the segment
+    /// Add a record to the batch
     pub fn push(&mut self, record: Record) {
         self.records.push(record);
     }
 
-    /// Number of records in the segment
+    /// Number of records in the batch
     pub fn len(&self) -> usize {
         self.records.len()
     }
 
-    /// Check if the segment is empty
+    /// Check if the batch is empty
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
@@ -80,23 +80,23 @@ impl Segment {
     }
 }
 
-/// Acknowledgment for a committed segment
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SegmentAck {
-    /// Topic this segment belongs to
+/// Acknowledgment for a committed batch
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BatchAck {
+    /// Topic this batch belongs to
     pub topic_id: TopicId,
     /// Partition within the topic
     pub partition_id: PartitionId,
     /// Schema ID for the record values
     pub schema_id: SchemaId,
-    /// First offset in this segment (inclusive)
+    /// First offset in this batch (inclusive)
     pub start_offset: Offset,
-    /// Last offset in this segment (inclusive)
+    /// Last offset in this batch (inclusive)
     pub end_offset: Offset,
 }
 
-impl SegmentAck {
-    /// Number of records in this acknowledged segment
+impl BatchAck {
+    /// Number of records in this acknowledged batch
     pub fn record_count(&self) -> u64 {
         self.end_offset.0 - self.start_offset.0 + 1
     }
@@ -129,31 +129,31 @@ mod tests {
 
     #[test]
     fn test_segment_record_count() {
-        let mut segment = Segment::new(TopicId(1), PartitionId(0), SchemaId(100));
-        segment.push(Record::new("a"));
-        segment.push(Record::new("b"));
-        assert_eq!(segment.len(), 2);
-        assert!(!segment.is_empty());
+        let mut batch = RecordBatch::new(TopicId(1), PartitionId(0), SchemaId(100));
+        batch.push(Record::new("a"));
+        batch.push(Record::new("b"));
+        assert_eq!(batch.len(), 2);
+        assert!(!batch.is_empty());
     }
 
     #[test]
     fn test_segment_empty() {
-        let segment = Segment::new(TopicId(1), PartitionId(0), SchemaId(100));
-        assert!(segment.is_empty());
-        assert_eq!(segment.len(), 0);
+        let batch = RecordBatch::new(TopicId(1), PartitionId(0), SchemaId(100));
+        assert!(batch.is_empty());
+        assert_eq!(batch.len(), 0);
     }
 
     #[test]
     fn test_segment_size() {
-        let mut segment = Segment::new(TopicId(1), PartitionId(0), SchemaId(100));
-        segment.push(Record::new("hello")); // 5 bytes
-        segment.push(Record::new("world")); // 5 bytes
-        assert_eq!(segment.size(), 10);
+        let mut batch = RecordBatch::new(TopicId(1), PartitionId(0), SchemaId(100));
+        batch.push(Record::new("hello")); // 5 bytes
+        batch.push(Record::new("world")); // 5 bytes
+        assert_eq!(batch.size(), 10);
     }
 
     #[test]
     fn test_segment_ack_record_count() {
-        let ack = SegmentAck {
+        let ack = BatchAck {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
             schema_id: SchemaId(100),

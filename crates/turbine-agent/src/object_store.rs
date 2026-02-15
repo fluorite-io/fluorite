@@ -78,9 +78,9 @@ impl ObjectStore for LocalFsStore {
         let path = self.key_path(key);
         match tokio::fs::read(&path).await {
             Ok(data) => Ok(Bytes::from(data)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(ObjectStoreError::NotFound { key: key.to_string() })
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ObjectStoreError::NotFound {
+                key: key.to_string(),
+            }),
             Err(e) => Err(e.into()),
         }
     }
@@ -90,7 +90,9 @@ impl ObjectStore for LocalFsStore {
         let data = match tokio::fs::read(&path).await {
             Ok(data) => data,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ObjectStoreError::NotFound { key: key.to_string() });
+                return Err(ObjectStoreError::NotFound {
+                    key: key.to_string(),
+                });
             }
             Err(e) => return Err(e.into()),
         };
@@ -113,9 +115,9 @@ impl ObjectStore for LocalFsStore {
         let path = self.key_path(key);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(ObjectStoreError::NotFound { key: key.to_string() })
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ObjectStoreError::NotFound {
+                key: key.to_string(),
+            }),
             Err(e) => Err(e.into()),
         }
     }
@@ -154,7 +156,9 @@ impl ObjectStore for LocalFsStore {
         let metadata = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ObjectStoreError::NotFound { key: key.to_string() });
+                return Err(ObjectStoreError::NotFound {
+                    key: key.to_string(),
+                });
             }
             Err(e) => return Err(e.into()),
         };
@@ -221,7 +225,9 @@ impl ObjectStore for S3ObjectStore {
             .await
             .map_err(|e| {
                 if e.to_string().contains("NoSuchKey") {
-                    ObjectStoreError::NotFound { key: key.to_string() }
+                    ObjectStoreError::NotFound {
+                        key: key.to_string(),
+                    }
                 } else {
                     ObjectStoreError::S3 {
                         message: e.to_string(),
@@ -252,7 +258,9 @@ impl ObjectStore for S3ObjectStore {
             .await
             .map_err(|e| {
                 if e.to_string().contains("NoSuchKey") {
-                    ObjectStoreError::NotFound { key: key.to_string() }
+                    ObjectStoreError::NotFound {
+                        key: key.to_string(),
+                    }
                 } else {
                     ObjectStoreError::S3 {
                         message: e.to_string(),
@@ -315,7 +323,9 @@ impl ObjectStore for S3ObjectStore {
             .await
             .map_err(|e| {
                 if e.to_string().contains("NotFound") {
-                    ObjectStoreError::NotFound { key: key.to_string() }
+                    ObjectStoreError::NotFound {
+                        key: key.to_string(),
+                    }
                 } else {
                     ObjectStoreError::S3 {
                         message: e.to_string(),

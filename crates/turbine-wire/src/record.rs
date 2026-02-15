@@ -6,8 +6,8 @@
 use bytes::Bytes;
 use turbine_common::types::Record;
 
-use crate::varint;
 use crate::DecodeError;
+use crate::varint;
 
 /// Encode a record into the buffer, returning bytes written.
 pub fn encode(record: &Record, buf: &mut [u8]) -> usize {

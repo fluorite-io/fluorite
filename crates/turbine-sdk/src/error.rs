@@ -17,6 +17,15 @@ pub enum SdkError {
     #[error("decoding error: {0}")]
     Decode(String),
 
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    #[error("authentication failed: {0}")]
+    Auth(String),
+
+    #[error("server error {code}: {message}")]
+    Server { code: u16, message: String },
+
     #[error("timeout")]
     Timeout,
 

@@ -1,29 +1,30 @@
-//! Turbine agent: stateless worker that handles produce/fetch requests.
+//! Turbine broker: stateless worker that handles append/read requests.
 //!
-//! The agent receives WebSocket connections from producers and consumers,
+//! The broker receives WebSocket connections from writers and readers,
 //! batches writes to S3, and commits metadata to Postgres.
-//!
-//! Two server modes are available:
-//! - `server`: Simple request-per-flush mode
-//! - `batched_server`: Buffered mode with merging and periodic flush
 
+pub mod admin;
+pub mod auth;
 pub mod batched_server;
 pub mod buffer;
 pub mod coordinator;
 pub mod dedup;
 pub mod error;
+pub mod metrics;
 pub mod object_store;
-pub mod server;
+pub mod shutdown;
 pub mod tbin;
 
-pub use batched_server::{BatchedAgentConfig, BatchedAgentState};
-pub use buffer::{AgentBuffer, BufferConfig, DrainResult, PendingProducer, SegmentKey};
+pub use admin::{AdminConfig, AdminState, run_with_shutdown as run_admin_with_shutdown};
+pub use auth::{AclChecker, ApiKeyValidator, AuthError, Operation, Principal, ResourceType};
+pub use batched_server::{BrokerConfig, BrokerState, run, run_with_shutdown};
+pub use buffer::{BrokerBuffer, BufferConfig, DrainResult, PendingWriter, BatchKey};
 pub use coordinator::{
-    compute_assignment, Assignment, CommitStatus, Coordinator, CoordinatorConfig, HeartbeatResult,
-    HeartbeatStatus, JoinResult, RejoinResult, RejoinStatus,
+    Assignment, CommitStatus, Coordinator, CoordinatorConfig, HeartbeatResult, HeartbeatStatus,
+    JoinResult, RejoinResult, RejoinStatus, compute_assignment,
 };
-pub use dedup::{DedupCache, DedupCacheConfig, DedupResult, ProducerState};
-pub use error::AgentError;
+pub use dedup::{DedupCache, DedupCacheConfig, DedupResult, WriterState};
+pub use error::BrokerError;
 pub use object_store::{LocalFsStore, ObjectStore, S3ObjectStore};
-pub use server::{run, AgentConfig, AgentState};
+pub use shutdown::{ConnectionTracker, TrackedConnection, shutdown_signal};
 pub use tbin::{TbinReader, TbinWriter};

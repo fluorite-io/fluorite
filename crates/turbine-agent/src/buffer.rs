@@ -1,6 +1,6 @@
-//! Agent buffer for batching produce requests.
+//! Broker buffer for batching append requests.
 //!
-//! Buffers incoming records from multiple producers, merges them by
+//! Buffers incoming records from multiple writers, merges them by
 //! (topic_id, partition_id, schema_id), and flushes when size or time
 //! thresholds are reached.
 
@@ -8,31 +8,35 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
-use turbine_common::ids::{PartitionId, ProducerId, SchemaId, SeqNum, TopicId};
-use turbine_common::types::{Record, Segment, SegmentAck};
+use turbine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use turbine_common::types::{Record, RecordBatch, BatchAck};
 
 /// Key for grouping records in the buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SegmentKey {
+pub struct BatchKey {
     pub topic_id: TopicId,
     pub partition_id: PartitionId,
     pub schema_id: SchemaId,
 }
 
-/// A pending producer waiting for acknowledgment.
+/// A pending writer waiting for acknowledgment.
 #[derive(Debug)]
-pub struct PendingProducer {
-    pub producer_id: ProducerId,
-    pub seq: SeqNum,
-    /// Which segments this producer contributed to.
-    pub segment_keys: Vec<SegmentKey>,
-    /// Record count per segment key (to calculate offsets).
+pub struct PendingWriter {
+    pub writer_id: WriterId,
+    pub append_seq: AppendSeq,
+    /// Time when this request was inserted into the broker buffer.
+    pub buffered_at: Instant,
+    /// Which batches this writer contributed to.
+    pub segment_keys: Vec<BatchKey>,
+    /// Record count per batch key (to calculate offsets).
     pub record_counts: Vec<usize>,
-    /// Channel to send acks back to the producer.
-    pub ack_sender: oneshot::Sender<Vec<SegmentAck>>,
+    /// Starting record index in each batch (for correct offset calculation).
+    pub start_indices: Vec<usize>,
+    /// Channel to send append_acks back to the writer.
+    pub ack_sender: oneshot::Sender<Vec<BatchAck>>,
 }
 
-/// Buffered segment data.
+/// Buffered batch data.
 #[derive(Debug)]
 struct BufferedSegment {
     records: Vec<Record>,
@@ -56,7 +60,7 @@ impl BufferedSegment {
     }
 }
 
-/// Configuration for the agent buffer.
+/// Configuration for the broker buffer.
 #[derive(Debug, Clone)]
 pub struct BufferConfig {
     /// Maximum buffer size in bytes before triggering flush.
@@ -83,20 +87,20 @@ impl Default for BufferConfig {
 /// Result of draining the buffer.
 #[derive(Debug)]
 pub struct DrainResult {
-    /// Merged segments ready to write.
-    pub segments: Vec<Segment>,
-    /// Pending producers to notify after commit.
-    pub pending_producers: Vec<PendingProducer>,
-    /// Mapping from segment key to index in segments vec.
-    pub key_to_index: HashMap<SegmentKey, usize>,
+    /// Merged batches ready to write.
+    pub batches: Vec<RecordBatch>,
+    /// Pending writers to notify after commit.
+    pub pending_writers: Vec<PendingWriter>,
+    /// Mapping from batch key to index in batches vec.
+    pub key_to_index: HashMap<BatchKey, usize>,
 }
 
-/// Agent buffer for batching produce requests.
-pub struct AgentBuffer {
-    /// Buffered segments by key.
-    segments: HashMap<SegmentKey, BufferedSegment>,
-    /// Pending producers waiting for acks.
-    pending_producers: Vec<PendingProducer>,
+/// Broker buffer for batching append requests.
+pub struct BrokerBuffer {
+    /// Buffered batches by key.
+    batches: HashMap<BatchKey, BufferedSegment>,
+    /// Pending writers waiting for append_acks.
+    pending_writers: Vec<PendingWriter>,
     /// Total bytes in buffer.
     total_bytes: usize,
     /// Time when first record was added to current batch.
@@ -105,7 +109,7 @@ pub struct AgentBuffer {
     config: BufferConfig,
 }
 
-impl AgentBuffer {
+impl BrokerBuffer {
     /// Create a new buffer with default config.
     pub fn new() -> Self {
         Self::with_config(BufferConfig::default())
@@ -114,61 +118,80 @@ impl AgentBuffer {
     /// Create a new buffer with custom config.
     pub fn with_config(config: BufferConfig) -> Self {
         Self {
-            segments: HashMap::new(),
-            pending_producers: Vec::new(),
+            batches: HashMap::new(),
+            pending_writers: Vec::new(),
             total_bytes: 0,
             batch_start: None,
             config,
         }
     }
 
-    /// Insert a produce request into the buffer.
+    /// Insert a append request into the buffer.
     ///
-    /// Returns a receiver that will get the acks when the batch is committed.
+    /// Returns a receiver that will get the append_acks when the batch is committed.
     pub fn insert(
         &mut self,
-        producer_id: ProducerId,
-        seq: SeqNum,
-        segments: Vec<Segment>,
-    ) -> oneshot::Receiver<Vec<SegmentAck>> {
+        writer_id: WriterId,
+        append_seq: AppendSeq,
+        batches: Vec<RecordBatch>,
+    ) -> oneshot::Receiver<Vec<BatchAck>> {
         let (tx, rx) = oneshot::channel();
+        self.insert_with_sender(writer_id, append_seq, batches, tx);
+        rx
+    }
 
+    /// Insert a append request and use a provided sender for acknowledgments.
+    pub fn insert_with_sender(
+        &mut self,
+        writer_id: WriterId,
+        append_seq: AppendSeq,
+        batches: Vec<RecordBatch>,
+        ack_sender: oneshot::Sender<Vec<BatchAck>>,
+    ) {
         // Track batch start time
         if self.batch_start.is_none() {
             self.batch_start = Some(Instant::now());
         }
 
-        let mut segment_keys = Vec::with_capacity(segments.len());
-        let mut record_counts = Vec::with_capacity(segments.len());
+        let mut segment_keys = Vec::with_capacity(batches.len());
+        let mut record_counts = Vec::with_capacity(batches.len());
+        let mut start_indices = Vec::with_capacity(batches.len());
 
-        for segment in segments {
-            let key = SegmentKey {
-                topic_id: segment.topic_id,
-                partition_id: segment.partition_id,
-                schema_id: segment.schema_id,
+        for batch in batches {
+            let key = BatchKey {
+                topic_id: batch.topic_id,
+                partition_id: batch.partition_id,
+                schema_id: batch.schema_id,
             };
 
             segment_keys.push(key);
-            record_counts.push(segment.records.len());
+            record_counts.push(batch.records.len());
 
-            let buffered = self.segments.entry(key).or_insert_with(BufferedSegment::new);
+            let buffered = self
+                .batches
+                .entry(key)
+                .or_insert_with(BufferedSegment::new);
 
-            for record in segment.records {
-                let record_size = record.value.len() + record.key.as_ref().map(|k| k.len()).unwrap_or(0);
+            // Capture starting position before adding records
+            start_indices.push(buffered.records.len());
+
+            for record in batch.records {
+                let record_size =
+                    record.value.len() + record.key.as_ref().map(|k| k.len()).unwrap_or(0);
                 self.total_bytes += record_size;
                 buffered.add_record(record);
             }
         }
 
-        self.pending_producers.push(PendingProducer {
-            producer_id,
-            seq,
+        self.pending_writers.push(PendingWriter {
+            writer_id,
+            append_seq,
+            buffered_at: Instant::now(),
             segment_keys,
             record_counts,
-            ack_sender: tx,
+            start_indices,
+            ack_sender,
         });
-
-        rx
     }
 
     /// Check if the buffer should be flushed.
@@ -203,31 +226,31 @@ impl AgentBuffer {
         self.total_bytes
     }
 
-    /// Get number of pending producers.
+    /// Get number of pending writers.
     pub fn pending_count(&self) -> usize {
-        self.pending_producers.len()
+        self.pending_writers.len()
     }
 
-    /// Get number of segments in buffer.
+    /// Get number of batches in buffer.
     pub fn segment_count(&self) -> usize {
-        self.segments.len()
+        self.batches.len()
     }
 
     /// Check if buffer is empty.
     pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
+        self.batches.is_empty()
     }
 
-    /// Drain the buffer, returning merged segments and pending producers.
+    /// Drain the buffer, returning merged batches and pending writers.
     pub fn drain(&mut self) -> DrainResult {
-        let mut segments = Vec::with_capacity(self.segments.len());
-        let mut key_to_index = HashMap::with_capacity(self.segments.len());
+        let mut batches = Vec::with_capacity(self.batches.len());
+        let mut key_to_index = HashMap::with_capacity(self.batches.len());
 
-        for (key, buffered) in self.segments.drain() {
-            let index = segments.len();
+        for (key, buffered) in self.batches.drain() {
+            let index = batches.len();
             key_to_index.insert(key, index);
 
-            segments.push(Segment {
+            batches.push(RecordBatch {
                 topic_id: key.topic_id,
                 partition_id: key.partition_id,
                 schema_id: key.schema_id,
@@ -235,68 +258,72 @@ impl AgentBuffer {
             });
         }
 
-        let pending_producers = std::mem::take(&mut self.pending_producers);
+        let pending_writers = std::mem::take(&mut self.pending_writers);
 
         self.total_bytes = 0;
         self.batch_start = None;
 
         DrainResult {
-            segments,
-            pending_producers,
+            batches,
+            pending_writers,
             key_to_index,
         }
     }
 
-    /// Distribute acks to pending producers after successful commit.
+    /// Distribute append_acks to pending writers after successful commit.
     ///
-    /// `segment_offsets` maps segment index to (start_offset, end_offset).
-    pub fn distribute_acks(
-        drain_result: DrainResult,
+    /// `segment_offsets` maps batch index to (start_offset, end_offset).
+    pub fn distribute_acks(drain_result: DrainResult, segment_offsets: &[(u64, u64)]) {
+        for pending in drain_result.pending_writers {
+            let append_acks = Self::calculate_acks_for_pending(
+                &pending,
+                &drain_result.key_to_index,
+                segment_offsets,
+            );
+
+            // Send append_acks to writer (ignore error if receiver dropped)
+            let _ = pending.ack_sender.send(append_acks);
+        }
+    }
+
+    /// Calculate append_acks for a single pending writer.
+    pub fn calculate_acks_for_pending(
+        pending: &PendingWriter,
+        key_to_index: &HashMap<BatchKey, usize>,
         segment_offsets: &[(u64, u64)],
-    ) {
-        // Track current offset within each segment (shared across all producers)
-        let mut offset_within_segment: HashMap<SegmentKey, u64> = HashMap::new();
+    ) -> Vec<BatchAck> {
+        let mut append_acks = Vec::with_capacity(pending.segment_keys.len());
 
-        // Initialize with segment start offsets
-        for (key, &seg_idx) in &drain_result.key_to_index {
-            let (seg_start, _) = segment_offsets[seg_idx];
-            offset_within_segment.insert(*key, seg_start);
-        }
+        for i in 0..pending.segment_keys.len() {
+            let key = &pending.segment_keys[i];
+            let record_count = pending.record_counts[i];
+            let start_idx = pending.start_indices[i];
 
-        for pending in drain_result.pending_producers {
-            let mut acks = Vec::with_capacity(pending.segment_keys.len());
+            if let Some(&seg_idx) = key_to_index.get(key) {
+                let (seg_start, seg_end) = segment_offsets[seg_idx];
 
-            for (key, record_count) in pending.segment_keys.iter().zip(pending.record_counts.iter()) {
-                if let Some(&seg_idx) = drain_result.key_to_index.get(key) {
-                    let (_, seg_end) = segment_offsets[seg_idx];
+                // Calculate actual offset based on where records were inserted
+                let writer_start = seg_start + start_idx as u64;
+                let writer_end = writer_start + record_count as u64;
 
-                    // Get this producer's start offset within the segment
-                    let producer_start = *offset_within_segment.get(key).unwrap();
-                    let producer_end = producer_start + *record_count as u64;
+                append_acks.push(BatchAck {
+                    topic_id: key.topic_id,
+                    partition_id: key.partition_id,
+                    schema_id: key.schema_id,
+                    start_offset: turbine_common::ids::Offset(writer_start),
+                    end_offset: turbine_common::ids::Offset(writer_end),
+                });
 
-                    acks.push(SegmentAck {
-                        topic_id: key.topic_id,
-                        partition_id: key.partition_id,
-                        schema_id: key.schema_id,
-                        start_offset: turbine_common::ids::Offset(producer_start),
-                        end_offset: turbine_common::ids::Offset(producer_end),
-                    });
-
-                    // Update offset for next producer contributing to same segment
-                    *offset_within_segment.get_mut(key).unwrap() = producer_end;
-
-                    // Sanity check
-                    debug_assert!(producer_end <= seg_end);
-                }
+                // Sanity check
+                debug_assert!(writer_end <= seg_end);
             }
-
-            // Send acks to producer (ignore error if receiver dropped)
-            let _ = pending.ack_sender.send(acks);
         }
+
+        append_acks
     }
 }
 
-impl Default for AgentBuffer {
+impl Default for BrokerBuffer {
     fn default() -> Self {
         Self::new()
     }
@@ -315,8 +342,8 @@ mod tests {
         }
     }
 
-    fn make_segment(topic: u32, partition: u32, records: Vec<Record>) -> Segment {
-        Segment {
+    fn make_segment(topic: u32, partition: u32, records: Vec<Record>) -> RecordBatch {
+        RecordBatch {
             topic_id: TopicId(topic),
             partition_id: PartitionId(partition),
             schema_id: SchemaId(100),
@@ -326,12 +353,12 @@ mod tests {
 
     #[test]
     fn test_buffer_insert_single() {
-        let mut buffer = AgentBuffer::new();
+        let mut buffer = BrokerBuffer::new();
 
-        let producer_id = ProducerId(Uuid::new_v4());
-        let segments = vec![make_segment(1, 0, vec![make_record("k1", "v1")])];
+        let writer_id = WriterId(Uuid::new_v4());
+        let batches = vec![make_segment(1, 0, vec![make_record("k1", "v1")])];
 
-        let _rx = buffer.insert(producer_id, SeqNum(1), segments);
+        let _rx = buffer.insert(writer_id, AppendSeq(1), batches);
 
         assert_eq!(buffer.segment_count(), 1);
         assert_eq!(buffer.pending_count(), 1);
@@ -340,42 +367,50 @@ mod tests {
 
     #[test]
     fn test_buffer_merge_same_key() {
-        let mut buffer = AgentBuffer::new();
+        let mut buffer = BrokerBuffer::new();
 
-        // Two producers send to same partition
-        let p1 = ProducerId(Uuid::new_v4());
-        let p2 = ProducerId(Uuid::new_v4());
+        // Two writers send to same partition
+        let p1 = WriterId(Uuid::new_v4());
+        let p2 = WriterId(Uuid::new_v4());
 
-        let _rx1 = buffer.insert(p1, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k1", "v1"), make_record("k2", "v2")]),
-        ]);
+        let _rx1 = buffer.insert(
+            p1,
+            AppendSeq(1),
+            vec![make_segment(
+                1,
+                0,
+                vec![make_record("k1", "v1"), make_record("k2", "v2")],
+            )],
+        );
 
-        let _rx2 = buffer.insert(p2, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k3", "v3")]),
-        ]);
+        let _rx2 = buffer.insert(
+            p2,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k3", "v3")])],
+        );
 
-        // Should have 1 merged segment with 3 records
+        // Should have 1 merged batch with 3 records
         assert_eq!(buffer.segment_count(), 1);
         assert_eq!(buffer.pending_count(), 2);
 
         let result = buffer.drain();
-        assert_eq!(result.segments.len(), 1);
-        assert_eq!(result.segments[0].records.len(), 3);
-        assert_eq!(result.pending_producers.len(), 2);
+        assert_eq!(result.batches.len(), 1);
+        assert_eq!(result.batches[0].records.len(), 3);
+        assert_eq!(result.pending_writers.len(), 2);
     }
 
     #[test]
     fn test_buffer_multiple_partitions() {
-        let mut buffer = AgentBuffer::new();
+        let mut buffer = BrokerBuffer::new();
 
-        let producer = ProducerId(Uuid::new_v4());
-        let segments = vec![
+        let writer = WriterId(Uuid::new_v4());
+        let batches = vec![
             make_segment(1, 0, vec![make_record("k1", "v1")]),
             make_segment(1, 1, vec![make_record("k2", "v2")]),
             make_segment(2, 0, vec![make_record("k3", "v3")]),
         ];
 
-        let _rx = buffer.insert(producer, SeqNum(1), segments);
+        let _rx = buffer.insert(writer, AppendSeq(1), batches);
 
         assert_eq!(buffer.segment_count(), 3);
         assert_eq!(buffer.pending_count(), 1);
@@ -388,21 +423,25 @@ mod tests {
             max_wait: Duration::from_secs(60),
             ..Default::default()
         };
-        let mut buffer = AgentBuffer::with_config(config);
+        let mut buffer = BrokerBuffer::with_config(config);
 
         // Add small record - should not trigger flush
-        let p1 = ProducerId(Uuid::new_v4());
-        let _rx1 = buffer.insert(p1, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k", "small")]),
-        ]);
+        let p1 = WriterId(Uuid::new_v4());
+        let _rx1 = buffer.insert(
+            p1,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k", "small")])],
+        );
         assert!(!buffer.should_flush());
 
         // Add large record - should trigger flush
-        let p2 = ProducerId(Uuid::new_v4());
+        let p2 = WriterId(Uuid::new_v4());
         let large_value = "x".repeat(100);
-        let _rx2 = buffer.insert(p2, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k", &large_value)]),
-        ]);
+        let _rx2 = buffer.insert(
+            p2,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k", &large_value)])],
+        );
         assert!(buffer.should_flush());
     }
 
@@ -413,12 +452,14 @@ mod tests {
             max_wait: Duration::from_millis(1),
             ..Default::default()
         };
-        let mut buffer = AgentBuffer::with_config(config);
+        let mut buffer = BrokerBuffer::with_config(config);
 
-        let producer = ProducerId(Uuid::new_v4());
-        let _rx = buffer.insert(producer, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k", "v")]),
-        ]);
+        let writer = WriterId(Uuid::new_v4());
+        let _rx = buffer.insert(
+            writer,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k", "v")])],
+        );
 
         // Initially should not flush (time not elapsed)
         // Wait and check again
@@ -428,12 +469,14 @@ mod tests {
 
     #[test]
     fn test_buffer_drain_clears() {
-        let mut buffer = AgentBuffer::new();
+        let mut buffer = BrokerBuffer::new();
 
-        let producer = ProducerId(Uuid::new_v4());
-        let _rx = buffer.insert(producer, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k", "v")]),
-        ]);
+        let writer = WriterId(Uuid::new_v4());
+        let _rx = buffer.insert(
+            writer,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k", "v")])],
+        );
 
         assert!(!buffer.is_empty());
         let _result = buffer.drain();
@@ -444,34 +487,42 @@ mod tests {
 
     #[test]
     fn test_distribute_acks() {
-        let mut buffer = AgentBuffer::new();
+        let mut buffer = BrokerBuffer::new();
 
-        // Producer 1 sends 2 records
-        let p1 = ProducerId(Uuid::new_v4());
-        let mut rx1 = buffer.insert(p1, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k1", "v1"), make_record("k2", "v2")]),
-        ]);
+        // Writer 1 sends 2 records
+        let p1 = WriterId(Uuid::new_v4());
+        let mut rx1 = buffer.insert(
+            p1,
+            AppendSeq(1),
+            vec![make_segment(
+                1,
+                0,
+                vec![make_record("k1", "v1"), make_record("k2", "v2")],
+            )],
+        );
 
-        // Producer 2 sends 1 record to same partition
-        let p2 = ProducerId(Uuid::new_v4());
-        let mut rx2 = buffer.insert(p2, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k3", "v3")]),
-        ]);
+        // Writer 2 sends 1 record to same partition
+        let p2 = WriterId(Uuid::new_v4());
+        let mut rx2 = buffer.insert(
+            p2,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k3", "v3")])],
+        );
 
         let result = buffer.drain();
 
-        // Simulate DB assigned offsets 0-3 for the merged segment
+        // Simulate DB assigned offsets 0-3 for the merged batch
         let segment_offsets = vec![(0, 3)];
 
-        AgentBuffer::distribute_acks(result, &segment_offsets);
+        BrokerBuffer::distribute_acks(result, &segment_offsets);
 
-        // Producer 1 should get offsets 0-2
+        // Writer 1 should get offsets 0-2
         let acks1 = rx1.try_recv().unwrap();
         assert_eq!(acks1.len(), 1);
         assert_eq!(acks1[0].start_offset.0, 0);
         assert_eq!(acks1[0].end_offset.0, 2);
 
-        // Producer 2 should get offsets 2-3
+        // Writer 2 should get offsets 2-3
         let acks2 = rx2.try_recv().unwrap();
         assert_eq!(acks2.len(), 1);
         assert_eq!(acks2[0].start_offset.0, 2);
@@ -486,14 +537,16 @@ mod tests {
             high_water_bytes: 200,
             low_water_bytes: 100,
         };
-        let mut buffer = AgentBuffer::with_config(config);
+        let mut buffer = BrokerBuffer::with_config(config);
 
         // Add data to exceed high water
-        let producer = ProducerId(Uuid::new_v4());
+        let writer = WriterId(Uuid::new_v4());
         let large_value = "x".repeat(250);
-        let _rx = buffer.insert(producer, SeqNum(1), vec![
-            make_segment(1, 0, vec![make_record("k", &large_value)]),
-        ]);
+        let _rx = buffer.insert(
+            writer,
+            AppendSeq(1),
+            vec![make_segment(1, 0, vec![make_record("k", &large_value)])],
+        );
 
         assert!(buffer.should_apply_backpressure());
         assert!(!buffer.can_release_backpressure());

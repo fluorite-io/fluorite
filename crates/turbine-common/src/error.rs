@@ -1,7 +1,7 @@
 //! Error types for Turbine eventbus
 
+use crate::{Generation, PartitionId, WriterId, TopicId};
 use thiserror::Error;
-use crate::{TopicId, PartitionId, ProducerId, Generation};
 
 /// Error codes matching wire protocol error messages
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,13 +19,13 @@ pub enum ErrorCode {
     IncompatibleSchema = 4,
     /// Invalid offset requested
     InvalidOffset = 5,
-    /// Consumer group not found
+    /// Reader group not found
     GroupNotFound = 6,
-    /// Consumer not a member of the group
+    /// Reader not a member of the group
     NotMember = 7,
-    /// Consumer generation is stale (rebalance in progress)
+    /// Reader generation is stale (rebalance in progress)
     StaleGeneration = 8,
-    /// Consumer does not own the requested partition
+    /// Reader does not own the requested partition
     NotOwner = 9,
     /// Request rate limit exceeded
     RateLimited = 10,
@@ -35,7 +35,7 @@ pub enum ErrorCode {
     Unauthenticated = 12,
     /// Authorization failed
     Unauthorized = 13,
-    /// Duplicate producer sequence number
+    /// Duplicate writer sequence number
     DuplicateSequence = 14,
     /// Invalid sequence number (gap detected)
     InvalidSequence = 15,
@@ -104,8 +104,11 @@ pub enum TurbineError {
     #[error("unauthorized: {action}")]
     Unauthorized { action: String },
 
-    #[error("duplicate sequence: producer={producer_id}, seq={seq_num}")]
-    DuplicateSequence { producer_id: ProducerId, seq_num: u64 },
+    #[error("duplicate sequence: writer={writer_id}, append_seq={append_seq}")]
+    DuplicateSequence {
+        writer_id: WriterId,
+        append_seq: u64,
+    },
 
     #[error("invalid sequence: expected {expected}, got {actual}")]
     InvalidSequence { expected: u64, actual: u64 },
@@ -164,21 +167,35 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = TurbineError::TopicNotFound { topic_id: TopicId(42) };
+        let err = TurbineError::TopicNotFound {
+            topic_id: TopicId(42),
+        };
         assert!(err.to_string().contains("42"));
     }
 
     #[test]
     fn test_error_is_retryable() {
-        assert!(!TurbineError::TopicNotFound { topic_id: TopicId(1) }.is_retryable());
-        assert!(TurbineError::InternalError { message: "oops".into() }.is_retryable());
+        assert!(
+            !TurbineError::TopicNotFound {
+                topic_id: TopicId(1)
+            }
+            .is_retryable()
+        );
+        assert!(
+            TurbineError::InternalError {
+                message: "oops".into()
+            }
+            .is_retryable()
+        );
         assert!(TurbineError::RateLimited.is_retryable());
         assert!(TurbineError::RebalanceNeeded.is_retryable());
     }
 
     #[test]
     fn test_error_code() {
-        let err = TurbineError::TopicNotFound { topic_id: TopicId(1) };
+        let err = TurbineError::TopicNotFound {
+            topic_id: TopicId(1),
+        };
         assert_eq!(err.code(), ErrorCode::TopicNotFound);
 
         let err = TurbineError::RateLimited;

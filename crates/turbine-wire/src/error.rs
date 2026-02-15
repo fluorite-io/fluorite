@@ -29,4 +29,7 @@ pub enum DecodeError {
 
     #[error("invalid message type: {tag}")]
     InvalidMessageType { tag: u8 },
+
+    #[error("invalid data: {msg}")]
+    InvalidData { msg: &'static str },
 }

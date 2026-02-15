@@ -15,19 +15,25 @@ pub struct PartitionId(pub u32);
 pub struct SchemaId(pub u32);
 
 /// Offset within a partition (monotonically increasing)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Offset(pub u64);
 
-/// Unique identifier for a producer instance
+/// Unique identifier for a writer instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct ProducerId(pub uuid::Uuid);
+pub struct WriterId(pub uuid::Uuid);
 
-/// Sequence number for producer deduplication
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-pub struct SeqNum(pub u64);
+/// Sequence number for writer deduplication
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct AppendSeq(pub u64);
 
-/// Generation number for consumer group coordination
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+/// Generation number for reader group coordination
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Generation(pub u64);
 
 // From implementations for TopicId
@@ -82,16 +88,16 @@ impl From<u64> for Offset {
     }
 }
 
-// From implementations for SeqNum
-impl From<SeqNum> for u64 {
-    fn from(seq: SeqNum) -> u64 {
-        seq.0
+// From implementations for AppendSeq
+impl From<AppendSeq> for u64 {
+    fn from(append_seq: AppendSeq) -> u64 {
+        append_seq.0
     }
 }
 
-impl From<u64> for SeqNum {
-    fn from(val: u64) -> SeqNum {
-        SeqNum(val)
+impl From<u64> for AppendSeq {
+    fn from(val: u64) -> AppendSeq {
+        AppendSeq(val)
     }
 }
 
@@ -133,13 +139,13 @@ impl fmt::Display for Offset {
     }
 }
 
-impl fmt::Display for ProducerId {
+impl fmt::Display for WriterId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl fmt::Display for SeqNum {
+impl fmt::Display for AppendSeq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -151,16 +157,16 @@ impl fmt::Display for Generation {
     }
 }
 
-// ProducerId specific implementations
-impl ProducerId {
-    /// Create a new random producer ID
+// WriterId specific implementations
+impl WriterId {
+    /// Create a new random writer ID
     pub fn new() -> Self {
-        ProducerId(uuid::Uuid::new_v4())
+        WriterId(uuid::Uuid::new_v4())
     }
 
-    /// Create a producer ID from a UUID
+    /// Create a writer ID from a UUID
     pub fn from_uuid(uuid: uuid::Uuid) -> Self {
-        ProducerId(uuid)
+        WriterId(uuid)
     }
 
     /// Get the underlying UUID
@@ -169,7 +175,7 @@ impl ProducerId {
     }
 }
 
-impl Default for ProducerId {
+impl Default for WriterId {
     fn default() -> Self {
         Self::new()
     }
@@ -202,21 +208,21 @@ mod tests {
 
     #[test]
     fn test_producer_id_display() {
-        let id = ProducerId(uuid::Uuid::nil());
+        let id = WriterId(uuid::Uuid::nil());
         assert_eq!(format!("{}", id), "00000000-0000-0000-0000-000000000000");
     }
 
     #[test]
     fn test_producer_id_new_is_unique() {
-        let id1 = ProducerId::new();
-        let id2 = ProducerId::new();
+        let id1 = WriterId::new();
+        let id2 = WriterId::new();
         assert_ne!(id1, id2);
     }
 
     #[test]
     fn test_seq_num_ordering() {
-        let a = SeqNum(1);
-        let b = SeqNum(2);
+        let a = AppendSeq(1);
+        let b = AppendSeq(2);
         assert!(a < b);
     }
 
