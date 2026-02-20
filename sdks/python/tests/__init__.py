@@ -1,1 +1,1 @@
-"""Tests for Turbine SDK."""
+"""Tests for Flourine SDK."""

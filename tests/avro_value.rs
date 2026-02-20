@@ -1,6 +1,6 @@
 //! Tests for the BumpValue type - dynamic Avro value representation
 
-use turbine::avro::{
+use flourine::avro::{
 	value::{from_datum_slice_bump, BumpValue},
 	Schema,
 };

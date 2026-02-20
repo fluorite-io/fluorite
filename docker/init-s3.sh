@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize S3 bucket for Turbine
+# Initialize S3 bucket for Flourine
 
-awslocal s3 mb s3://turbine-batches
-echo "Created S3 bucket: turbine-batches"
+awslocal s3 mb s3://flourine-batches
+echo "Created S3 bucket: flourine-batches"

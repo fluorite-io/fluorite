@@ -1,0 +1,32 @@
+[package]
+name = "flourine-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "flourine"
+path = "src/main.rs"
+
+[dependencies]
+flourine-broker = { path = "../flourine-broker" }
+flourine-sdk = { path = "../flourine-sdk" }
+flourine-common = { path = "../flourine-common" }
+
+clap = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true }
+apache-avro = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

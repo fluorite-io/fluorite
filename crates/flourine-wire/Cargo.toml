@@ -1,0 +1,18 @@
+[package]
+name = "flourine-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+flourine-common = { path = "../flourine-common" }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+prost = "0.13"
+
+[dev-dependencies]
+proptest = "1"
+
+[build-dependencies]
+prost-build = "0.13"

@@ -1,11 +1,11 @@
 services:
   postgres:
     image: postgres:16
-    container_name: turbine-postgres
+    container_name: flourine-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: turbine
+      POSTGRES_DB: flourine
     ports:
       - "5433:5432"
     volumes:
@@ -19,7 +19,7 @@ services:
 
   localstack:
     image: localstack/localstack:3.0
-    container_name: turbine-localstack
+    container_name: flourine-localstack
     environment:
       SERVICES: s3
       DEBUG: 0

@@ -48,7 +48,7 @@ fn print_help() {
     println!("  gen-proto   Regenerate protobuf code for Java/Python and rebuild Rust proto");
     println!("  build       Build the Rust workspace");
     println!("  test-rust   Run Rust tests (workspace)");
-    println!("  test-db     Run turbine-agent DB suites with --include-ignored");
+    println!("  test-db     Run flourine-broker DB suites with --include-ignored");
     println!("  test-sdk    Run Java and Python SDK tests");
     println!("  test-all    Run all tests across Rust + Java + Python + DB suites");
     println!("  ci          Run gen-proto + build + test-rust + test-sdk + test-db");
@@ -102,14 +102,14 @@ fn test_rust() -> Result<()> {
 
 fn gen_proto() -> Result<()> {
     let root = repo_root();
-    ensure_exists(&root.join("proto/turbine_wire.proto"))?;
+    ensure_exists(&root.join("proto/flourine_wire.proto"))?;
 
     let mut java = Command::new("protoc");
     java.current_dir(&root).args([
         "-I",
         "proto",
-        "--java_out=sdks/java/turbine-sdk/src/main/java",
-        "proto/turbine_wire.proto",
+        "--java_out=sdks/java/flourine-sdk/src/main/java",
+        "proto/flourine_wire.proto",
     ]);
     run_cmd(&mut java).context("failed to generate Java protobuf files")?;
 
@@ -117,14 +117,14 @@ fn gen_proto() -> Result<()> {
     py.current_dir(&root).args([
         "-I",
         "proto",
-        "--python_out=sdks/python/turbine/proto",
-        "proto/turbine_wire.proto",
+        "--python_out=sdks/python/flourine/proto",
+        "proto/flourine_wire.proto",
     ]);
     run_cmd(&mut py).context("failed to generate Python protobuf file")?;
 
     let mut rust = Command::new("cargo");
     rust.current_dir(&root)
-        .args(["build", "-p", "turbine-wire"]);
+        .args(["build", "-p", "flourine-wire"]);
     run_cmd(&mut rust).context("failed to rebuild Rust protobuf output")?;
 
     Ok(())
@@ -133,11 +133,11 @@ fn gen_proto() -> Result<()> {
 fn test_db() -> Result<()> {
     let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
     let root = repo_root();
-    let suites = discover_agent_test_suites()?;
+    let suites = discover_broker_test_suites()?;
     if suites.is_empty() {
-        bail!("no turbine-agent integration test suites found");
+        bail!("no flourine-broker integration test suites found");
     }
-    eprintln!("Discovered {} turbine-agent test suite(s)", suites.len());
+    eprintln!("Discovered {} flourine-broker test suite(s)", suites.len());
 
     let mut failed = Vec::new();
 
@@ -148,7 +148,7 @@ fn test_db() -> Result<()> {
             "test",
             "-q",
             "-p",
-            "turbine-agent",
+            "flourine-broker",
             "--test",
             suite.as_str(),
             "--",
@@ -168,12 +168,12 @@ fn test_db() -> Result<()> {
     }
 }
 
-fn discover_agent_test_suites() -> Result<Vec<String>> {
-    let tests_dir = sh_path("crates/turbine-agent/tests");
+fn discover_broker_test_suites() -> Result<Vec<String>> {
+    let tests_dir = sh_path("crates/flourine-broker/tests");
     ensure_exists(&tests_dir)?;
 
     let mut suites = Vec::new();
-    for entry in fs::read_dir(&tests_dir).context("failed to read turbine-agent tests dir")? {
+    for entry in fs::read_dir(&tests_dir).context("failed to read flourine-broker tests dir")? {
         let entry = entry.context("failed to read test dir entry")?;
         let path = entry.path();
         if !path.is_file() {
@@ -204,7 +204,7 @@ fn test_sdk() -> Result<()> {
 
 fn test_java_sdk() -> Result<()> {
     let mut cmd = Command::new("mvn");
-    cmd.current_dir(sh_path("sdks/java/turbine-sdk"))
+    cmd.current_dir(sh_path("sdks/java/flourine-sdk"))
         .args(["test"]);
     run_cmd(&mut cmd).context("java SDK tests failed")
 }

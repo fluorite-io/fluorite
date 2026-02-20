@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use turbine::avro::value::bump::BatchDeserializer;
+//! use flourine::avro::value::bump::BatchDeserializer;
 //!
 //! let mut batch_de = BatchDeserializer::new(&schema);
 //! for batch in batches {
@@ -534,7 +534,7 @@ use crate::avro::Schema;
 /// # Example
 ///
 /// ```ignore
-/// use turbine::avro::value::bump::BatchDeserializer;
+/// use flourine::avro::value::bump::BatchDeserializer;
 ///
 /// let schema: Schema = /* parse schema */;
 /// let mut batch_de = BatchDeserializer::new(&schema);

@@ -3,7 +3,7 @@
 import pytest
 from google.protobuf.message import DecodeError
 
-from turbine.proto import turbine_wire_pb2 as pb
+from flourine.proto import flourine_wire_pb2 as pb
 
 
 APPEND_ENVELOPE_HEX = (

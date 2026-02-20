@@ -1,4 +1,4 @@
-//! Benchmark comparing turbine::avro::Value vs apache_avro::Value
+//! Benchmark comparing flourine::avro::Value vs apache_avro::Value
 //! Tests nested structs, arrays, maps, and logical types
 
 #![allow(missing_docs)]
@@ -153,7 +153,7 @@ fn bench_value_deserialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("Value Deserialization");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     // Test with different sizes
     for (num_tags, num_metadata, num_comments, num_related, label) in [
@@ -180,14 +180,14 @@ fn bench_value_deserialization(c: &mut Criterion) {
             },
         );
 
-        // turbine::avro - deserialize to Value
+        // flourine::avro - deserialize to Value
         group.bench_with_input(
-            BenchmarkId::new("turbine::avro::Value", label),
+            BenchmarkId::new("flourine::avro::Value", label),
             &datum,
             |b, datum| {
                 b.iter(|| {
-                    let value: turbine::avro::Value =
-                        turbine::avro::from_datum_slice(datum, &fast_schema).unwrap();
+                    let value: flourine::avro::Value =
+                        flourine::avro::from_datum_slice(datum, &fast_schema).unwrap();
                     black_box(value)
                 })
             },
@@ -201,7 +201,7 @@ fn bench_value_field_access(c: &mut Criterion) {
     let mut group = c.benchmark_group("Value Field Access");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     let document = make_complex_document(20, 20, 10, 50);
     let datum = apache_avro::to_avro_datum(&apache_schema, document).unwrap();
@@ -209,8 +209,8 @@ fn bench_value_field_access(c: &mut Criterion) {
     // Pre-deserialize for field access benchmarks
     let apache_value =
         apache_avro::from_avro_datum(&apache_schema, &mut datum.as_slice(), None).unwrap();
-    let fast_value: turbine::avro::Value =
-        turbine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
+    let fast_value: flourine::avro::Value =
+        flourine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
 
     // Apache Avro - access nested field
     group.bench_function("apache_avro nested field", |b| {
@@ -233,13 +233,13 @@ fn bench_value_field_access(c: &mut Criterion) {
         })
     });
 
-    // turbine::avro - access nested field (O(1) lookup)
+    // flourine::avro - access nested field (O(1) lookup)
     let complex_fields = fast_schema.record_index().get_record_fields("benchmark.ComplexDocument").unwrap();
     let author_fields = fast_schema.record_index().get_record_fields("benchmark.Author").unwrap();
-    group.bench_function("turbine::avro nested field", |b| {
+    group.bench_function("flourine::avro nested field", |b| {
         b.iter(|| {
-            if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(turbine::avro::Value::Record(author)) = record.get("author", complex_fields) {
+            if let flourine::avro::Value::Record(record) = &fast_value {
+                if let Some(flourine::avro::Value::Record(author)) = record.get("author", complex_fields) {
                     if let Some(name) = author.get("name", author_fields) {
                         return black_box(name.clone());
                     }
@@ -267,11 +267,11 @@ fn bench_value_field_access(c: &mut Criterion) {
         })
     });
 
-    // turbine::avro - access multiple fields
-    group.bench_function("turbine::avro 5 field accesses", |b| {
+    // flourine::avro - access multiple fields
+    group.bench_function("flourine::avro 5 field accesses", |b| {
         b.iter(|| {
             let mut results = Vec::with_capacity(5);
-            if let turbine::avro::Value::Record(record) = &fast_value {
+            if let flourine::avro::Value::Record(record) = &fast_value {
                 if let Some(v) = record.get("id", complex_fields) {
                     results.push(v.clone());
                 }
@@ -299,7 +299,7 @@ fn bench_value_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("Value Serialization");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     for (num_tags, num_metadata, num_comments, num_related, label) in [
         (5, 5, 3, 10, "small"),
@@ -309,8 +309,8 @@ fn bench_value_serialization(c: &mut Criterion) {
         let datum = apache_avro::to_avro_datum(&apache_schema, document.clone()).unwrap();
 
         // Pre-deserialize for serialization benchmarks
-        let fast_value: turbine::avro::Value =
-            turbine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
+        let fast_value: flourine::avro::Value =
+            flourine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
 
         group.throughput(Throughput::Bytes(datum.len() as u64));
 
@@ -326,15 +326,15 @@ fn bench_value_serialization(c: &mut Criterion) {
             },
         );
 
-        // turbine::avro - serialize Value
+        // flourine::avro - serialize Value
         group.bench_with_input(
-            BenchmarkId::new("turbine::avro::Value", label),
+            BenchmarkId::new("flourine::avro::Value", label),
             &fast_value,
             |b, fast_value| {
                 b.iter(|| {
-                    let mut config = turbine::avro::ser::SerializerConfig::new(&fast_schema);
+                    let mut config = flourine::avro::ser::SerializerConfig::new(&fast_schema);
                     let encoded =
-                        turbine::avro::to_datum_vec(fast_value, &mut config).unwrap();
+                        flourine::avro::to_datum_vec(fast_value, &mut config).unwrap();
                     black_box(encoded)
                 })
             },
@@ -348,7 +348,7 @@ fn bench_array_iteration(c: &mut Criterion) {
     let mut group = c.benchmark_group("Array Iteration");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     // Large array for iteration benchmark
     let document = make_complex_document(100, 10, 100, 1000);
@@ -356,8 +356,8 @@ fn bench_array_iteration(c: &mut Criterion) {
 
     let apache_value =
         apache_avro::from_avro_datum(&apache_schema, &mut datum.as_slice(), None).unwrap();
-    let fast_value: turbine::avro::Value =
-        turbine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
+    let fast_value: flourine::avro::Value =
+        flourine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
 
     // Apache Avro - iterate over related_ids array
     group.bench_function("apache_avro array sum", |b| {
@@ -380,15 +380,15 @@ fn bench_array_iteration(c: &mut Criterion) {
         })
     });
 
-    // turbine::avro - iterate over related_ids array
+    // flourine::avro - iterate over related_ids array
     let complex_fields = fast_schema.record_index().get_record_fields("benchmark.ComplexDocument").unwrap();
-    group.bench_function("turbine::avro array sum", |b| {
+    group.bench_function("flourine::avro array sum", |b| {
         b.iter(|| {
             let mut sum: i64 = 0;
-            if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(turbine::avro::Value::Array(arr)) = record.get("related_ids", complex_fields) {
+            if let flourine::avro::Value::Record(record) = &fast_value {
+                if let Some(flourine::avro::Value::Array(arr)) = record.get("related_ids", complex_fields) {
                     for item in arr {
-                        if let turbine::avro::Value::Long(n) = item {
+                        if let flourine::avro::Value::Long(n) = item {
                             sum += n;
                         }
                     }
@@ -405,7 +405,7 @@ fn bench_map_access(c: &mut Criterion) {
     let mut group = c.benchmark_group("Map Access");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     // Large map for access benchmark
     let document = make_complex_document(10, 100, 5, 10);
@@ -413,8 +413,8 @@ fn bench_map_access(c: &mut Criterion) {
 
     let apache_value =
         apache_avro::from_avro_datum(&apache_schema, &mut datum.as_slice(), None).unwrap();
-    let fast_value: turbine::avro::Value =
-        turbine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
+    let fast_value: flourine::avro::Value =
+        flourine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
 
     // Apache Avro - access map keys
     group.bench_function("apache_avro map lookup", |b| {
@@ -438,13 +438,13 @@ fn bench_map_access(c: &mut Criterion) {
         })
     });
 
-    // turbine::avro - access map keys (maps are HashMap<Cow<str>, Value>)
+    // flourine::avro - access map keys (maps are HashMap<Cow<str>, Value>)
     let complex_fields = fast_schema.record_index().get_record_fields("benchmark.ComplexDocument").unwrap();
-    group.bench_function("turbine::avro map lookup", |b| {
+    group.bench_function("flourine::avro map lookup", |b| {
         b.iter(|| {
             let mut found = 0;
-            if let turbine::avro::Value::Record(record) = &fast_value {
-                if let Some(turbine::avro::Value::Map(map)) = record.get("metadata", complex_fields) {
+            if let flourine::avro::Value::Record(record) = &fast_value {
+                if let Some(flourine::avro::Value::Map(map)) = record.get("metadata", complex_fields) {
                     // Look up specific keys
                     for key in ["key_0", "key_25", "key_50", "key_75", "key_99"] {
                         if map.contains_key(key) {
@@ -484,10 +484,10 @@ fn bench_string_heavy(c: &mut Criterion) {
     "#;
 
     let apache_schema = apache_avro::Schema::parse_str(string_schema).unwrap();
-    let fast_schema: turbine::avro::Schema = string_schema.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = string_schema.parse().unwrap();
 
     // Create a record with long strings
-    let long_string = "This is a longer string that would require allocation in apache-avro but can be borrowed in turbine::avro. ".repeat(10);
+    let long_string = "This is a longer string that would require allocation in apache-avro but can be borrowed in flourine::avro. ".repeat(10);
     let document = apache_avro::types::Value::Record(
         (1..=10)
             .map(|i| {
@@ -510,10 +510,10 @@ fn bench_string_heavy(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("turbine::avro (zero-copy)", |b| {
+    group.bench_function("flourine::avro (zero-copy)", |b| {
         b.iter(|| {
-            let value: turbine::avro::Value =
-                turbine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
+            let value: flourine::avro::Value =
+                flourine::avro::from_datum_slice(&datum, &fast_schema).unwrap();
             black_box(value)
         })
     });
@@ -522,12 +522,12 @@ fn bench_string_heavy(c: &mut Criterion) {
 }
 
 fn bench_bump_allocation(c: &mut Criterion) {
-    use turbine::avro::value::BatchDeserializer;
+    use flourine::avro::value::BatchDeserializer;
 
     let mut group = c.benchmark_group("Bump vs Regular Allocation");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     // Test with different sizes
     for (num_tags, num_metadata, num_comments, num_related, label) in [
@@ -546,8 +546,8 @@ fn bench_bump_allocation(c: &mut Criterion) {
             &datum,
             |b, datum| {
                 b.iter(|| {
-                    let value: turbine::avro::Value =
-                        turbine::avro::from_datum_slice(datum, &fast_schema).unwrap();
+                    let value: flourine::avro::Value =
+                        flourine::avro::from_datum_slice(datum, &fast_schema).unwrap();
                     black_box(value)
                 })
             },
@@ -573,12 +573,12 @@ fn bench_bump_allocation(c: &mut Criterion) {
 }
 
 fn bench_batch_processing(c: &mut Criterion) {
-    use turbine::avro::value::BatchDeserializer;
+    use flourine::avro::value::BatchDeserializer;
 
     let mut group = c.benchmark_group("Batch Processing");
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     // Generate a batch of documents
     let batch_sizes = [10, 100, 1000];
@@ -602,8 +602,8 @@ fn bench_batch_processing(c: &mut Criterion) {
             |b, records| {
                 b.iter(|| {
                     for record in records {
-                        let value: turbine::avro::Value =
-                            turbine::avro::from_datum_slice(record, &fast_schema).unwrap();
+                        let value: flourine::avro::Value =
+                            flourine::avro::from_datum_slice(record, &fast_schema).unwrap();
                         black_box(&value);
                     }
                 })

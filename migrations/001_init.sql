@@ -198,7 +198,7 @@ CREATE TABLE reader_members (
     group_id VARCHAR(255) NOT NULL,
     topic_id INT NOT NULL,
     reader_id VARCHAR(255) NOT NULL,
-    agent_id UUID NOT NULL,  -- Which broker this reader is connected to
+    broker_id UUID NOT NULL,  -- Which broker this reader is connected to
     last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (group_id, topic_id, reader_id),
     FOREIGN KEY (group_id, topic_id) REFERENCES reader_groups(group_id, topic_id) ON DELETE CASCADE

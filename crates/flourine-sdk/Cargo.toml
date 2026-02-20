@@ -1,0 +1,29 @@
+[package]
+name = "flourine-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+flourine-common = { path = "../flourine-common" }
+flourine-wire = { path = "../flourine-wire" }
+
+# Async runtime
+tokio = { workspace = true }
+futures = "0.3"
+
+# WebSocket
+tokio-tungstenite = "0.24"
+
+# Data handling
+bytes = { workspace = true }
+uuid = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Tracing
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

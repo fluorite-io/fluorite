@@ -16,7 +16,7 @@ import os
 # Add the SDK to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../sdks/python'))
 
-from turbine import GroupReader, ReaderConfig
+from flourine import GroupReader, ReaderConfig
 
 
 async def main():

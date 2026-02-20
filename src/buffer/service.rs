@@ -13,7 +13,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::buffer::avro_converter::RecordBatchBuilder;
-use crate::buffer::error::{Result, TurbineError};
+use crate::buffer::error::{Result, FlourineError};
 use crate::buffer::parquet_writer::{ParquetFileWriter, ParquetWriterConfig};
 
 pub struct AppState {
@@ -64,7 +64,7 @@ async fn register_schema(
     Json(request): Json<RegisterSchemaRequest>,
 ) -> Result<Json<RegisterSchemaResponse>> {
     let schema = AvroSchema::parse_str(&request.schema)
-        .map_err(|e| TurbineError::InvalidSchema(e.to_string()))?;
+        .map_err(|e| FlourineError::InvalidSchema(e.to_string()))?;
     state.schemas.write().insert(request.name.clone(), schema);
     info!(schema_name = %request.name, "Schema registered");
     Ok(Json(RegisterSchemaResponse { name: request.name, registered: true }))
@@ -84,7 +84,7 @@ async fn write_avro_data(
     body: Bytes,
 ) -> Result<Json<WriteResponse>> {
     let schema = state.schemas.read().get(&schema_name).cloned()
-        .ok_or_else(|| TurbineError::InvalidSchema(format!("Schema '{}' not found", schema_name)))?;
+        .ok_or_else(|| FlourineError::InvalidSchema(format!("Schema '{}' not found", schema_name)))?;
 
     let mut builder = RecordBatchBuilder::new(schema.clone())?;
     let mut cursor = body.as_ref();
@@ -92,12 +92,12 @@ async fn write_avro_data(
         match from_avro_datum(&schema, &mut cursor, None) {
             Ok(value) => builder.append_value(&value)?,
             Err(_) if cursor.is_empty() => break,
-            Err(e) => return Err(TurbineError::AvroParse(e)),
+            Err(e) => return Err(FlourineError::AvroParse(e)),
         }
     }
 
     if builder.row_count() == 0 {
-        return Err(TurbineError::Conversion("No records found".to_string()));
+        return Err(FlourineError::Conversion("No records found".to_string()));
     }
 
     write_batch(&state, builder).await
@@ -113,7 +113,7 @@ async fn write_avro_container(State(state): State<Arc<AppState>>, body: Bytes) -
     }
 
     if builder.row_count() == 0 {
-        return Err(TurbineError::Conversion("No records found".to_string()));
+        return Err(FlourineError::Conversion("No records found".to_string()));
     }
 
     write_batch(&state, builder).await

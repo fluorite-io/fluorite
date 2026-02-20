@@ -48,5 +48,15 @@ chrono = { version = "0.4", features = ["serde"] }
 # Compression
 zstd = "0.13"
 
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
 # Testing
 proptest = "1"

@@ -1,6 +1,6 @@
-# Turbine Java SDK
+# Flourine Java SDK
 
-Java client library for Turbine Event Bus.
+Java client library for Flourine Event Bus.
 
 ## Installation
 
@@ -8,8 +8,8 @@ Add to your `pom.xml`:
 
 ```xml
 <dependency>
-    <groupId>io.turbine</groupId>
-    <artifactId>turbine-sdk</artifactId>
+    <groupId>io.flourine</groupId>
+    <artifactId>flourine-sdk</artifactId>
     <version>0.1.0</version>
 </dependency>
 ```
@@ -19,9 +19,9 @@ Add to your `pom.xml`:
 ### Writer
 
 ```java
-import io.turbine.sdk.*;
-import io.turbine.sdk.proto.BatchAck;
-import io.turbine.sdk.proto.Record;
+import io.flourine.sdk.*;
+import io.flourine.sdk.proto.BatchAck;
+import io.flourine.sdk.proto.Record;
 import com.google.protobuf.ByteString;
 
 // Connect
@@ -49,9 +49,9 @@ writer.close();
 ### Reader (with Reader Groups)
 
 ```java
-import io.turbine.sdk.*;
-import io.turbine.sdk.proto.PartitionResult;
-import io.turbine.sdk.proto.Record;
+import io.flourine.sdk.*;
+import io.flourine.sdk.proto.PartitionResult;
+import io.flourine.sdk.proto.Record;
 
 // Configure
 ReaderConfig config = new ReaderConfig()
@@ -83,10 +83,44 @@ reader.stop();
 reader.close();
 ```
 
+### Schema
+
+```java
+import io.flourine.sdk.schema.*;
+
+// All fields are nullable by default. Use @NonNull to require a field.
+@FlourineSchema
+public class Order {
+    @NonNull public String orderId;
+    public long amount;          // nullable ["null", "long"]
+    public List<String> tags;    // nullable ["null", {"type":"array",...}]
+}
+
+// With evolution metadata
+@FlourineSchema(
+    namespace = "com.example",
+    renames = {@Rename(from = "old_name", to = "newName")},
+    deletions = {"removedField"}
+)
+public class OrderV2 {
+    @NonNull public String orderId;
+    public int newName;  // gets aliases: ["old_name"]
+}
+
+// Generate schema JSON
+String json = Schemas.schemaJson(Order.class);
+
+// Serialize / deserialize (schemaless binary)
+byte[] bytes = Schemas.toBytes(order);
+Order restored = Schemas.fromBytes(Order.class, bytes);
+```
+
+Supported types: `String`, `int`/`Integer`, `long`/`Long`, `float`/`Float`, `double`/`Double`, `boolean`/`Boolean`, `byte[]`, `List<T>`, `Map<String,T>`, Java enums, nested `@FlourineSchema` classes.
+
 ## Building
 
 ```bash
-cd sdks/java/turbine-sdk
+cd sdks/java/flourine-sdk
 mvn clean install
 ```
 
@@ -98,6 +132,6 @@ mvn test
 
 ## Wire Protocol
 
-The SDK uses generated protobuf messages from `proto/turbine_wire.proto` for:
+The SDK uses generated protobuf messages from `proto/flourine_wire.proto` for:
 - outer WebSocket envelope (`ClientMessage`/`ServerMessage`)
 - all request/response payloads

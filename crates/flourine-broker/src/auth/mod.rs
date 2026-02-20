@@ -1,0 +1,16 @@
+//! Authentication and authorization for flourine-broker.
+//!
+//! This module provides:
+//! - API key validation
+//! - ACL-based authorization with caching
+//! - Principal identification
+
+pub mod acl;
+pub mod api_key;
+pub mod error;
+pub mod principal;
+
+pub use acl::{AclChecker, Operation, ResourceType};
+pub use api_key::ApiKeyValidator;
+pub use error::AuthError;
+pub use principal::Principal;

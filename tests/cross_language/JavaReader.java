@@ -1,8 +1,8 @@
-package io.turbine.test;
+package io.flourine.test;
 
-import io.turbine.sdk.*;
-import io.turbine.sdk.proto.PartitionResult;
-import io.turbine.sdk.proto.Record;
+import io.flourine.sdk.*;
+import io.flourine.sdk.proto.PartitionResult;
+import io.flourine.sdk.proto.Record;
 import com.google.gson.*;
 
 import java.util.*;
@@ -11,7 +11,7 @@ import java.util.*;
  * Cross-language E2E test: Java reader.
  *
  * Usage:
- *     java -cp <classpath> io.turbine.test.JavaReader <url> <topic_id> <partition_id> <expected_count>
+ *     java -cp <classpath> io.flourine.test.JavaReader <url> <topic_id> <partition_id> <expected_count>
  *
  * Reads records and prints them as JSON to stdout.
  */

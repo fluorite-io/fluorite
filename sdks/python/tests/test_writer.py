@@ -1,7 +1,7 @@
 """Tests for Writer - focused on critical issues."""
 
 import pytest
-from turbine.exceptions import ProtocolException
+from flourine.exceptions import ProtocolException
 
 
 class TestWriterBoundsChecks:

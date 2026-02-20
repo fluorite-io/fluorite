@@ -1,6 +1,6 @@
 # Cross-Language E2E Tests
 
-This directory contains E2E tests that verify interoperability between the Rust agent and the Java/Python SDKs.
+This directory contains E2E tests that verify interoperability between the Rust broker and the Java/Python SDKs.
 
 ## Prerequisites
 
@@ -15,18 +15,18 @@ pip install -e .
 ### Java SDK
 
 ```bash
-cd sdks/java/turbine-sdk
+cd sdks/java/flourine-sdk
 mvn package -DskipTests
 ```
 
-This creates `target/turbine-sdk-0.1.0-jar-with-dependencies.jar`.
+This creates `target/flourine-sdk-0.1.0-jar-with-dependencies.jar`.
 
 ### Database
 
 Start a PostgreSQL instance:
 
 ```bash
-docker run -d --name turbine-test-db \
+docker run -d --name flourine-test-db \
   -e POSTGRES_PASSWORD=postgres \
   -p 5433:5432 \
   postgres:16
@@ -79,18 +79,20 @@ python3 python_reader.py ws://localhost:9000 1 0 5
 ### Java Writer
 
 ```bash
-java -cp "../../sdks/java/turbine-sdk/target/*:." \
-  io.turbine.test.JavaWriter ws://localhost:9000 1 0 5
+java -cp "../../sdks/java/flourine-sdk/target/*:." \
+  io.flourine.test.JavaWriter ws://localhost:9000 1 0 5
 ```
 
 ### Java Reader
 
 ```bash
-java -cp "../../sdks/java/turbine-sdk/target/*:." \
-  io.turbine.test.JavaReader ws://localhost:9000 1 0 5
+java -cp "../../sdks/java/flourine-sdk/target/*:." \
+  io.flourine.test.JavaReader ws://localhost:9000 1 0 5
 ```
 
 ## Test Matrix
+
+### Wire protocol tests
 
 | Writer | Reader | Test Name |
 |----------|----------|-----------|
@@ -100,9 +102,17 @@ java -cp "../../sdks/java/turbine-sdk/target/*:." \
 | Python | Java | `test_python_to_java` |
 | Mixed | Python | `test_mixed_writers` |
 
+### Schema (Avro-encoded value) tests
+
+| Writer | Reader | Test Name |
+|----------|----------|-----------|
+| Python | Java | `test_python_schema_to_java` |
+| Java | Python | `test_java_schema_to_python` |
+
 ## What These Tests Verify
 
 1. **Wire protocol compatibility**: Java and Python SDKs encode/decode messages correctly
 2. **Record serialization**: Keys and values are preserved across languages
 3. **Reader groups**: GroupReader in each SDK can join and read correctly
 4. **Offset tracking**: Records are delivered at correct offsets
+5. **Schema interop**: Avro-encoded record values are byte-compatible across SDKs

@@ -1,6 +1,6 @@
-# Turbine SDKs
+# Flourine SDKs
 
-Multi-language client libraries for Turbine Event Bus.
+Multi-language client libraries for Flourine Event Bus.
 
 ## Available SDKs
 
@@ -70,7 +70,7 @@ async with GroupReader.join(config) as reader:
 ### Java
 
 ```bash
-cd java/turbine-sdk
+cd java/flourine-sdk
 mvn clean install
 ```
 

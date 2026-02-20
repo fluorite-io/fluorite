@@ -124,10 +124,10 @@ fn make_complex_document(
 }
 
 fn main() {
-    use turbine::avro::value::BatchDeserializer;
+    use flourine::avro::value::BatchDeserializer;
 
     let apache_schema = apache_avro::Schema::parse_str(COMPLEX_SCHEMA).unwrap();
-    let fast_schema: turbine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
+    let fast_schema: flourine::avro::Schema = COMPLEX_SCHEMA.parse().unwrap();
 
     // Use large-sized document (matching criterion "large" benchmark)
     let document = make_complex_document(50, 50, 30, 200);

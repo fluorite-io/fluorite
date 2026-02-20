@@ -1,11 +1,11 @@
-# Turbine Python SDK
+# Flourine Python SDK
 
-Python client library for Turbine Event Bus.
+Python client library for Flourine Event Bus.
 
 ## Installation
 
 ```bash
-pip install turbine-sdk
+pip install flourine-sdk
 ```
 
 Or install from source:
@@ -21,8 +21,8 @@ pip install -e .
 
 ```python
 import asyncio
-from turbine import Writer, WriterConfig
-from turbine.proto import turbine_wire_pb2 as pb
+from flourine import Writer, WriterConfig
+from flourine.proto import flourine_wire_pb2 as pb
 
 async def main():
     # Connect
@@ -54,7 +54,7 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from turbine import GroupReader, ReaderConfig
+from flourine import GroupReader, ReaderConfig
 
 async def main():
     config = ReaderConfig(
@@ -83,7 +83,7 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from turbine import GroupReader, ReaderConfig
+from flourine import GroupReader, ReaderConfig
 
 async def main():
     config = ReaderConfig(
@@ -145,6 +145,6 @@ pytest tests/
 
 ## Wire Protocol
 
-The SDK uses generated protobuf messages from `proto/turbine_wire.proto` for:
+The SDK uses generated protobuf messages from `proto/flourine_wire.proto` for:
 - outer WebSocket envelope (`ClientMessage`/`ServerMessage`)
 - all request/response payloads

@@ -8,10 +8,10 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
 
-use turbine::buffer::{build_router, AppState, ParquetWriterConfig};
+use flourine::buffer::{build_router, AppState, ParquetWriterConfig};
 
 #[derive(Parser, Debug)]
-#[command(name = "turbine")]
+#[command(name = "flourine")]
 #[command(about = "High-performance Avro to Parquet conversion service")]
 struct Args {
     /// Host to bind to
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
 
-    info!(address = %addr, "Starting Turbine server");
+    info!(address = %addr, "Starting Flourine server");
     info!(output_dir = %args.output_dir, "Parquet files will be written to");
 
     axum::serve(listener, app).await?;

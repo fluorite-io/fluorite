@@ -1,0 +1,101 @@
+package io.flourine.test;
+
+import io.flourine.sdk.*;
+import io.flourine.sdk.proto.PartitionResult;
+import io.flourine.sdk.proto.Record;
+import io.flourine.sdk.schema.*;
+import com.google.gson.*;
+
+import java.util.*;
+
+/**
+ * Cross-language schema E2E test: Java reader with Avro-decoded values.
+ *
+ * Usage:
+ *     java -cp <classpath> io.flourine.test.JavaSchemaReader <url> <topic_id> <partition_id> <expected_count>
+ */
+public class JavaSchemaReader {
+
+    @FlourineSchema
+    public static class TestOrder {
+        public String name;
+        public long amount;
+        public boolean active;
+        public List<String> tags;
+
+        public TestOrder() {}
+    }
+
+    public static void main(String[] args) {
+        if (args.length != 4) {
+            System.err.println("Usage: JavaSchemaReader <url> <topic_id> <partition_id> <expected_count>");
+            System.exit(1);
+        }
+
+        String url = args[0];
+        int topicId = Integer.parseInt(args[1]);
+        int partitionId = Integer.parseInt(args[2]);
+        int expectedCount = Integer.parseInt(args[3]);
+
+        try {
+            String groupId = "schema-test-java-" + ProcessHandle.current().pid();
+
+            ReaderConfig config = new ReaderConfig()
+                    .url(url)
+                    .groupId(groupId)
+                    .topicId(topicId);
+
+            List<Map<String, Object>> decodedRecords = new ArrayList<>();
+            Gson gson = new Gson();
+
+            try (GroupReader reader = GroupReader.join(config)) {
+                int maxAttempts = 10;
+
+                for (int attempt = 0; attempt < maxAttempts; attempt++) {
+                    List<PartitionResult> results = reader.poll();
+
+                    for (PartitionResult result : results) {
+                        if (result.getPartitionId() == partitionId) {
+                            for (Record record : result.getRecordsList()) {
+                                byte[] valueBytes = record.getValue().toByteArray();
+                                TestOrder order = Schemas.fromBytes(TestOrder.class, valueBytes);
+
+                                Map<String, Object> decoded = new LinkedHashMap<>();
+                                if (record.hasKey()) {
+                                    decoded.put("key", new String(record.getKey().toByteArray()));
+                                } else {
+                                    decoded.put("key", null);
+                                }
+                                decoded.put("name", order.name);
+                                decoded.put("amount", order.amount);
+                                decoded.put("active", order.active);
+                                decoded.put("tags", order.tags);
+
+                                decodedRecords.add(decoded);
+                            }
+                        }
+                    }
+
+                    if (decodedRecords.size() >= expectedCount) {
+                        break;
+                    }
+
+                    Thread.sleep(500);
+                }
+            }
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("reader", "java");
+            result.put("topic_id", topicId);
+            result.put("partition_id", partitionId);
+            result.put("record_count", decodedRecords.size());
+            result.put("records", decodedRecords);
+
+            System.out.println(gson.toJson(result));
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace(System.err);
+            System.exit(1);
+        }
+    }
+}

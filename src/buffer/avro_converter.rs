@@ -6,7 +6,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
-use crate::buffer::error::{Result, TurbineError};
+use crate::buffer::error::{Result, FlourineError};
 
 pub fn avro_schema_to_arrow(avro_schema: &AvroSchema) -> Result<ArrowSchema> {
     match avro_schema {
@@ -22,7 +22,7 @@ pub fn avro_schema_to_arrow(avro_schema: &AvroSchema) -> Result<ArrowSchema> {
                 .collect();
             Ok(ArrowSchema::new(fields?))
         }
-        _ => Err(TurbineError::InvalidSchema(
+        _ => Err(FlourineError::InvalidSchema(
             "Root Avro schema must be a Record".to_string(),
         )),
     }
@@ -101,7 +101,7 @@ fn avro_type_to_arrow(avro_schema: &AvroSchema) -> Result<DataType> {
         }
         AvroSchema::Duration => Ok(DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano)),
         AvroSchema::BigDecimal => Ok(DataType::Utf8),
-        AvroSchema::Ref { name } => Err(TurbineError::InvalidSchema(format!(
+        AvroSchema::Ref { name } => Err(FlourineError::InvalidSchema(format!(
             "Schema reference '{}' not supported",
             name.fullname(None)
         ))),
@@ -136,7 +136,7 @@ impl RecordBatchBuilder {
             self.row_count += 1;
             Ok(())
         } else {
-            Err(TurbineError::Conversion("Expected Avro Record value".to_string()))
+            Err(FlourineError::Conversion("Expected Avro Record value".to_string()))
         }
     }
 
