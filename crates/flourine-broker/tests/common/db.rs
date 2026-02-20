@@ -19,6 +19,7 @@ pub struct TestDb {
     pub db_name: String,
     #[allow(dead_code)]
     admin_pool: PgPool,
+    url: String,
 }
 
 impl TestDb {
@@ -60,6 +61,7 @@ impl TestDb {
             pool,
             db_name,
             admin_pool,
+            url: test_url,
         }
     }
 
@@ -78,6 +80,11 @@ impl TestDb {
             .execute(pool)
             .await
             .expect("Failed to execute consolidated migration");
+    }
+
+    /// Connection URL for this test database.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Create a test topic with partitions.

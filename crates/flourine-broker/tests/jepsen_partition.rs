@@ -14,7 +14,7 @@ use flourine_broker::{Coordinator, CoordinatorConfig};
 use flourine_common::ids::{Offset, PartitionId, TopicId};
 use flourine_common::types::Record;
 
-use common::{CrashableBroker, TestDb, produce_records};
+use common::{CrashableBroker, FaultyObjectStore, TestDb, produce_records};
 
 /// Test that S3 failure does not result in false acknowledgment.
 #[tokio::test]
@@ -347,4 +347,110 @@ async fn test_no_partial_write_visibility() {
             watermark, end
         );
     }
+}
+
+/// Test that S3 latency does not cause false acks (slow != broken).
+/// Writes with 500ms S3 latency should still succeed with correct offsets.
+#[tokio::test]
+async fn test_s3_latency_does_not_cause_false_ack() {
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    use flourine_broker::{LocalFsStore, ObjectStore, TbinReader};
+    use flourine_common::types::Record;
+
+    use common::TestBrokerConfig;
+
+    let db = TestDb::new().await;
+    let temp_dir = TempDir::new().unwrap();
+    let store = FaultyObjectStore::new(LocalFsStore::new(temp_dir.path().to_path_buf()));
+    let config = TestBrokerConfig {
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        bucket: "test-bucket".to_string(),
+        key_prefix: "s3-latency-test".to_string(),
+    };
+
+    // 500ms latency on every put.
+    store.set_put_delay_ms(500);
+
+    let state = Arc::new(common::TestBrokerState::new(
+        db.pool.clone(),
+        store.clone(),
+        config,
+    ));
+
+    let topic_id = TopicId(db.create_topic("s3-latency-test", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    // Write 5 records — each will be slow but should succeed.
+    let mut acked_offsets = vec![];
+    for i in 0..5 {
+        let records = vec![Record {
+            key: Some(Bytes::from(format!("key-{}", i))),
+            value: Bytes::from(format!("slow-value-{}", i)),
+        }];
+        let (start, end) = produce_records(&state, topic_id, partition_id, records)
+            .await
+            .expect("Write should succeed despite S3 latency");
+        acked_offsets.push((start, end));
+    }
+
+    // All offsets should be contiguous and non-overlapping.
+    for i in 1..acked_offsets.len() {
+        assert_eq!(
+            acked_offsets[i].0 .0,
+            acked_offsets[i - 1].1 .0,
+            "Offsets should be contiguous: batch {} ends at {}, batch {} starts at {}",
+            i - 1,
+            acked_offsets[i - 1].1 .0,
+            i,
+            acked_offsets[i].0 .0
+        );
+    }
+
+    // Final watermark should equal the end of the last batch.
+    let watermark: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(next_offset, 0) FROM partition_offsets \
+         WHERE topic_id = $1 AND partition_id = $2",
+    )
+    .bind(topic_id.0 as i32)
+    .bind(partition_id.0 as i32)
+    .fetch_optional(&db.pool)
+    .await
+    .unwrap()
+    .unwrap_or(0);
+
+    assert_eq!(
+        watermark as u64,
+        acked_offsets.last().unwrap().1 .0,
+        "Watermark should match the last acked offset"
+    );
+
+    // Read back records and verify all 5 are present.
+    let batches: Vec<(String,)> = sqlx::query_as(
+        "SELECT s3_key FROM topic_batches WHERE topic_id = $1 AND partition_id = $2",
+    )
+    .bind(topic_id.0 as i32)
+    .bind(partition_id.0 as i32)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+
+    let mut all_records = vec![];
+    for (s3_key,) in batches {
+        let data = store.get(&s3_key).await.unwrap();
+        let metas = TbinReader::read_footer(&data).unwrap();
+        for meta in &metas {
+            if meta.topic_id == topic_id && meta.partition_id == partition_id {
+                let recs = TbinReader::read_segment(&data, meta, true).unwrap();
+                all_records.extend(recs);
+            }
+        }
+    }
+
+    assert_eq!(
+        all_records.len(),
+        5,
+        "All 5 records should be readable despite S3 latency"
+    );
 }

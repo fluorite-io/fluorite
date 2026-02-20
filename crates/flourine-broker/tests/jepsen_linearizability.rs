@@ -18,7 +18,7 @@ use flourine_broker::{LocalFsStore, ObjectStore, TbinReader};
 use flourine_common::ids::{Offset, PartitionId, TopicId};
 use flourine_common::types::Record;
 
-use common::{TestBrokerConfig, TestBrokerState, TestDb, produce_records};
+use common::{FaultyObjectStore, TestBrokerConfig, TestBrokerState, TestDb, produce_records};
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -340,4 +340,132 @@ async fn test_read_write_consistency() {
 
     writer_handle.await.expect("Writer should complete");
     reader_handle.await.expect("Reader should complete");
+}
+
+/// Same as `test_all_acknowledged_writes_visible` but with periodic S3 failures.
+#[tokio::test]
+async fn test_acknowledged_writes_visible_under_s3_faults() {
+    let db = TestDb::new().await;
+    let temp_dir = TempDir::new().unwrap();
+    let store = FaultyObjectStore::new(LocalFsStore::new(temp_dir.path().to_path_buf()));
+    let config = TestBrokerConfig {
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        bucket: "test-bucket".to_string(),
+        key_prefix: "ack-visible-s3-fault".to_string(),
+    };
+    let state = Arc::new(TestBrokerState::new(db.pool.clone(), store.clone(), config));
+
+    let topic_id = TopicId(db.create_topic("ack-visible-s3-fault", 1).await as u32);
+    let partition_id = PartitionId(0);
+    let acked_values: Arc<Mutex<Vec<Bytes>>> = Arc::new(Mutex::new(vec![]));
+
+    // Fault injector: periodically fail S3 puts.
+    let store_fault = store.clone();
+    let fault_handle = tokio::spawn(async move {
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            store_fault.fail_next_put();
+        }
+    });
+
+    let mut handles = vec![];
+    for producer_idx in 0..5 {
+        let state_clone = state.clone();
+        let acked_clone = acked_values.clone();
+        handles.push(tokio::spawn(async move {
+            for i in 0..10 {
+                let value = Bytes::from(format!("writer-{}-record-{}", producer_idx, i));
+                let records = vec![Record {
+                    key: Some(Bytes::from(format!("key-{}-{}", producer_idx, i))),
+                    value: value.clone(),
+                }];
+                let result = produce_records(&state_clone, topic_id, partition_id, records).await;
+                if result.is_ok() {
+                    acked_clone.lock().await.push(value);
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.await.expect("Writer task should complete");
+    }
+    fault_handle.await.unwrap();
+
+    let (records, _watermark) = fetch_all_records(&state, topic_id, partition_id)
+        .await
+        .expect("Read should succeed");
+
+    let acked = acked_values.lock().await;
+    let fetched_values: HashSet<Bytes> = records.iter().map(|r| r.value.clone()).collect();
+
+    for value in acked.iter() {
+        assert!(
+            fetched_values.contains(value),
+            "Acknowledged write {:?} not visible under S3 faults",
+            value
+        );
+    }
+}
+
+/// Same as `test_offset_assignment_unique` but with S3 failures.
+#[tokio::test]
+async fn test_offset_uniqueness_under_s3_faults() {
+    let db = TestDb::new().await;
+    let temp_dir = TempDir::new().unwrap();
+    let store = FaultyObjectStore::new(LocalFsStore::new(temp_dir.path().to_path_buf()));
+    let config = TestBrokerConfig {
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        bucket: "test-bucket".to_string(),
+        key_prefix: "unique-offset-s3-fault".to_string(),
+    };
+    let state = Arc::new(TestBrokerState::new(db.pool.clone(), store.clone(), config));
+
+    let topic_id = TopicId(db.create_topic("unique-offset-s3-fault", 1).await as u32);
+    let partition_id = PartitionId(0);
+    let all_offsets: Arc<Mutex<Vec<Offset>>> = Arc::new(Mutex::new(vec![]));
+
+    // Periodic S3 failures.
+    let store_fault = store.clone();
+    let fault_handle = tokio::spawn(async move {
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            store_fault.fail_next_put();
+        }
+    });
+
+    let mut handles = vec![];
+    for producer_idx in 0..5 {
+        let state_clone = state.clone();
+        let offsets_clone = all_offsets.clone();
+        handles.push(tokio::spawn(async move {
+            for i in 0..10 {
+                let records = vec![Record {
+                    key: Some(Bytes::from(format!("key-{}-{}", producer_idx, i))),
+                    value: Bytes::from(format!("value-{}-{}", producer_idx, i)),
+                }];
+                if let Ok((start, end)) =
+                    produce_records(&state_clone, topic_id, partition_id, records).await
+                {
+                    let offsets: Vec<Offset> = (start.0..end.0).map(Offset).collect();
+                    offsets_clone.lock().await.extend(offsets);
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.await.expect("Writer task should complete");
+    }
+    fault_handle.await.unwrap();
+
+    let offsets = all_offsets.lock().await;
+    let unique: HashSet<u64> = offsets.iter().map(|o| o.0).collect();
+    assert_eq!(
+        offsets.len(),
+        unique.len(),
+        "All offsets should be unique under S3 faults, but {} offsets assigned, only {} unique",
+        offsets.len(),
+        unique.len()
+    );
 }

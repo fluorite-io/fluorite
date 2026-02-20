@@ -1,14 +1,22 @@
 //! Operation history for linearizability checking in Jepsen-style tests.
 
-use bytes::Bytes;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
+use tokio::sync::Mutex;
+
 use flourine_common::ids::{Offset, WriterId};
+
+/// Thread-safe wrapper for OperationHistory.
+pub type SharedHistory = Arc<Mutex<OperationHistory>>;
 
 /// A write operation for linearizability tracking.
 #[derive(Debug, Clone)]
 pub struct WriteOp {
     pub writer_id: WriterId,
+    pub partition_id: u32,
     pub offset: Option<Offset>,
     pub value: Bytes,
     pub start_time: Instant,
@@ -19,6 +27,8 @@ pub struct WriteOp {
 /// A read operation for linearizability tracking.
 #[derive(Debug, Clone)]
 pub struct ReadOp {
+    pub partition_id: u32,
+    pub reader_id: String,
     pub requested_offset: Offset,
     pub returned_values: Vec<Bytes>,
     pub high_watermark: Offset,
@@ -39,10 +49,25 @@ impl OperationHistory {
         Self::default()
     }
 
+    /// Create a thread-safe shared instance.
+    pub fn shared() -> SharedHistory {
+        Arc::new(Mutex::new(Self::new()))
+    }
+
     pub fn record_write_start(&mut self, writer_id: WriterId, value: Bytes) -> usize {
+        self.record_write(writer_id, 0, value)
+    }
+
+    pub fn record_write(
+        &mut self,
+        writer_id: WriterId,
+        partition_id: u32,
+        value: Bytes,
+    ) -> usize {
         let idx = self.writes.len();
         self.writes.push(WriteOp {
             writer_id,
+            partition_id,
             offset: None,
             value,
             start_time: Instant::now(),
@@ -61,8 +86,19 @@ impl OperationHistory {
     }
 
     pub fn record_read_start(&mut self, offset: Offset) -> usize {
+        self.record_read(0, String::new(), offset)
+    }
+
+    pub fn record_read(
+        &mut self,
+        partition_id: u32,
+        reader_id: String,
+        offset: Offset,
+    ) -> usize {
         let idx = self.reads.len();
         self.reads.push(ReadOp {
+            partition_id,
+            reader_id,
             requested_offset: offset,
             returned_values: vec![],
             high_watermark: Offset(0),
@@ -89,6 +125,10 @@ impl OperationHistory {
     }
 
     /// Check that all acknowledged writes are eventually visible.
+    ///
+    /// A write is "visible" if its value appears in any successful read whose
+    /// offset range covers the write's offset. This handles paginated reads and
+    /// consumers that start from non-zero offsets.
     pub fn verify_acknowledged_writes_visible(&self) -> Result<(), String> {
         let successful_writes: Vec<_> = self
             .writes
@@ -100,29 +140,42 @@ impl OperationHistory {
             return Ok(());
         }
 
-        let final_read = self
-            .reads
-            .iter()
-            .filter(|r| r.success)
-            .max_by_key(|r| r.high_watermark.0);
-
-        let Some(final_read) = final_read else {
+        let successful_reads: Vec<_> = self.reads.iter().filter(|r| r.success).collect();
+        if successful_reads.is_empty() {
             return Err("No successful reads to verify against".to_string());
-        };
+        }
+
+        // Collect all observed values across every successful read into one set.
+        let all_observed: HashSet<&[u8]> = successful_reads
+            .iter()
+            .flat_map(|r| r.returned_values.iter().map(|v| v.as_ref()))
+            .collect();
+
+        // Find the latest read start time so we can bound the "happened-before" check.
+        let latest_read_start = successful_reads
+            .iter()
+            .map(|r| r.start_time)
+            .max()
+            .unwrap();
+
+        // The highest watermark across all reads is the upper bound of what
+        // the system has confirmed as committed.
+        let max_watermark = successful_reads
+            .iter()
+            .map(|r| r.high_watermark.0)
+            .max()
+            .unwrap();
 
         for write in &successful_writes {
             if let (Some(offset), Some(write_end_time)) = (write.offset, write.end_time) {
-                if write_end_time < final_read.start_time && offset.0 < final_read.high_watermark.0
-                {
-                    if !final_read.returned_values.contains(&write.value) {
+                // Only check writes that finished before the latest read started
+                // and whose offset is below the highest observed watermark.
+                if write_end_time < latest_read_start && offset.0 < max_watermark {
+                    if !all_observed.contains(write.value.as_ref()) {
                         return Err(format!(
-                            "Acknowledged write at offset {} with value {:?} not visible in final read \
-                             (watermark {}, write ended {:?} before read started {:?})",
-                            offset.0,
-                            write.value,
-                            final_read.high_watermark.0,
-                            write_end_time,
-                            final_read.start_time
+                            "Acknowledged write at offset {} (partition {}) with value {:?} \
+                             not visible in any read (max watermark {})",
+                            offset.0, write.partition_id, write.value, max_watermark
                         ));
                     }
                 }
@@ -132,16 +185,16 @@ impl OperationHistory {
         Ok(())
     }
 
-    /// Check that offsets are unique (no two writes got the same offset).
+    /// Check that offsets are unique per partition (no two writes got the same offset).
     pub fn verify_unique_offsets(&self) -> Result<(), String> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen: HashSet<(u32, u64)> = HashSet::new();
         for write in &self.writes {
             if write.success {
                 if let Some(offset) = write.offset {
-                    if !seen.insert(offset.0) {
+                    if !seen.insert((write.partition_id, offset.0)) {
                         return Err(format!(
-                            "Duplicate offset {} assigned to multiple writes",
-                            offset.0
+                            "Duplicate offset {} in partition {} assigned to multiple writes",
+                            offset.0, write.partition_id
                         ));
                     }
                 }
@@ -150,17 +203,158 @@ impl OperationHistory {
         Ok(())
     }
 
-    /// Check that watermark never regresses across reads.
+    /// Check that watermark never regresses across reads for the same
+    /// (reader_id, partition_id). Different readers or partitions are
+    /// independent and may observe different watermarks.
     pub fn verify_watermark_monotonic(&self) -> Result<(), String> {
-        let successful_reads: Vec<_> = self.reads.iter().filter(|r| r.success).collect();
+        let mut reads_by_stream: HashMap<(&str, u32), Vec<&ReadOp>> = HashMap::new();
+        for read in &self.reads {
+            if read.success {
+                reads_by_stream
+                    .entry((&read.reader_id, read.partition_id))
+                    .or_default()
+                    .push(read);
+            }
+        }
 
-        for window in successful_reads.windows(2) {
-            let (prev, curr) = (&window[0], &window[1]);
-            if curr.high_watermark.0 < prev.high_watermark.0 {
-                return Err(format!(
-                    "Watermark regressed from {} to {}",
-                    prev.high_watermark.0, curr.high_watermark.0
-                ));
+        for ((reader_id, partition_id), reads) in &reads_by_stream {
+            for window in reads.windows(2) {
+                let (prev, curr) = (&window[0], &window[1]);
+                if curr.high_watermark.0 < prev.high_watermark.0 {
+                    return Err(format!(
+                        "Watermark regressed from {} to {} for reader '{}' partition {}",
+                        prev.high_watermark.0, curr.high_watermark.0, reader_id, partition_id
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Each value appears at exactly one (partition, offset). No duplicate writes.
+    pub fn verify_no_duplicates(&self) -> Result<(), String> {
+        let mut value_to_location: HashMap<&[u8], (u32, u64)> = HashMap::new();
+        for write in &self.writes {
+            if write.success {
+                if let Some(offset) = write.offset {
+                    let location = (write.partition_id, offset.0);
+                    if let Some(&prev) = value_to_location.get(write.value.as_ref()) {
+                        if prev != location {
+                            return Err(format!(
+                                "Duplicate write: value {:?} at ({}, {}) and ({}, {})",
+                                write.value, prev.0, prev.1, location.0, location.1
+                            ));
+                        }
+                    } else {
+                        value_to_location.insert(&write.value, location);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Sequential reads by same consumer on a partition don't skip offsets.
+    pub fn verify_poll_contiguity(&self) -> Result<(), String> {
+        let mut reads_by_reader: HashMap<(&str, u32), Vec<&ReadOp>> = HashMap::new();
+        for read in &self.reads {
+            if read.success && !read.returned_values.is_empty() {
+                reads_by_reader
+                    .entry((&read.reader_id, read.partition_id))
+                    .or_default()
+                    .push(read);
+            }
+        }
+
+        for ((reader_id, partition_id), reads) in &reads_by_reader {
+            for window in reads.windows(2) {
+                let prev = &window[0];
+                let curr = &window[1];
+                let expected_next =
+                    prev.requested_offset.0 + prev.returned_values.len() as u64;
+                if curr.requested_offset.0 != expected_next {
+                    return Err(format!(
+                        "Poll contiguity violation for reader '{}' partition {}: \
+                         expected offset {} but got {}",
+                        reader_id, partition_id, expected_next, curr.requested_offset.0
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// If write A completed (acked) before write B was invoked (sent),
+    /// and both are on the same partition, then A.offset < B.offset.
+    pub fn verify_write_write_causal(&self) -> Result<(), String> {
+        let successful: Vec<_> = self
+            .writes
+            .iter()
+            .filter(|w| w.success && w.offset.is_some() && w.end_time.is_some())
+            .collect();
+
+        let mut by_partition: HashMap<u32, Vec<&WriteOp>> = HashMap::new();
+        for w in &successful {
+            by_partition.entry(w.partition_id).or_default().push(w);
+        }
+
+        for (partition_id, writes) in &by_partition {
+            for a in writes {
+                for b in writes {
+                    if std::ptr::eq(*a, *b) {
+                        continue;
+                    }
+                    let a_end = a.end_time.unwrap();
+                    if a_end < b.start_time {
+                        let a_off = a.offset.unwrap().0;
+                        let b_off = b.offset.unwrap().0;
+                        if a_off >= b_off {
+                            return Err(format!(
+                                "WW causal violation on partition {}: \
+                                 write {:?} (offset {}, completed {:?}) \
+                                 completed before write {:?} (offset {}, started {:?}), \
+                                 but offset is not less",
+                                partition_id,
+                                a.value,
+                                a_off,
+                                a.end_time,
+                                b.value,
+                                b_off,
+                                b.start_time,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Per-producer offsets within a partition are monotonically increasing.
+    pub fn verify_monotonic_sends(&self) -> Result<(), String> {
+        let mut writes_by_writer: HashMap<(WriterId, u32), Vec<&WriteOp>> = HashMap::new();
+        for write in &self.writes {
+            if write.success && write.offset.is_some() {
+                writes_by_writer
+                    .entry((write.writer_id, write.partition_id))
+                    .or_default()
+                    .push(write);
+            }
+        }
+
+        for ((writer_id, partition_id), writes) in &writes_by_writer {
+            for window in writes.windows(2) {
+                if let (Some(prev_offset), Some(curr_offset)) =
+                    (window[0].offset, window[1].offset)
+                {
+                    if curr_offset.0 <= prev_offset.0 {
+                        return Err(format!(
+                            "Non-monotonic send for writer {:?} partition {}: \
+                             offset {} followed by {}",
+                            writer_id, partition_id, prev_offset.0, curr_offset.0
+                        ));
+                    }
+                }
             }
         }
         Ok(())

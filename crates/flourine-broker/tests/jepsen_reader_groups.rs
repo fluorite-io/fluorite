@@ -821,3 +821,267 @@ async fn test_heartbeat_after_session_expired() {
         hb_result.status
     );
 }
+
+// ============ Clock Skew Tests ============
+
+/// Simulate clock skew by setting last_heartbeat to 60s in the past.
+/// Reader A should be evicted when B heartbeats (triggers stale check).
+#[tokio::test]
+async fn test_clock_skew_premature_expiration() {
+    let db = TestDb::new().await;
+    let config = CoordinatorConfig {
+        lease_duration: Duration::from_secs(45),
+        session_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let coordinator = Coordinator::new(db.pool.clone(), config);
+    let topic_id = TopicId(db.create_topic("clock-skew-early", 4).await as u32);
+
+    // Reader A joins
+    let result_a = coordinator
+        .join_group("cs-group", topic_id, "reader-a")
+        .await
+        .expect("Join should succeed");
+    let gen_a = result_a.generation;
+    assert!(!result_a.assignments.is_empty());
+
+    // Simulate clock skew: set A's heartbeat 60s in the past
+    sqlx::query(
+        "UPDATE reader_members SET last_heartbeat = NOW() - INTERVAL '60 seconds' \
+         WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3",
+    )
+    .bind("cs-group")
+    .bind(topic_id.0 as i32)
+    .bind("reader-a")
+    .execute(&db.pool)
+    .await
+    .expect("clock skew update should succeed");
+
+    // Reader B joins (triggers stale member check)
+    let _result_b = coordinator
+        .join_group("cs-group", topic_id, "reader-b")
+        .await
+        .expect("Join should succeed");
+
+    // B heartbeats to trigger cleanup of expired A
+    let gen_b: i64 = sqlx::query_scalar(
+        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cs-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query gen");
+
+    let _ = coordinator
+        .heartbeat(
+            "cs-group",
+            topic_id,
+            "reader-b",
+            flourine_common::ids::Generation(gen_b as u64),
+        )
+        .await;
+
+    // A's next heartbeat should return UnknownMember or RebalanceNeeded
+    let hb_a = coordinator
+        .heartbeat("cs-group", topic_id, "reader-a", gen_a)
+        .await
+        .expect("Heartbeat should not error");
+
+    assert!(
+        hb_a.status == flourine_broker::HeartbeatStatus::UnknownMember
+            || hb_a.status == flourine_broker::HeartbeatStatus::RebalanceNeeded,
+        "Clock-skewed reader should be evicted: {:?}",
+        hb_a.status
+    );
+}
+
+/// Simulate clock skew forward: reader A stops heartbeating but appears recent.
+/// Reset to real time, then A expires normally.
+#[tokio::test]
+async fn test_clock_skew_delayed_expiration() {
+    let db = TestDb::new().await;
+    let config = CoordinatorConfig {
+        lease_duration: Duration::from_secs(45),
+        session_timeout: Duration::from_secs(2),
+        ..Default::default()
+    };
+    let coordinator = Coordinator::new(db.pool.clone(), config);
+    let topic_id = TopicId(db.create_topic("clock-skew-late", 4).await as u32);
+
+    // Reader A joins
+    let result_a = coordinator
+        .join_group("cs-late-group", topic_id, "reader-a")
+        .await
+        .expect("Join should succeed");
+    assert!(!result_a.assignments.is_empty());
+
+    // Reader B joins
+    let _result_b = coordinator
+        .join_group("cs-late-group", topic_id, "reader-b")
+        .await
+        .expect("Join should succeed");
+
+    // Simulate forward clock skew: set A's heartbeat 60s in the future
+    sqlx::query(
+        "UPDATE reader_members SET last_heartbeat = NOW() + INTERVAL '60 seconds' \
+         WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3",
+    )
+    .bind("cs-late-group")
+    .bind(topic_id.0 as i32)
+    .bind("reader-a")
+    .execute(&db.pool)
+    .await
+    .expect("clock skew update should succeed");
+
+    // Wait past session timeout
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // B heartbeats — A should NOT be expired (appears recent due to clock skew)
+    let current_gen: i64 = sqlx::query_scalar(
+        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cs-late-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query gen");
+
+    let _hb_b = coordinator
+        .heartbeat(
+            "cs-late-group",
+            topic_id,
+            "reader-b",
+            flourine_common::ids::Generation(current_gen as u64),
+        )
+        .await
+        .expect("Heartbeat should succeed");
+
+    // A is NOT expired because its last_heartbeat is in the future
+    let a_still_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM reader_members \
+         WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3)",
+    )
+    .bind("cs-late-group")
+    .bind(topic_id.0 as i32)
+    .bind("reader-a")
+    .fetch_one(&db.pool)
+    .await
+    .expect("query");
+    assert!(
+        a_still_member,
+        "Reader A should still be a member (clock skew makes it appear recent)"
+    );
+
+    // Reset to real time (set heartbeat to past)
+    sqlx::query(
+        "UPDATE reader_members SET last_heartbeat = NOW() - INTERVAL '60 seconds' \
+         WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3",
+    )
+    .bind("cs-late-group")
+    .bind(topic_id.0 as i32)
+    .bind("reader-a")
+    .execute(&db.pool)
+    .await
+    .expect("reset clock skew");
+
+    // B heartbeats again — now A should be expired
+    let gen2: i64 = sqlx::query_scalar(
+        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cs-late-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query gen");
+
+    let _ = coordinator
+        .heartbeat(
+            "cs-late-group",
+            topic_id,
+            "reader-b",
+            flourine_common::ids::Generation(gen2 as u64),
+        )
+        .await;
+
+    let a_expired: bool = !sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM reader_members \
+         WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3)",
+    )
+    .bind("cs-late-group")
+    .bind(topic_id.0 as i32)
+    .bind("reader-a")
+    .fetch_one(&db.pool)
+    .await
+    .expect("query");
+    assert!(a_expired, "Reader A should be expired after clock reset");
+}
+
+/// Manipulate lease_expires_at to simulate lease expiry under clock skew.
+/// Reader B should claim A's partitions when lease is set to past.
+#[tokio::test]
+async fn test_lease_expiry_under_clock_manipulation() {
+    let db = TestDb::new().await;
+    let config = CoordinatorConfig {
+        lease_duration: Duration::from_secs(45),
+        session_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let coordinator = Coordinator::new(db.pool.clone(), config);
+    let topic_id = TopicId(db.create_topic("lease-clock", 4).await as u32);
+
+    // Reader A joins and gets all partitions
+    let result_a = coordinator
+        .join_group("lease-group", topic_id, "reader-a")
+        .await
+        .expect("Join should succeed");
+    assert_eq!(result_a.assignments.len(), 4, "A should get all 4 partitions");
+
+    // Set lease_expires_at to past for all of A's assignments
+    sqlx::query(
+        "UPDATE reader_assignments SET lease_expires_at = NOW() - INTERVAL '10 seconds' \
+         WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3",
+    )
+    .bind("lease-group")
+    .bind(topic_id.0 as i32)
+    .bind("reader-a")
+    .execute(&db.pool)
+    .await
+    .expect("expire leases");
+
+    // Reader B joins — should be able to claim A's expired partitions
+    let result_b = coordinator
+        .join_group("lease-group", topic_id, "reader-b")
+        .await
+        .expect("Join should succeed");
+
+    // B should get some partitions (A's leases expired)
+    assert!(
+        !result_b.assignments.is_empty(),
+        "Reader B should get partitions from expired leases"
+    );
+
+    // Check no partition is assigned to both A and B simultaneously in DB
+    let overlap_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (
+            SELECT partition_id FROM reader_assignments
+            WHERE group_id = $1 AND topic_id = $2 AND reader_id = 'reader-a'
+            AND lease_expires_at > NOW()
+        ) a
+        INNER JOIN (
+            SELECT partition_id FROM reader_assignments
+            WHERE group_id = $1 AND topic_id = $2 AND reader_id = 'reader-b'
+            AND lease_expires_at > NOW()
+        ) b USING (partition_id)",
+    )
+    .bind("lease-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("overlap query");
+
+    assert_eq!(
+        overlap_count, 0,
+        "No partition should be actively leased to both A and B"
+    );
+}

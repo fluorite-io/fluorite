@@ -249,7 +249,7 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
 
     // Commit to database
     let db_start = Instant::now();
-    match commit_batch(
+    let succeeded = match commit_batch(
         &drain_result.batches,
         &segment_metas,
         &drain_result.key_to_index,
@@ -272,17 +272,19 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
             FLUSH_ACK_DISTRIBUTE_SECONDS.observe(ack_start.elapsed().as_secs_f64());
 
             FLUSH_TOTAL.with_label_values(&["success"]).inc();
+            true
         }
         Err(e) => {
             error!("Failed to commit batch: {}", e);
             FLUSH_TOTAL.with_label_values(&["error"]).inc();
             ERRORS_TOTAL.with_label_values(&["db_commit"]).inc();
             // Acks won't be sent, writers will retry
+            false
         }
-    }
+    };
 
     FLUSH_LATENCY_SECONDS.observe(flush_start.elapsed().as_secs_f64());
-    true
+    succeeded
 }
 
 /// Commit a batch of batches to the database.

@@ -16,8 +16,10 @@ use flourine_broker::{Coordinator, CoordinatorConfig, ObjectStore};
 
 // Re-export sub-module types so test files don't need to change imports.
 pub use db::{TestDb, cleanup_test_db, produce_records};
-pub use fault_injection::{CrashableBroker, FaultyObjectStore};
-pub use operation_history::{OperationHistory, ReadOp, WriteOp};
+pub use fault_injection::{
+    CrashableBroker, CrashableWsBroker, DbBlocker, FaultyObjectStore, MultiBrokerCluster,
+};
+pub use operation_history::{OperationHistory, ReadOp, SharedHistory, WriteOp};
 
 // ============ Test-Only Broker Types ============
 

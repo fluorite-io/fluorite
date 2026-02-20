@@ -20,7 +20,7 @@ use flourine_wire::{
     ClientMessage, ServerMessage, reader, decode_server_message, encode_client_message, writer,
 };
 
-use common::TestDb;
+use common::{CrashableWsBroker, TestDb};
 
 /// Find an available port.
 async fn find_available_port() -> SocketAddr {
@@ -445,4 +445,245 @@ async fn test_connection_close_during_produce() {
     }
 
     ws.close(None).await.ok();
+}
+
+/// Connection drop mid-append with slow flush must not corrupt broker state.
+/// After the drop, a fresh client can write and read consistently.
+#[tokio::test]
+async fn test_connection_drop_mid_append_broker_stays_healthy() {
+    let db = TestDb::new().await;
+    let topic_id = db.create_topic("drop-mid-append", 1).await;
+    let partition_id = PartitionId(0);
+
+    let broker = CrashableWsBroker::start(db.pool.clone()).await;
+
+    // Slow down flush so the append is still in-flight when we drop
+    broker.faulty_store().set_put_delay_ms(1000);
+
+    let url = format!("ws://{}", broker.addr());
+
+    // Connect, send append, immediately drop without awaiting response
+    {
+        let (mut ws, _) = connect_async(&url).await.expect("connect");
+        let req = writer::AppendRequest {
+            writer_id: WriterId::new(),
+            append_seq: AppendSeq(1),
+            batches: vec![RecordBatch {
+                topic_id: TopicId(topic_id as u32),
+                partition_id,
+                schema_id: SchemaId(100),
+                records: vec![Record {
+                    key: None,
+                    value: Bytes::from("dropped-value"),
+                }],
+            }],
+        };
+        let buf = encode_client_frame(ClientMessage::Append(req), 8192);
+        ws.send(Message::Binary(buf)).await.unwrap();
+        drop(ws);
+    }
+
+    // Wait for flush to complete
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Remove delay for subsequent operations
+    broker.faulty_store().set_put_delay_ms(0);
+
+    // Fresh connection: write 1 record
+    let (mut ws, _) = connect_async(&url).await.expect("reconnect");
+    let fresh_writer = WriterId::new();
+    let req = writer::AppendRequest {
+        writer_id: fresh_writer,
+        append_seq: AppendSeq(1),
+        batches: vec![RecordBatch {
+            topic_id: TopicId(topic_id as u32),
+            partition_id,
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from("fresh-value"),
+            }],
+        }],
+    };
+    let buf = encode_client_frame(ClientMessage::Append(req), 8192);
+    ws.send(Message::Binary(buf)).await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let resp = match msg {
+        Message::Binary(d) => decode_server_frame(&d),
+        _ => panic!("expected binary"),
+    };
+    let append_resp = match resp {
+        ServerMessage::Append(r) => r,
+        _ => panic!("expected append response"),
+    };
+    assert!(append_resp.success, "fresh write should succeed after connection drop");
+
+    // Read all records — verify consistency
+    let fetch_req = reader::ReadRequest {
+        group_id: String::new(),
+        reader_id: String::new(),
+        generation: flourine_common::ids::Generation(0),
+        reads: vec![reader::PartitionRead {
+            topic_id: TopicId(topic_id as u32),
+            partition_id,
+            offset: Offset(0),
+            max_bytes: 10 * 1024 * 1024,
+        }],
+    };
+    let buf = encode_client_frame(ClientMessage::Read(fetch_req), 8192);
+    ws.send(Message::Binary(buf)).await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let read_resp = match msg {
+        Message::Binary(d) => match decode_server_frame(&d) {
+            ServerMessage::Read(r) => r,
+            _ => panic!("expected read response"),
+        },
+        _ => panic!("expected binary"),
+    };
+    assert!(read_resp.success, "read should succeed");
+
+    // fresh-value must be present
+    let all_values: Vec<&Bytes> = read_resp
+        .results
+        .iter()
+        .flat_map(|r| r.records.iter().map(|rec| &rec.value))
+        .collect();
+    assert!(
+        all_values.contains(&&Bytes::from("fresh-value")),
+        "fresh write must be visible"
+    );
+
+    // Contiguous offsets: record count == watermark
+    let total_records: usize = read_resp.results.iter().map(|r| r.records.len()).sum();
+    let hwm = read_resp.results.first().map(|r| r.high_watermark.0).unwrap_or(0);
+    assert_eq!(
+        total_records as u64, hwm,
+        "offsets should be contiguous: {} records but watermark {}",
+        total_records, hwm
+    );
+}
+
+/// Rapid connect/disconnect stress test — catches memory leaks, state accumulation.
+#[tokio::test]
+async fn test_rapid_connect_disconnect_no_state_corruption() {
+    let db = TestDb::new().await;
+    let topic_id = db.create_topic("rapid-churn", 1).await;
+    let partition_id = PartitionId(0);
+
+    let broker = CrashableWsBroker::start(db.pool.clone()).await;
+    let url = format!("ws://{}", broker.addr());
+
+    // 30 rapid connect/send/drop cycles
+    for i in 0..30u64 {
+        let (mut ws, _) = connect_async(&url).await.expect("connect");
+        let req = writer::AppendRequest {
+            writer_id: WriterId::new(),
+            append_seq: AppendSeq(1),
+            batches: vec![RecordBatch {
+                topic_id: TopicId(topic_id as u32),
+                partition_id,
+                schema_id: SchemaId(100),
+                records: vec![Record {
+                    key: None,
+                    value: Bytes::from(format!("churn-{}", i)),
+                }],
+            }],
+        };
+        let buf = encode_client_frame(ClientMessage::Append(req), 8192);
+        ws.send(Message::Binary(buf)).await.unwrap();
+        drop(ws);
+    }
+
+    // Wait for all pending flushes to complete
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Fresh connection: write 1 more record and read all
+    let (mut ws, _) = connect_async(&url).await.expect("reconnect");
+    let req = writer::AppendRequest {
+        writer_id: WriterId::new(),
+        append_seq: AppendSeq(1),
+        batches: vec![RecordBatch {
+            topic_id: TopicId(topic_id as u32),
+            partition_id,
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from("final-value"),
+            }],
+        }],
+    };
+    let buf = encode_client_frame(ClientMessage::Append(req), 8192);
+    ws.send(Message::Binary(buf)).await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let resp = match msg {
+        Message::Binary(d) => match decode_server_frame(&d) {
+            ServerMessage::Append(r) => r,
+            _ => panic!("expected append response"),
+        },
+        _ => panic!("expected binary"),
+    };
+    assert!(resp.success, "final write should succeed after rapid churn");
+
+    // Read all records
+    let fetch_req = reader::ReadRequest {
+        group_id: String::new(),
+        reader_id: String::new(),
+        generation: flourine_common::ids::Generation(0),
+        reads: vec![reader::PartitionRead {
+            topic_id: TopicId(topic_id as u32),
+            partition_id,
+            offset: Offset(0),
+            max_bytes: 10 * 1024 * 1024,
+        }],
+    };
+    let buf = encode_client_frame(ClientMessage::Read(fetch_req), 8192);
+    ws.send(Message::Binary(buf)).await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let read_resp = match msg {
+        Message::Binary(d) => match decode_server_frame(&d) {
+            ServerMessage::Read(r) => r,
+            _ => panic!("expected read response"),
+        },
+        _ => panic!("expected binary"),
+    };
+    assert!(read_resp.success, "read should succeed");
+
+    // Verify: final-value is present
+    let all_values: Vec<Bytes> = read_resp
+        .results
+        .iter()
+        .flat_map(|r| r.records.iter().map(|rec| rec.value.clone()))
+        .collect();
+    assert!(
+        all_values.contains(&Bytes::from("final-value")),
+        "final write must be visible"
+    );
+
+    // All offsets unique (no gaps or duplicates relative to watermark)
+    let hwm = read_resp.results.first().map(|r| r.high_watermark.0).unwrap_or(0);
+    assert_eq!(
+        all_values.len() as u64, hwm,
+        "record count {} should equal watermark {}",
+        all_values.len(), hwm
+    );
 }
