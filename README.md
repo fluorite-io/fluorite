@@ -4,15 +4,15 @@ Unified data infrastructure for event streaming, CDC, and schema management.
 
 ## The Problem
 
-Data infrastructure is built incidentally, not deliberately. Kafka started as a log. Debezium bolted CDC onto Kafka Connect. Sqoop moved batches between HDFS and databases. Avro, Parquet, and Iceberg each solved a serialization or table format problem in isolation. The result is a stack of independently evolved systems glued together by YAML and prayer: ZooKeeper (or KRaft), Connect clusters, a schema registry, format converters, catalog sync jobs, and an operator who understands all of them.
+Production data infrastructure is typically several independent systems: Kafka for transport, Debezium + Connect for CDC, a schema registry for compatibility, Avro/Parquet/Iceberg for serialization and table formats. Each solves a narrow problem. Together they require ZooKeeper (or KRaft), Connect clusters, a separate registry service, format converters, and catalog sync.
 
-Schema management is the worst casualty. Confluent Schema Registry runs as a separate service, enforces compatibility only at registration time (never on the broker), and requires clients to manually look up schema IDs. Your code defines a struct, your build generates an Avro schema, you `curl` it into the registry, note the ID, and hard-code it into your producer config. When a field is renamed or removed, you manage the migration outside the system — the registry has no concept of renames or deletions. The schema is an artifact alongside your code rather than derived from it.
+Schema management is particularly fragmented. Confluent Schema Registry is a separate service that enforces compatibility at registration time but not on the broker. Clients manually look up schema IDs. When a field is renamed or removed, the migration happens outside the system — the registry has no concept of renames or deletions. The schema is an artifact managed alongside your code rather than derived from it.
 
-Flourine replaces this with a single system. One binary handles event ingestion, transport, schema management, and (planned) CDC and cataloging. Schemas are defined as native language types — annotated dataclasses in Python, annotated POJOs in Java — and the SDK generates Avro schemas, handles serialization, and tracks evolution (field renames and deletions) in the schema metadata itself. The thesis is that these concerns are not independent — they share metadata, storage, and failure semantics — and unifying them eliminates the operational surface area that makes data infrastructure hostile to deploy and maintain.
+Flourine unifies event ingestion, transport, schema management, and (planned) CDC and cataloging in a single binary. Schemas are defined as native language types — annotated dataclasses in Python, annotated POJOs in Java — and the SDK generates Avro schemas, handles serialization, and tracks evolution (field renames and deletions) in the schema metadata. These concerns share metadata, storage, and failure semantics; unifying them reduces operational surface area.
 
 ## What Flourine Does
 
-Flourine is a disaggregated event bus: stateless Rust brokers, S3 for data, Postgres for metadata. Writers send records over WebSocket. Brokers buffer, compress (ZSTD), and flush to S3 as TBIN files. A single Postgres transaction per flush atomically commits offsets, segment index, and writer dedup state. Readers fetch segments via S3 range reads indexed by the segment catalog in Postgres.
+Disaggregated event bus: stateless Rust brokers, S3 for data, Postgres for metadata. Writers send records over WebSocket. Brokers buffer, compress (ZSTD), and flush to S3 as TBIN files. A single Postgres transaction per flush commits offsets, segment index, and writer dedup state atomically. Readers fetch segments via S3 range reads.
 
 Key properties:
 - **Exactly-once writer-to-storage** — idempotent writers with LRU + Postgres dedup
@@ -52,13 +52,13 @@ What this replaces:
 
 ## What's Built Today
 
-**Event bus with exactly-once append.** Writers use monotonic sequence numbers. The broker deduplicates via a two-tier cache (LRU in-memory, Postgres fallback). Retries on backpressure or disconnect are safe — same `append_seq`, same result.
+**Exactly-once append.** Monotonic writer sequence numbers with two-tier dedup (LRU in-memory + Postgres). Retries on backpressure or disconnect are safe.
 
-**Pipelined flush.** The broker buffers records from multiple writers, merges them by (topic, partition, schema), compresses into TBIN files (ZSTD + CRC32 per segment), writes to S3, and atomically commits offsets + segment index + dedup state in a single Postgres transaction. One flush runs while the next batch fills.
+**Pipelined flush.** Buffer records from multiple writers, merge by (topic, partition, schema), compress into TBIN (ZSTD + CRC32), write to S3, commit offsets + index + dedup in one Postgres transaction. One flush runs while the next batch fills.
 
-**Reader groups.** Lease-based partition assignment coordinated through Postgres. Deterministic range-based assignment (pure function, no leader election). Incremental rebalance — readers keep owned partitions when possible. Dead readers detected via heartbeat expiry.
+**Reader groups.** Lease-based partition assignment via Postgres. Deterministic range assignment (pure function, no leader election). Incremental rebalance; dead readers detected via heartbeat expiry.
 
-**Schema registry.** Avro schemas with backward compatibility validation at registration time. High-performance Avro deserialization (5-9x faster than apache-avro, 1.5 GiB/s throughput) with zero-copy and bump allocation.
+**Schema registry.** Avro backward compatibility validation at registration time. Built-in Avro deserializer (5-9x faster than apache-avro, 1.5 GiB/s) with zero-copy and bump allocation.
 
 **Auth.** API key authentication with ACLs on the admin API.
 
@@ -68,11 +68,11 @@ What this replaces:
 
 ## SDKs
 
-Rust, Java, and Python. All implement the binary wire protocol over WebSocket with idempotent writes, consumer groups, and automatic retry with exponential backoff.
+Rust, Java, and Python. Binary wire protocol over WebSocket. Idempotent writes, consumer groups, automatic retry with backoff.
 
 ### Schema-as-Code
 
-Schemas are defined as native language types. The SDK generates Avro schemas, serializes/deserializes, and tracks evolution metadata (field renames and deletions) — no separate schema files, no manual registry calls.
+Define schemas as native types. The SDK generates Avro schemas, serializes/deserializes, and tracks evolution (renames, deletions). No separate schema files or manual registry calls.
 
 **Python** — `@schema` decorator on dataclasses:
 
@@ -118,13 +118,13 @@ Event restored = Schemas.fromBytes(Event.class, data);
 String json = Schemas.schemaJson(Event.class); // for registry upload
 ```
 
-Both generate valid Avro schemas with aliases for renamed fields and `flourine.deletions` metadata for dropped fields, so the registry's backward compatibility check passes across renames and deletions.
+Both generate Avro schemas with aliases for renamed fields and `flourine.deletions` metadata for dropped fields. The registry's backward compatibility check passes across renames and deletions.
 
 ### Writer API
 
-Writers connect over WebSocket, acquire a unique writer ID, and append records with automatic idempotency (monotonic `append_seq` + broker dedup). Backpressure triggers exponential backoff transparently.
+Connect over WebSocket, get a unique writer ID, append with automatic idempotency (`append_seq` + broker dedup). Backpressure retries with exponential backoff.
 
-**Python** — async context manager, fire-and-forget via `send_async`:
+**Python:**
 
 ```python
 async with Writer.connect("ws://localhost:9000") as writer:
@@ -133,7 +133,7 @@ async with Writer.connect("ws://localhost:9000") as writer:
     # ack.start_offset, ack.end_offset
 ```
 
-**Java** — `AutoCloseable`, sync and `CompletableFuture` variants:
+**Java:**
 
 ```java
 try (Writer writer = Writer.connect("ws://localhost:9000")) {
@@ -142,7 +142,7 @@ try (Writer writer = Writer.connect("ws://localhost:9000")) {
 }
 ```
 
-**Rust** — `Arc<Writer>` for multi-task sharing, `JoinHandle` for fire-and-forget:
+**Rust:**
 
 ```rust
 let writer = Writer::connect("ws://localhost:9000").await?;
@@ -152,9 +152,9 @@ let ack = writer.append_one(TopicId(1), PartitionId(0), SchemaId(100),
 
 ### Reader API
 
-Readers join consumer groups with lease-based partition assignment. Heartbeats, rebalancing, and offset tracking are handled by the SDK. The poll loop returns records grouped by partition and schema ID.
+Join consumer groups with lease-based partition assignment. The SDK handles heartbeats, rebalancing, and offset tracking. Poll returns records grouped by partition and schema ID.
 
-**Python** — async iterator for continuous consumption:
+**Python:**
 
 ```python
 config = ReaderConfig(url="ws://localhost:9000", group_id="my-group", topic_id=1)
@@ -167,7 +167,7 @@ async with GroupReader.join(config) as reader:
         await reader.commit()
 ```
 
-**Java** — standard poll loop with `AutoCloseable`:
+**Java:**
 
 ```java
 ReaderConfig config = new ReaderConfig()
@@ -182,7 +182,7 @@ try (GroupReader reader = GroupReader.join(config)) {
 }
 ```
 
-**Rust** — async poll with `Arc<GroupReader>`:
+**Rust:**
 
 ```rust
 let reader = GroupReader::join(config).await?;
@@ -198,9 +198,9 @@ reader.commit().await?;
 
 ## Roadmap
 
-- **CDC ingestion** — database change capture without Debezium or Connect
-- **Data catalog** — unified metadata across topics, schemas, and consumers
-- **Iceberg sink** — streaming to lakehouse without separate connectors (Avro→Arrow→Parquet converter infra exists in `flourine-core`)
+- **CDC ingestion** — database change capture without Debezium/Connect
+- **Data catalog** — unified metadata across topics, schemas, consumers
+- **Iceberg sink** — streaming to lakehouse (Avro→Arrow→Parquet infra exists in `flourine-core`)
 - **JS SDK**, multi-topic reader groups, quotas, multi-tenancy
 
 ## Quick Start

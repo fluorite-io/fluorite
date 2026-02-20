@@ -17,7 +17,42 @@ pip install -e .
 
 ## Usage
 
-### Writer
+### FlourineClient (High-Level API)
+
+```python
+import asyncio
+from dataclasses import dataclass
+from typing import Annotated
+from flourine import FlourineClient, ClientConfig, schema, NonNull
+
+@schema(topic="orders", namespace="com.example")
+@dataclass
+class OrderEvent:
+    order_id: Annotated[str, NonNull]
+    amount: int
+
+async def main():
+    config = ClientConfig(
+        ws_url="ws://localhost:9000",
+        admin_url="http://localhost:9001",
+        api_key="tb_your_api_key",
+    )
+
+    async with FlourineClient.connect(config) as client:
+        # Send — one call handles schema registration + serialization + partitioning
+        await client.send(OrderEvent(order_id="abc", amount=100))
+        await client.send(OrderEvent(order_id="abc", amount=100), key=b"abc")       # key-based partition
+        await client.send(OrderEvent(order_id="abc", amount=100), partition=2)       # explicit partition
+        await client.send(OrderEvent(order_id="abc", amount=100), topic="orders-stg") # topic override
+
+        # Read — typed objects
+        async for event in client.consume(OrderEvent, group_id="my-group"):
+            print(event.order_id)
+
+asyncio.run(main())
+```
+
+### Writer (Low-Level API)
 
 ```python
 import asyncio
@@ -107,6 +142,16 @@ asyncio.run(main())
 ```
 
 ## Configuration
+
+### ClientConfig
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ws_url` | `ws://localhost:9000` | WebSocket URL for data plane |
+| `admin_url` | `http://localhost:9001` | HTTP URL for admin API |
+| `api_key` | `None` | API key for authentication |
+| `max_in_flight` | `256` | Max concurrent in-flight requests |
+| `timeout` | `30.0` | Request timeout in seconds |
 
 ### WriterConfig
 

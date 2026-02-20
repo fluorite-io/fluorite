@@ -33,6 +33,7 @@ AvroFloat = Float32
 def schema(
     cls=None,
     *,
+    topic: str | None = None,
     namespace: str | None = None,
     renames: dict[str, str] | None = None,
     deletions: list[str] | None = None,
@@ -44,7 +45,7 @@ def schema(
         @dataclass
         class Foo: ...
 
-        @schema(namespace="com.example")
+        @schema(topic="orders", namespace="com.example")
         @dataclass
         class Bar: ...
     """
@@ -52,6 +53,8 @@ def schema(
     deletions = deletions or []
 
     def wrap(cls):
+        if topic is not None:
+            cls.__flourine_topic__ = topic
         return _apply_schema(cls, namespace, renames, deletions)
 
     if cls is not None:

@@ -64,7 +64,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(gh api:*)",
       "Bash(curl:*)",
-      "Bash(git clone:*)"
+      "Bash(git clone:*)",
+      "Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id_ed25519_nikhilsimha -o IdentitiesOnly=yes\" git push origin main)"
     ]
   }
 }

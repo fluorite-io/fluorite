@@ -9,6 +9,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
 public @interface FlourineSchema {
+    String topic() default "";
     String namespace() default "";
     Rename[] renames() default {};
     String[] deletions() default {};

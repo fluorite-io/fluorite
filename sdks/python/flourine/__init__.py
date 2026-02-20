@@ -20,6 +20,7 @@ Example usage:
 
 from .writer import Writer, WriterConfig
 from .reader import GroupReader, ReaderConfig
+from .client import FlourineClient, ClientConfig
 from .proto import flourine_wire_pb2
 from ._schema import schema, Int32, Float32, NonNull
 from .exceptions import (
@@ -37,6 +38,8 @@ __all__ = [
     "WriterConfig",
     "GroupReader",
     "ReaderConfig",
+    "FlourineClient",
+    "ClientConfig",
     "flourine_wire_pb2",
     "schema",
     "Int32",

@@ -16,7 +16,34 @@ Add to your `pom.xml`:
 
 ## Usage
 
-### Writer
+### FlourineClient (High-Level API)
+
+```java
+import io.flourine.sdk.*;
+import io.flourine.sdk.schema.*;
+
+@FlourineSchema(topic = "orders", namespace = "com.example")
+public class OrderEvent {
+    @NonNull public String orderId;
+    public long amount;
+}
+
+// Connect
+try (FlourineClient client = FlourineClient.connect(new ClientConfig().apiKey("tb_..."))) {
+    // Send — one call handles schema registration + serialization + partitioning
+    client.send(new OrderEvent("abc", 100));
+    client.send(new OrderEvent("abc", 100), "abc".getBytes());  // key-based partition
+    client.send(new OrderEvent("abc", 100), 2);                  // explicit partition
+    client.sendToTopic(new OrderEvent("abc", 100), "orders-stg"); // topic override
+
+    // Read — typed callback
+    client.consume(OrderEvent.class, "my-group", event -> {
+        System.out.println(event.orderId);
+    });
+}
+```
+
+### Writer (Low-Level API)
 
 ```java
 import io.flourine.sdk.*;
