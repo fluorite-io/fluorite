@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use flourine_broker::{ObjectStore, TbinWriter};
+use flourine_broker::{ObjectStore, FlWriter};
 use flourine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
@@ -118,7 +118,7 @@ pub async fn produce_records<S: ObjectStore + Send + Sync>(
     let counter = APPEND_KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
     let timestamp = chrono::Utc::now().timestamp_millis();
     let key = format!(
-        "{}/{}/{}-{}.tbin",
+        "{}/{}/{}-{}.fl",
         state.config.key_prefix,
         chrono::Utc::now().format("%Y-%m-%d"),
         timestamp,
@@ -132,11 +132,11 @@ pub async fn produce_records<S: ObjectStore + Send + Sync>(
         records: records.clone(),
     };
 
-    let mut writer = TbinWriter::new();
+    let mut writer = FlWriter::new();
     writer.add_segment(&batch)?;
     let segment_metas = writer.segment_metas().to_vec();
-    let tbin_data = writer.finish();
-    state.store.put(&key, tbin_data).await?;
+    let fl_data = writer.finish();
+    state.store.put(&key, fl_data).await?;
 
     let mut tx = state.pool.begin().await?;
     let ingest_time = chrono::Utc::now();

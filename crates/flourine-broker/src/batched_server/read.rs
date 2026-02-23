@@ -7,7 +7,7 @@ use flourine_wire::{ERR_INTERNAL_ERROR, STATUS_OK, ServerMessage, reader};
 
 use crate::metrics::{LatencyTimer, READ_LATENCY_SECONDS, READ_REQUESTS_TOTAL};
 use crate::object_store::ObjectStore;
-use crate::tbin::{Codec, SegmentMeta, TbinReader};
+use crate::fl::{Codec, SegmentMeta, FlReader};
 use crate::BrokerError;
 
 use super::encoding::encode_server_message_vec;
@@ -133,7 +133,7 @@ async fn process_read<S: ObjectStore + Send + Sync>(
                 crc32: crc32 as u32,
             };
 
-            let records = TbinReader::read_segment(&segment_bytes, &meta, true)?;
+            let records = FlReader::read_segment(&segment_bytes, &meta, true)?;
             let skip = (read.offset.0 as i64 - start_offset).max(0) as usize;
             if skip >= records.len() {
                 continue;

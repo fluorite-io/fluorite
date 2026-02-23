@@ -219,7 +219,7 @@ pub fn bench_commit_batch(c: &mut Criterion) {
                         sqlx::query(
                             r#"
                             INSERT INTO topic_batches (topic_id, partition_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
-                            VALUES (1, 0, 100, $1, $2, $3, 'bench/test.tbin', NOW())
+                            VALUES (1, 0, 100, $1, $2, $3, 'bench/test.fl', NOW())
                             "#,
                         )
                         .bind(current)
@@ -288,7 +288,7 @@ pub fn bench_multi_partition_commit(c: &mut Criterion) {
                             sqlx::query(
                                 r#"
                                 INSERT INTO topic_batches (topic_id, partition_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
-                                VALUES (1, $1, 100, $2, $3, 100, 'bench/test.tbin', NOW())
+                                VALUES (1, $1, 100, $2, $3, 100, 'bench/test.fl', NOW())
                                 "#,
                             )
                             .bind(p)
@@ -333,7 +333,7 @@ pub fn bench_batch_lookup(c: &mut Criterion) {
             sqlx::query(
                 r#"
                 INSERT INTO topic_batches (topic_id, partition_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
-                VALUES (1, 0, 100, $1, $2, 100, 'bench/test.tbin', NOW())
+                VALUES (1, 0, 100, $1, $2, 100, 'bench/test.fl', NOW())
                 "#,
             )
             .bind(start as i64)

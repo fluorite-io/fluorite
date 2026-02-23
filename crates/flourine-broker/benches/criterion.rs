@@ -30,13 +30,13 @@ fn db_config() -> Criterion {
 
 // Micro-benchmark groups
 criterion_group! {
-    name = tbin_benches;
+    name = fl_benches;
     config = micro_config();
     targets =
-        micro::tbin::bench_tbin_encode,
-        micro::tbin::bench_tbin_decode,
-        micro::tbin::bench_tbin_footer,
-        micro::tbin::bench_compression_ratio
+        micro::fl::bench_fl_encode,
+        micro::fl::bench_fl_decode,
+        micro::fl::bench_fl_footer,
+        micro::fl::bench_compression_ratio
 }
 
 criterion_group! {
@@ -83,7 +83,7 @@ criterion_group! {
 
 // Run all benchmarks
 criterion_main!(
-    tbin_benches,
+    fl_benches,
     buffer_benches,
     wire_benches,
     db_benches,

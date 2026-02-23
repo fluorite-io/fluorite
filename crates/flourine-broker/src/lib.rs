@@ -13,7 +13,7 @@ pub mod error;
 pub mod metrics;
 pub mod object_store;
 pub mod shutdown;
-pub mod tbin;
+pub mod fl;
 
 pub use admin::{AdminConfig, AdminState, run_with_shutdown as run_admin_with_shutdown};
 pub use auth::{AclChecker, ApiKeyValidator, AuthError, Operation, Principal, ResourceType};
@@ -27,4 +27,4 @@ pub use dedup::{DedupCache, DedupCacheConfig, DedupResult, WriterState};
 pub use error::BrokerError;
 pub use object_store::{LocalFsStore, ObjectStore, S3ObjectStore};
 pub use shutdown::{ConnectionTracker, TrackedConnection, shutdown_signal};
-pub use tbin::{TbinReader, TbinWriter};
+pub use fl::{FlReader, FlWriter};

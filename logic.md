@@ -5,7 +5,7 @@ This document describes the algorithms that provide failure tolerance between wr
 ## System Model
 
 ```
-Writer ──WebSocket──► Broker ──S3 PUT──► Object Store (TBIN files)
+Writer ──WebSocket──► Broker ──S3 PUT──► Object Store (FL files)
                         │
                         ├──Postgres──► partition_offsets
                         ├──Postgres──► topic_batches  (segment index)
@@ -156,7 +156,7 @@ flush_loop:
 ```
 execute_flush(drain_result):
   1. drain() → DrainResult { batches, pending_writers, key_to_index }
-  2. Build TBIN file (ZSTD-compressed, CRC32 per segment)
+  2. Build FL file (ZSTD-compressed, CRC32 per segment)
   3. S3 PUT (single write for all segments in this flush)
   4. commit_batch() in a single Postgres transaction:
      a. Allocate offsets: atomic increment of partition_offsets.next_offset
@@ -220,13 +220,13 @@ For each PendingWriter:
 
 ---
 
-## 3. TBIN Storage Format
+## 3. FL Storage Format
 
 ### Problem
 
 Records must be stored durably in S3 and retrieved efficiently for reads. A single S3 object may contain segments for multiple (topic, partition, schema) combinations.
 
-### Format (`crates/flourine-broker/src/tbin.rs`)
+### Format (`crates/flourine-broker/src/fl.rs`)
 
 ```
 ┌───────────────────────────────────────┐
@@ -238,7 +238,7 @@ Records must be stored durably in S3 and retrieved efficiently for reads. A sing
 ├───────────────────────────────────────┤
 │ Footer: varint-encoded SegmentMeta[]  │
 │ Footer length (4B big-endian)         │
-│ Magic: "TBIN" (4B)                    │
+│ Magic: "FLRN" (4B)                    │
 └───────────────────────────────────────┘
 ```
 
@@ -248,7 +248,7 @@ The footer is encoded as: a varint count, then for each segment: varints for top
 
 **Integrity:** each segment is independently CRC32-checksummed over the compressed bytes. On read, the CRC is verified before decompression.
 
-**Read path:** the `topic_batches` table stores `(s3_key, byte_offset, byte_length, crc32)` per segment. Readers issue HTTP range reads (`get_range`) to fetch only the bytes for the segment they need — no need to download the full TBIN file.
+**Read path:** the `topic_batches` table stores `(s3_key, byte_offset, byte_length, crc32)` per segment. Readers issue HTTP range reads (`get_range`) to fetch only the bytes for the segment they need — no need to download the full FL file.
 
 ---
 
@@ -272,7 +272,7 @@ process_read(req):
     3. For each matching segment:
        a. S3 range read: get_range(s3_key, byte_offset, byte_length)
        b. Construct SegmentMeta with byte_offset=0 (range read is the slice)
-       c. TbinReader::read_segment(data, meta, verify_crc=true)
+       c. FlReader::read_segment(data, meta, verify_crc=true)
        d. Skip records before requested_offset
 
     4. Group records by schema_id: when the schema changes between
@@ -292,7 +292,7 @@ process_read(req):
 
 - **S3 read failure:** the read returns an error response. The reader retries on next poll.
 - **Stale segment index:** if a segment's S3 key has been GCed, the read fails for that segment. The reader can skip forward by committing a higher offset.
-- **CRC mismatch on read:** `TbinError::CrcMismatch` is returned. The segment is treated as corrupt. The reader will see an error and can skip past it.
+- **CRC mismatch on read:** `FlError::CrcMismatch` is returned. The segment is treated as corrupt. The reader will see an error and can skip past it.
 
 ---
 
@@ -488,7 +488,7 @@ run_with_shutdown(state, shutdown_signal):
 ## 7. End-to-End Durability Summary
 
 A record is **durably committed** when all of the following are true:
-1. The TBIN file containing the record is written to S3
+1. The FL file containing the record is written to S3
 2. The `topic_batches` segment index row is committed to Postgres
 3. The `partition_offsets` counter is incremented in the same transaction
 4. The `writer_state` dedup entry is persisted in the same transaction

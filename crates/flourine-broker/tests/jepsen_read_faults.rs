@@ -170,9 +170,9 @@ async fn test_read_succeeds_after_s3_partition_heals() {
     let _ = hung_result;
 }
 
-/// Corrupted TBIN data returns a clean error, not a panic. Broker stays alive.
+/// Corrupted FL data returns a clean error, not a panic. Broker stays alive.
 #[tokio::test]
-async fn test_read_corrupt_tbin_returns_error_not_panic() {
+async fn test_read_corrupt_fl_returns_error_not_panic() {
     let db = TestDb::new().await;
     let topic_id = TopicId(db.create_topic("read-fault-corrupt", 1).await as u32);
     let partition_id = PartitionId(0);
@@ -180,15 +180,15 @@ async fn test_read_corrupt_tbin_returns_error_not_panic() {
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
 
-    // Write a record to get a TBIN file on disk
+    // Write a record to get a FL file on disk
     let writer_id = WriterId::new();
     let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "corrupt-me").await;
     assert!(resp.success);
 
-    // Find and completely corrupt every TBIN file on disk
+    // Find and completely corrupt every FL file on disk
     let store = broker.faulty_store().inner();
     let keys = store.list("data/").await.expect("list should succeed");
-    assert!(!keys.is_empty(), "should have at least one TBIN file");
+    assert!(!keys.is_empty(), "should have at least one FL file");
 
     for key in &keys {
         let data = store.get(key).await.expect("get should succeed");

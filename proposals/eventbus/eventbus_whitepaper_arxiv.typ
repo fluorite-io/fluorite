@@ -551,7 +551,7 @@ drain <- buffer.drain()
 if drain empty:
   return
 
-payload <- TBINEncode(drain.batches)
+payload <- FLEncode(drain.batches)
 if ObjectPut(payload) fails:
   fail all pending writers in drain
   return
@@ -616,7 +616,7 @@ for each read in reads:
 
   for each row in rows:
     bytes <- ObjectGetRange(row.s3_key, row.byte_offset, row.byte_length)
-    records <- TBINReadSegment(bytes, verify_crc = true)
+    records <- FLReadSegment(bytes, verify_crc = true)
     skip <- max(0, read.offset - row.start_offset)
 
     rotate schema group if schema changes

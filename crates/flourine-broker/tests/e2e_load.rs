@@ -108,7 +108,7 @@ fn hot_histogram_snapshot() -> HashMap<String, HistogramSample> {
         "flourine_flush_queue_wait_seconds",
         "flourine_flush_buffer_residency_seconds",
         "flourine_flush_latency_seconds",
-        "flourine_flush_tbin_build_seconds",
+        "flourine_flush_fl_build_seconds",
         "flourine_flush_ack_distribute_seconds",
         "flourine_db_commit_latency_seconds",
         "flourine_db_commit_offsets_seconds",

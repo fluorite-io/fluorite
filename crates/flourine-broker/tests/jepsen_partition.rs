@@ -356,7 +356,7 @@ async fn test_s3_latency_does_not_cause_false_ack() {
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    use flourine_broker::{LocalFsStore, ObjectStore, TbinReader};
+    use flourine_broker::{LocalFsStore, ObjectStore, FlReader};
     use flourine_common::types::Record;
 
     use common::TestBrokerConfig;
@@ -439,10 +439,10 @@ async fn test_s3_latency_does_not_cause_false_ack() {
     let mut all_records = vec![];
     for (s3_key,) in batches {
         let data = store.get(&s3_key).await.unwrap();
-        let metas = TbinReader::read_footer(&data).unwrap();
+        let metas = FlReader::read_footer(&data).unwrap();
         for meta in &metas {
             if meta.topic_id == topic_id && meta.partition_id == partition_id {
-                let recs = TbinReader::read_segment(&data, meta, true).unwrap();
+                let recs = FlReader::read_segment(&data, meta, true).unwrap();
                 all_records.extend(recs);
             }
         }

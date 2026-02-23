@@ -9,7 +9,7 @@ Last updated: 2026-02-15
 - [x] Core wire protocol and message unions (`crates/flourine-wire/src/`)
 - [x] Batched broker append/read path (`crates/flourine-broker/src/batched_server.rs`)
 - [x] Broker buffer, dedup, and coordinator (`crates/flourine-broker/src/buffer.rs`, `crates/flourine-broker/src/dedup.rs`, `crates/flourine-broker/src/coordinator.rs`)
-- [x] TBIN format read/write (`crates/flourine-broker/src/tbin.rs`)
+- [x] FL format read/write (`crates/flourine-broker/src/fl.rs`)
 - [x] Object store abstraction + S3/LocalFS impl (`crates/flourine-broker/src/object_store.rs`)
 - [x] Admin API for topics, API keys, ACLs, groups (`crates/flourine-broker/src/admin/`)
 - [x] API key auth + ACL checks with TTL cache (`crates/flourine-broker/src/auth/`)

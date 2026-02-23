@@ -1,4 +1,4 @@
-//! TBIN file format: footer-indexed container for Avro batches.
+//! FL file format: footer-indexed container for Avro batches.
 //!
 //! File structure:
 //! ```text
@@ -11,7 +11,7 @@
 //! ├──────────────────────────────────┤
 //! │ Footer (batch index)           │
 //! │ Footer length (4B, big-endian)   │
-//! │ Magic (4B): "TBIN"               │
+//! │ Magic (4B): "FLRN"               │
 //! └──────────────────────────────────┘
 //! ```
 
@@ -22,16 +22,16 @@ use flourine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 use flourine_wire::{record, varint};
 
-/// Magic bytes for TBIN format.
-const MAGIC: &[u8; 4] = b"TBIN";
+/// Magic bytes for FL format.
+const MAGIC: &[u8; 4] = b"FLRN";
 
 /// ZSTD compression level.
 const ZSTD_LEVEL: i32 = 3;
 
-/// Error type for TBIN operations.
+/// Error type for FL operations.
 #[derive(Debug, Error)]
-pub enum TbinError {
-    #[error("invalid magic: expected TBIN")]
+pub enum FlError {
+    #[error("invalid magic: expected FLRN")]
     InvalidMagic,
 
     #[error("invalid footer: {0}")]
@@ -60,7 +60,7 @@ pub enum Codec {
     Zstd = 0,
 }
 
-/// Metadata for a single batch within a TBIN file.
+/// Metadata for a single batch within a FL file.
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub topic_id: TopicId,
@@ -76,20 +76,20 @@ pub struct SegmentMeta {
     pub crc32: u32,
 }
 
-/// TBIN file writer.
-pub struct TbinWriter {
+/// FL file writer.
+pub struct FlWriter {
     buffer: BytesMut,
     segment_metas: Vec<SegmentMeta>,
 }
 
-impl Default for TbinWriter {
+impl Default for FlWriter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TbinWriter {
-    /// Create a new TBIN writer.
+impl FlWriter {
+    /// Create a new FL writer.
     pub fn new() -> Self {
         Self {
             buffer: BytesMut::new(),
@@ -100,7 +100,7 @@ impl TbinWriter {
     /// Add a batch to the file.
     ///
     /// Returns the metadata for the added batch (offsets are provisional zeros).
-    pub fn add_segment(&mut self, batch: &RecordBatch) -> Result<SegmentMeta, TbinError> {
+    pub fn add_segment(&mut self, batch: &RecordBatch) -> Result<SegmentMeta, FlError> {
         // 1. Encode records as array
         let mut record_bytes = BytesMut::new();
         for rec in &batch.records {
@@ -115,7 +115,7 @@ impl TbinWriter {
 
         // 2. Compress with ZSTD
         let compressed = zstd::encode_all(record_bytes.as_ref(), ZSTD_LEVEL)
-            .map_err(|e| TbinError::Compression(e.to_string()))?;
+            .map_err(|e| FlError::Compression(e.to_string()))?;
 
         // 3. Calculate CRC32
         let crc = crc32fast::hash(&compressed);
@@ -173,20 +173,20 @@ impl TbinWriter {
     }
 }
 
-/// TBIN file reader.
-pub struct TbinReader;
+/// FL file reader.
+pub struct FlReader;
 
-impl TbinReader {
-    /// Read and parse the footer from a TBIN file.
-    pub fn read_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
+impl FlReader {
+    /// Read and parse the footer from a FL file.
+    pub fn read_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, FlError> {
         if data.len() < 8 {
-            return Err(TbinError::InvalidFooter("file too small".into()));
+            return Err(FlError::InvalidFooter("file too small".into()));
         }
 
         // 1. Check magic
         let magic = &data[data.len() - 4..];
         if magic != MAGIC {
-            return Err(TbinError::InvalidMagic);
+            return Err(FlError::InvalidMagic);
         }
 
         // 2. Read footer length
@@ -196,7 +196,7 @@ impl TbinReader {
         // 3. Read footer data
         let footer_end = data.len() - 8;
         if footer_length > footer_end {
-            return Err(TbinError::InvalidFooter(
+            return Err(FlError::InvalidFooter(
                 "footer length exceeds file size".into(),
             ));
         }
@@ -214,12 +214,12 @@ impl TbinReader {
         data: &[u8],
         meta: &SegmentMeta,
         verify_crc: bool,
-    ) -> Result<Vec<Record>, TbinError> {
+    ) -> Result<Vec<Record>, FlError> {
         let start = meta.byte_offset as usize;
         let end = start + meta.byte_length as usize;
 
         if end > data.len() {
-            return Err(TbinError::BufferTooSmall {
+            return Err(FlError::BufferTooSmall {
                 needed: end,
                 available: data.len(),
             });
@@ -231,7 +231,7 @@ impl TbinReader {
         if verify_crc {
             let actual_crc = crc32fast::hash(compressed);
             if actual_crc != meta.crc32 {
-                return Err(TbinError::CrcMismatch {
+                return Err(FlError::CrcMismatch {
                     expected: meta.crc32,
                     actual: actual_crc,
                 });
@@ -240,7 +240,7 @@ impl TbinReader {
 
         // Decompress
         let decompressed =
-            zstd::decode_all(compressed).map_err(|e| TbinError::Decompression(e.to_string()))?;
+            zstd::decode_all(compressed).map_err(|e| FlError::Decompression(e.to_string()))?;
 
         // Decode records
         let mut records = Vec::with_capacity(meta.record_count as usize);
@@ -256,7 +256,7 @@ impl TbinReader {
                     if records.len() == meta.record_count as usize {
                         break;
                     }
-                    return Err(TbinError::Decode(e.to_string()));
+                    return Err(FlError::Decode(e.to_string()));
                 }
             }
         }
@@ -322,12 +322,12 @@ fn encode_footer(metas: &[SegmentMeta]) -> Vec<u8> {
 }
 
 /// Decode footer bytes into batch metadata.
-fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
+fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, FlError> {
     let mut offset = 0;
 
     // Read count
     let (count, len) =
-        varint::decode_i64(data).map_err(|e| TbinError::InvalidFooter(format!("count: {}", e)))?;
+        varint::decode_i64(data).map_err(|e| FlError::InvalidFooter(format!("count: {}", e)))?;
     offset += len;
 
     let mut metas = Vec::with_capacity(count as usize);
@@ -335,62 +335,62 @@ fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, TbinError> {
     for _ in 0..count {
         // topic_id
         let (topic_id, len) = varint::decode_i64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("topic_id: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("topic_id: {}", e)))?;
         offset += len;
 
         // partition_id
         let (partition_id, len) = varint::decode_i64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("partition_id: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("partition_id: {}", e)))?;
         offset += len;
 
         // schema_id
         let (schema_id, len) = varint::decode_i64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("schema_id: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("schema_id: {}", e)))?;
         offset += len;
 
         // start_offset
         let (start_offset, len) = varint::decode_u64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("start_offset: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("start_offset: {}", e)))?;
         offset += len;
 
         // end_offset
         let (end_offset, len) = varint::decode_u64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("end_offset: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("end_offset: {}", e)))?;
         offset += len;
 
         // record_count
         let (record_count, len) = varint::decode_i64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("record_count: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("record_count: {}", e)))?;
         offset += len;
 
         // byte_offset
         let (byte_offset, len) = varint::decode_u64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("byte_offset: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("byte_offset: {}", e)))?;
         offset += len;
 
         // byte_length
         let (byte_length, len) = varint::decode_u64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("byte_length: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("byte_length: {}", e)))?;
         offset += len;
 
         // ingest_time
         let (ingest_time, len) = varint::decode_u64(&data[offset..])
-            .map_err(|e| TbinError::InvalidFooter(format!("ingest_time: {}", e)))?;
+            .map_err(|e| FlError::InvalidFooter(format!("ingest_time: {}", e)))?;
         offset += len;
 
         // compression
         if offset >= data.len() {
-            return Err(TbinError::InvalidFooter("unexpected end of footer".into()));
+            return Err(FlError::InvalidFooter("unexpected end of footer".into()));
         }
         let compression = match data[offset] {
             0 => Codec::Zstd,
-            _ => return Err(TbinError::InvalidFooter("unknown compression codec".into())),
+            _ => return Err(FlError::InvalidFooter("unknown compression codec".into())),
         };
         offset += 1;
 
         // crc32
         if offset + 4 > data.len() {
-            return Err(TbinError::InvalidFooter("crc32 truncated".into()));
+            return Err(FlError::InvalidFooter("crc32 truncated".into()));
         }
         let crc32 = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap());
         offset += 4;
@@ -440,11 +440,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tbin_write_read_roundtrip() {
+    fn test_fl_write_read_roundtrip() {
         let batch = sample_segment();
 
         // Write
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         let meta = writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(&file_bytes[file_bytes.len() - 4..], MAGIC);
 
         // Read footer
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].topic_id.0, 1);
         assert_eq!(metas[0].partition_id.0, 0);
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(metas[0].byte_length, meta.byte_length);
 
         // Read batch
-        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        let records = FlReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].key.as_ref().unwrap().as_ref(), b"key1");
         assert_eq!(records[0].value.as_ref(), b"value1");
@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tbin_multiple_segments() {
+    fn test_fl_multiple_segments() {
         let segment1 = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
@@ -498,13 +498,13 @@ mod tests {
         };
 
         // Write
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&segment1).unwrap();
         writer.add_segment(&segment2).unwrap();
         let file_bytes = writer.finish();
 
         // Read footer
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas.len(), 2);
 
         // First batch
@@ -516,43 +516,43 @@ mod tests {
         assert_eq!(metas[1].record_count, 2);
 
         // Read both batches
-        let records1 = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        let records1 = FlReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert_eq!(records1.len(), 1);
 
-        let records2 = TbinReader::read_segment(&file_bytes, &metas[1], true).unwrap();
+        let records2 = FlReader::read_segment(&file_bytes, &metas[1], true).unwrap();
         assert_eq!(records2.len(), 2);
     }
 
     #[test]
-    fn test_tbin_crc_validation() {
+    fn test_fl_crc_validation() {
         let batch = sample_segment();
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let mut file_bytes = writer.finish().to_vec();
 
         // Read footer first to get metadata
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
 
         // Corrupt the data
         file_bytes[0] ^= 0xFF;
 
         // CRC check should fail
-        let result = TbinReader::read_segment(&file_bytes, &metas[0], true);
-        assert!(matches!(result, Err(TbinError::CrcMismatch { .. })));
+        let result = FlReader::read_segment(&file_bytes, &metas[0], true);
+        assert!(matches!(result, Err(FlError::CrcMismatch { .. })));
     }
 
     #[test]
-    fn test_tbin_invalid_magic() {
+    fn test_fl_invalid_magic() {
         let mut data = vec![0u8; 16];
         data[12..16].copy_from_slice(b"NOPE");
 
-        let result = TbinReader::read_footer(&data);
-        assert!(matches!(result, Err(TbinError::InvalidMagic)));
+        let result = FlReader::read_footer(&data);
+        assert!(matches!(result, Err(FlError::InvalidMagic)));
     }
 
     #[test]
-    fn test_tbin_compression_ratio() {
+    fn test_fl_compression_ratio() {
         // Create a batch with repetitive data (should compress well)
         let batch = RecordBatch {
             topic_id: TopicId(1),
@@ -566,7 +566,7 @@ mod tests {
                 .collect(),
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         let meta = writer.add_segment(&batch).unwrap();
 
         // Compressed size should be significantly smaller than uncompressed
@@ -580,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tbin_empty_segment() {
+    fn test_fl_empty_segment() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
@@ -588,23 +588,23 @@ mod tests {
             records: vec![],
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].record_count, 0);
 
-        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        let records = FlReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert!(records.is_empty());
     }
 
     // ============ Edge Case Tests ============
 
     #[test]
-    fn test_tbin_many_segments() {
-        let mut writer = TbinWriter::new();
+    fn test_fl_many_segments() {
+        let mut writer = FlWriter::new();
 
         // Write 50 batches
         for i in 0..50 {
@@ -621,7 +621,7 @@ mod tests {
         }
 
         let file_bytes = writer.finish();
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
 
         assert_eq!(metas.len(), 50);
 
@@ -631,13 +631,13 @@ mod tests {
             assert_eq!(meta.partition_id.0, (i % 8) as u32);
             assert_eq!(meta.record_count, 1);
 
-            let records = TbinReader::read_segment(&file_bytes, meta, true).unwrap();
+            let records = FlReader::read_segment(&file_bytes, meta, true).unwrap();
             assert_eq!(records.len(), 1);
         }
     }
 
     #[test]
-    fn test_tbin_large_record_values() {
+    fn test_fl_large_record_values() {
         // Test with 1MB values
         let large_value = vec![0xABu8; 1024 * 1024];
 
@@ -651,12 +651,12 @@ mod tests {
             }],
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
-        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
+        let records = FlReader::read_segment(&file_bytes, &metas[0], true).unwrap();
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].value.len(), 1024 * 1024);
@@ -664,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tbin_binary_keys_and_values() {
+    fn test_fl_binary_keys_and_values() {
         // Non-UTF8 binary data
         let binary_key = vec![0x00, 0xFF, 0x80, 0x7F, 0x01, 0xFE];
         let binary_value = (0..=255u8).collect::<Vec<u8>>();
@@ -679,12 +679,12 @@ mod tests {
             }],
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
-        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
+        let records = FlReader::read_segment(&file_bytes, &metas[0], true).unwrap();
 
         assert_eq!(
             records[0].key.as_ref().unwrap().as_ref(),
@@ -694,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tbin_max_id_values() {
+    fn test_fl_max_id_values() {
         let batch = RecordBatch {
             topic_id: TopicId(u32::MAX),
             partition_id: PartitionId(u32::MAX),
@@ -705,26 +705,26 @@ mod tests {
             }],
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas[0].topic_id.0, u32::MAX);
         assert_eq!(metas[0].partition_id.0, u32::MAX);
         assert_eq!(metas[0].schema_id.0, u32::MAX);
     }
 
     #[test]
-    fn test_tbin_file_too_small() {
+    fn test_fl_file_too_small() {
         // File smaller than magic + footer length
         let small_file = vec![0u8; 4];
-        let result = TbinReader::read_footer(&small_file);
-        assert!(matches!(result, Err(TbinError::InvalidFooter(_))));
+        let result = FlReader::read_footer(&small_file);
+        assert!(matches!(result, Err(FlError::InvalidFooter(_))));
     }
 
     #[test]
-    fn test_tbin_footer_length_exceeds_file() {
+    fn test_fl_footer_length_exceeds_file() {
         // Valid magic but footer length too large
         let mut bad_file = vec![0u8; 16];
         // Set footer length to 1000 (way more than file size)
@@ -732,12 +732,12 @@ mod tests {
         // Set magic
         bad_file[12..16].copy_from_slice(MAGIC);
 
-        let result = TbinReader::read_footer(&bad_file);
-        assert!(matches!(result, Err(TbinError::InvalidFooter(_))));
+        let result = FlReader::read_footer(&bad_file);
+        assert!(matches!(result, Err(FlError::InvalidFooter(_))));
     }
 
     #[test]
-    fn test_tbin_segment_byte_range_validation() {
+    fn test_fl_segment_byte_range_validation() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
@@ -748,11 +748,11 @@ mod tests {
             }],
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
 
         // Create a fake meta with invalid byte range
         let bad_meta = SegmentMeta {
@@ -761,12 +761,12 @@ mod tests {
             ..metas[0].clone()
         };
 
-        let result = TbinReader::read_segment(&file_bytes, &bad_meta, false);
-        assert!(matches!(result, Err(TbinError::BufferTooSmall { .. })));
+        let result = FlReader::read_segment(&file_bytes, &bad_meta, false);
+        assert!(matches!(result, Err(FlError::BufferTooSmall { .. })));
     }
 
     #[test]
-    fn test_tbin_skip_crc_validation() {
+    fn test_fl_skip_crc_validation() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
@@ -777,28 +777,28 @@ mod tests {
             }],
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let mut file_bytes = writer.finish().to_vec();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
 
         // Corrupt data
         file_bytes[0] ^= 0xFF;
 
         // With CRC check - should fail
-        let result = TbinReader::read_segment(&file_bytes, &metas[0], true);
-        assert!(matches!(result, Err(TbinError::CrcMismatch { .. })));
+        let result = FlReader::read_segment(&file_bytes, &metas[0], true);
+        assert!(matches!(result, Err(FlError::CrcMismatch { .. })));
 
         // Without CRC check - should succeed (but data is corrupted)
-        let result = TbinReader::read_segment(&file_bytes, &metas[0], false);
+        let result = FlReader::read_segment(&file_bytes, &metas[0], false);
         // This may or may not fail depending on what got corrupted
         // The key point is we're not getting a CRC error
-        assert!(!matches!(result, Err(TbinError::CrcMismatch { .. })));
+        assert!(!matches!(result, Err(FlError::CrcMismatch { .. })));
     }
 
     #[test]
-    fn test_tbin_many_records_per_segment() {
+    fn test_fl_many_records_per_segment() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
             partition_id: PartitionId(0),
@@ -815,14 +815,14 @@ mod tests {
                 .collect(),
         };
 
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas[0].record_count, 1000);
 
-        let records = TbinReader::read_segment(&file_bytes, &metas[0], true).unwrap();
+        let records = FlReader::read_segment(&file_bytes, &metas[0], true).unwrap();
         assert_eq!(records.len(), 1000);
 
         // Verify a sample of records

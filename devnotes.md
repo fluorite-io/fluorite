@@ -141,7 +141,7 @@ crates/
 ├── flourine-common/     # Shared types: IDs, errors, Record, RecordBatch, BatchAck
 ├── flourine-wire/       # Wire protocol: varint, writer/reader encoding
 ├── flourine-schema/     # Schema registry: canonicalization, compatibility, HTTP API
-├── flourine-broker/      # Broker server: batching, TBIN, S3, WebSocket
+├── flourine-broker/      # Broker server: batching, FL, S3, WebSocket
 └── flourine-core/       # Core Avro handling (existing)
 ```
 
@@ -152,7 +152,7 @@ crates/
 | flourine-wire | `varint.rs` | Zigzag varint encoding (Avro-compatible) |
 | flourine-wire | `writer.rs` | AppendRequest/Response encoding |
 | flourine-wire | `reader.rs` | Read/group protocol encoding (read, join, heartbeat, rejoin, commit) |
-| flourine-broker | `tbin.rs` | TBIN file format (ZSTD + footer index) |
+| flourine-broker | `fl.rs` | FL file format (ZSTD + footer index) |
 | flourine-broker | `buffer.rs` | Request batching and merging |
 | flourine-broker | `dedup.rs` | LRU dedup cache |
 | flourine-broker | `batched_server.rs` | WebSocket server with batching + flush loop |

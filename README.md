@@ -12,12 +12,12 @@ Flourine unifies event ingestion, transport, schema management, and (planned) CD
 
 ## What Flourine Does
 
-Disaggregated event bus: stateless Rust brokers, S3 for data, Postgres for metadata. Writers send records over WebSocket. Brokers buffer, compress (ZSTD), and flush to S3 as TBIN files. A single Postgres transaction per flush commits offsets, segment index, and writer dedup state atomically. Readers fetch segments via S3 range reads.
+Disaggregated event bus: stateless Rust brokers, S3 for data, Postgres for metadata. Writers send records over WebSocket. Brokers buffer, compress (ZSTD), and flush to S3 as FL files. A single Postgres transaction per flush commits offsets, segment index, and writer dedup state atomically. Readers fetch segments via S3 range reads.
 
 Key properties:
 - **Exactly-once writer-to-storage** — idempotent writers with LRU + Postgres dedup
 - **Gap-free offsets** — atomic allocation per partition in the flush transaction
-- **CRC-verified storage** — per-segment CRC32 in TBIN files, checked on every read
+- **CRC-verified storage** — per-segment CRC32 in FL files, checked on every read
 - **Stateless brokers** — all durable state in Postgres; any broker serves any client
 
 ## Architecture
@@ -26,7 +26,7 @@ Key properties:
                      ┌──────────────────────────────────┐
   Writers ──WS──►    │          Broker (Rust)           │
                      │                                  │
-                     │  buffer → TBIN (ZSTD+CRC32)     │
+                     │  buffer → FL (ZSTD+CRC32)     │
                      │      │              │            │
                      │      ▼              ▼            │
                      │     S3           Postgres        │
@@ -45,7 +45,7 @@ What this replaces:
 |----------------------------|-----------------------------------|
 | Broker (write/read path)   | Kafka/Redpanda brokers            |
 | Schema registry            | Confluent Schema Registry         |
-| TBIN storage on S3         | Kafka log segments + tiered storage |
+| FL storage on S3         | Kafka log segments + tiered storage |
 | CDC ingestion (planned)    | Debezium + Kafka Connect          |
 | Data catalog (planned)     | Separate catalog services         |
 | Iceberg sink (planned)     | Kafka Connect S3/Iceberg sinks    |
@@ -54,7 +54,7 @@ What this replaces:
 
 **Exactly-once append.** Monotonic writer sequence numbers with two-tier dedup (LRU in-memory + Postgres). Retries on backpressure or disconnect are safe.
 
-**Pipelined flush.** Buffer records from multiple writers, merge by (topic, partition, schema), compress into TBIN (ZSTD + CRC32), write to S3, commit offsets + index + dedup in one Postgres transaction. One flush runs while the next batch fills.
+**Pipelined flush.** Buffer records from multiple writers, merge by (topic, partition, schema), compress into FL (ZSTD + CRC32), write to S3, commit offsets + index + dedup in one Postgres transaction. One flush runs while the next batch fills.
 
 **Reader groups.** Lease-based partition assignment via Postgres. Deterministic range assignment (pure function, no leader election). Incremental rebalance; dead readers detected via heartbeat expiry.
 

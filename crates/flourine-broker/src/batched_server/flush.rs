@@ -1,7 +1,7 @@
 //! Flush loop: buffer management, S3 writes, and database commits.
 //!
 //! The flush loop decouples write ingestion from flush I/O via pipelining:
-//! while a flush (TBIN build → S3 put → DB commit → ack distribute) runs on
+//! while a flush (FL build → S3 put → DB commit → ack distribute) runs on
 //! a spawned task, the loop continues accepting new writes into the buffer.
 //! At most one flush is in flight at a time, preserving offset ordering and
 //! dedup correctness.
@@ -27,11 +27,11 @@ use crate::metrics::{
     DB_COMMIT_WRITER_STATE_UPSERT_SECONDS, ERRORS_TOTAL, FLUSH_ACK_DISTRIBUTE_SECONDS,
     FLUSH_BATCH_PENDING_WRITERS, FLUSH_BATCH_RECORDS, FLUSH_BATCH_SEGMENTS,
     FLUSH_BUFFER_RESIDENCY_SECONDS, FLUSH_LATENCY_SECONDS, FLUSH_QUEUE_DEPTH,
-    FLUSH_QUEUE_WAIT_SECONDS, FLUSH_TBIN_BUILD_SECONDS, FLUSH_TOTAL,
+    FLUSH_QUEUE_WAIT_SECONDS, FLUSH_FL_BUILD_SECONDS, FLUSH_TOTAL,
     S3_PUT_LATENCY_SECONDS,
 };
 use crate::object_store::ObjectStore;
-use crate::tbin::TbinWriter;
+use crate::fl::FlWriter;
 
 use super::{BrokerState, FlushCommand, WRITER_STATE_ROWS_BUMP};
 
@@ -191,7 +191,7 @@ fn record_drain_metrics(drain_result: &DrainResult) {
     }
 }
 
-/// Build TBIN, write to S3, commit to DB, and distribute acks.
+/// Build FL, write to S3, commit to DB, and distribute acks.
 /// Returns true on success.
 #[tracing::instrument(level = "debug", skip(drain_result, state))]
 async fn execute_flush<S: ObjectStore + Send + Sync>(
@@ -209,34 +209,34 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
     // Generate S3 key
     let timestamp = chrono::Utc::now().timestamp_millis();
     let key = format!(
-        "{}/{}/{}.tbin",
+        "{}/{}/{}.fl",
         state.config.key_prefix,
         chrono::Utc::now().format("%Y-%m-%d"),
         timestamp
     );
 
-    // Build TBIN file
-    let tbin_start = Instant::now();
-    let (segment_metas, tbin_data) = {
-        let _span = tracing::debug_span!("tbin_build").entered();
-        let mut writer = TbinWriter::new();
+    // Build FL file
+    let fl_start = Instant::now();
+    let (segment_metas, fl_data) = {
+        let _span = tracing::debug_span!("fl_build").entered();
+        let mut writer = FlWriter::new();
         for batch in &drain_result.batches {
             if let Err(e) = writer.add_segment(batch) {
-                error!("Failed to add batch to TBIN: {}", e);
+                error!("Failed to add batch to FL: {}", e);
                 FLUSH_TOTAL.with_label_values(&["error"]).inc();
-                ERRORS_TOTAL.with_label_values(&["tbin_write"]).inc();
+                ERRORS_TOTAL.with_label_values(&["fl_write"]).inc();
                 return false;
             }
         }
         (writer.segment_metas().to_vec(), writer.finish())
     };
-    FLUSH_TBIN_BUILD_SECONDS.observe(tbin_start.elapsed().as_secs_f64());
+    FLUSH_FL_BUILD_SECONDS.observe(fl_start.elapsed().as_secs_f64());
 
     // Write to S3
     let s3_start = Instant::now();
     if let Err(e) = state
         .store
-        .put(&key, tbin_data)
+        .put(&key, fl_data)
         .instrument(tracing::debug_span!("s3_put"))
         .await
     {
@@ -290,7 +290,7 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
 /// Commit a batch of batches to the database.
 async fn commit_batch(
     batches: &[RecordBatch],
-    segment_metas: &[crate::tbin::SegmentMeta],
+    segment_metas: &[crate::fl::SegmentMeta],
     key_to_index: &std::collections::HashMap<BatchKey, usize>,
     pending_writers: &[crate::buffer::PendingWriter],
     s3_key: &str,

@@ -105,7 +105,7 @@ Flourine's reader group protocol is simpler: a single deterministic range assign
 | WarpStream | Mixed-partition files in S3 | No (compaction produces optimized files) | External ETL |
 | Bufstream | Intake → Archive (Parquet/Iceberg) | **Yes — zero-copy** | Built-in |
 | Ursa | WAL → Parquet/Iceberg/Delta | **Yes — native compaction** | Built-in |
-| **Flourine** | **TBIN (custom ZSTD container)** | **No (Avro→Arrow→Parquet infra exists, Iceberg deferred to v2)** | Planned |
+| **Flourine** | **FL (custom ZSTD container)** | **No (Avro→Arrow→Parquet infra exists, Iceberg deferred to v2)** | Planned |
 
 Bufstream and Ursa have a significant edge here: they write Parquet/Iceberg natively, eliminating the ETL pipeline entirely. Flourine has the converter machinery in `flourine-core` (Avro→Arrow→Parquet) but hasn't wired it into the data path yet. This is the most compelling v2 feature.
 

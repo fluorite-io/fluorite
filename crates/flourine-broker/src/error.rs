@@ -17,8 +17,8 @@ pub enum BrokerError {
     #[error("Object store error: {0}")]
     ObjectStore(String),
 
-    #[error("TBIN error: {0}")]
-    Tbin(String),
+    #[error("FL error: {0}")]
+    Fl(String),
 
     #[error("Wire protocol error: {0}")]
     Wire(String),
@@ -30,8 +30,8 @@ impl From<crate::object_store::ObjectStoreError> for BrokerError {
     }
 }
 
-impl From<crate::tbin::TbinError> for BrokerError {
-    fn from(e: crate::tbin::TbinError) -> Self {
-        BrokerError::Tbin(e.to_string())
+impl From<crate::fl::FlError> for BrokerError {
+    fn from(e: crate::fl::FlError) -> Self {
+        BrokerError::Fl(e.to_string())
     }
 }

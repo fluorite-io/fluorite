@@ -76,10 +76,10 @@ lazy_static! {
             .buckets(vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0])
     ).unwrap();
 
-    pub static ref FLUSH_TBIN_BUILD_SECONDS: Histogram = Histogram::with_opts(
+    pub static ref FLUSH_FL_BUILD_SECONDS: Histogram = Histogram::with_opts(
         HistogramOpts::new(
-            "flourine_flush_tbin_build_seconds",
-            "Time spent constructing TBIN payloads per flush"
+            "flourine_flush_fl_build_seconds",
+            "Time spent constructing FL payloads per flush"
         )
             .buckets(vec![0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
     ).unwrap();
@@ -289,7 +289,7 @@ pub fn register_metrics() {
         FLUSH_BUFFER_RESIDENCY_SECONDS,
         FLUSH_TOTAL,
         FLUSH_LATENCY_SECONDS,
-        FLUSH_TBIN_BUILD_SECONDS,
+        FLUSH_FL_BUILD_SECONDS,
         FLUSH_ACK_DISTRIBUTE_SECONDS,
         FLUSH_BATCH_SEGMENTS,
         FLUSH_BATCH_PENDING_WRITERS,

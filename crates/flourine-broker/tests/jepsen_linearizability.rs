@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use flourine_broker::{LocalFsStore, ObjectStore, TbinReader};
+use flourine_broker::{LocalFsStore, ObjectStore, FlReader};
 use flourine_common::ids::{Offset, PartitionId, TopicId};
 use flourine_common::types::Record;
 
@@ -60,11 +60,11 @@ async fn fetch_all_records<S: ObjectStore + Send + Sync>(
 
     for (_start_offset, _end_offset, s3_key) in batches {
         let data = state.store.get(&s3_key).await?;
-        let segment_metas = TbinReader::read_footer(&data)?;
+        let segment_metas = FlReader::read_footer(&data)?;
 
         for seg_meta in &segment_metas {
             if seg_meta.topic_id == topic_id && seg_meta.partition_id == partition_id {
-                let records = TbinReader::read_segment(&data, seg_meta, true)?;
+                let records = FlReader::read_segment(&data, seg_meta, true)?;
                 all_records.extend(records);
             }
         }

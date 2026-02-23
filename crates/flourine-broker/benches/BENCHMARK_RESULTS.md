@@ -15,7 +15,7 @@
 
 ## Flourine Micro-Benchmark Results (M3 Max)
 
-### TBIN Encoding (ZSTD Compression)
+### FL Encoding (ZSTD Compression)
 
 | Workload | Time | Throughput |
 |----------|------|------------|
@@ -24,7 +24,7 @@
 | 1000 records × 256B | 84.1µs | 2.8 GiB/s |
 | 100 records × 10KB | 127.6µs | **7.3 GiB/s** |
 
-### TBIN Decoding (Decompress + Parse)
+### FL Decoding (Decompress + Parse)
 
 | Workload | Time | Records/sec |
 |----------|------|-------------|
@@ -81,7 +81,7 @@
 | Metric | Flourine | Kafka (typical) | Notes |
 |--------|---------|-----------------|-------|
 | Wire encoding | 37 GiB/s | N/A (Java serialization) | Flourine's binary protocol is ~10-50x faster |
-| TBIN encoding | 3-7 GiB/s | ~130-240 MB/s | Flourine encoding is **~10-30x faster** |
+| FL encoding | 3-7 GiB/s | ~130-240 MB/s | Flourine encoding is **~10-30x faster** |
 | Buffer insert | 24 GiB/s | ~500 MB/s | In-memory batching is extremely fast |
 
 ### Latency
@@ -144,7 +144,7 @@ Based on micro-benchmarks, estimated E2E latency breakdown:
 |-----------|------|
 | Wire decode | 100-500µs |
 | Buffer insert | 1-10µs |
-| TBIN encode | 20-100µs |
+| FL encode | 20-100µs |
 | S3 PUT | 10-50ms |
 | Postgres commit | 1-10ms |
 | Wire encode response | 1-10µs |

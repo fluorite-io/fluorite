@@ -18,7 +18,7 @@ mod common;
 use bytes::Bytes;
 use tempfile::TempDir;
 
-use flourine_broker::{LocalFsStore, ObjectStore, TbinWriter};
+use flourine_broker::{LocalFsStore, ObjectStore, FlWriter};
 use flourine_common::ids::{PartitionId, SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
@@ -85,7 +85,7 @@ async fn test_insert_topic_batch() {
     .bind(0i64)
     .bind(10i64)
     .bind(10i32)
-    .bind("data/2024-01-15/batch-001.tbin")
+    .bind("data/2024-01-15/batch-001.fl")
     .bind(0i64) // byte_offset
     .bind(0i64) // byte_length
     .bind(ingest_time)
@@ -106,7 +106,7 @@ async fn test_insert_topic_batch() {
     assert_eq!(batch.0, 100); // schema_id
     assert_eq!(batch.1, 0); // start_offset
     assert_eq!(batch.2, 10); // end_offset
-    assert_eq!(batch.3, "data/2024-01-15/batch-001.tbin");
+    assert_eq!(batch.3, "data/2024-01-15/batch-001.fl");
 }
 
 /// Test offset management (get current, update, concurrent updates).
@@ -241,16 +241,16 @@ async fn test_produce_flow_with_db() {
         },
     ];
 
-    // Write TBIN
-    let mut writer = TbinWriter::new();
+    // Write FL
+    let mut writer = FlWriter::new();
     for batch in &batches {
         writer.add_segment(batch).unwrap();
     }
-    let tbin_data = writer.finish();
+    let fl_data = writer.finish();
 
     // Write to S3
-    let s3_key = "data/2024-01-15/batch-001.tbin";
-    store.put(s3_key, tbin_data).await.unwrap();
+    let s3_key = "data/2024-01-15/batch-001.fl";
+    store.put(s3_key, fl_data).await.unwrap();
 
     // Start transaction
     let mut tx = db.pool.begin().await.unwrap();
@@ -369,7 +369,7 @@ async fn test_fetch_query() {
         .bind(start)
         .bind(end)
         .bind(100i32)
-        .bind(format!("data/batch-{:03}.tbin", i))
+        .bind(format!("data/batch-{:03}.fl", i))
         .bind(0i64) // byte_offset
         .bind(0i64) // byte_length
         .bind(ingest_time)
@@ -410,7 +410,7 @@ async fn test_fetch_query() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].0, 200); // start_offset
     assert_eq!(batches[0].1, 300); // end_offset
-    assert_eq!(batches[0].2, "data/batch-002.tbin");
+    assert_eq!(batches[0].2, "data/batch-002.fl");
 
     // Read from offset 0 (should find first batch)
     let batches: Vec<(i64, i64, String)> = sqlx::query_as(
@@ -490,7 +490,7 @@ async fn test_concurrent_produces() {
             .bind(current)
             .bind(new_offset)
             .bind(record_count as i32)
-            .bind(format!("data/batch-{:03}.tbin", i))
+            .bind(format!("data/batch-{:03}.fl", i))
             .bind(0i64) // byte_offset
             .bind(0i64) // byte_length
             .bind(0i64) // crc32

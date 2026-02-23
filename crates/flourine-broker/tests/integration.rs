@@ -10,13 +10,13 @@
 use bytes::Bytes;
 use tempfile::TempDir;
 
-use flourine_broker::{BrokerBuffer, BufferConfig, LocalFsStore, ObjectStore, TbinReader, TbinWriter};
+use flourine_broker::{BrokerBuffer, BufferConfig, LocalFsStore, ObjectStore, FlReader, FlWriter};
 use flourine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
-/// Test the full append flow without database (TBIN + ObjectStore).
+/// Test the full append flow without database (FL + ObjectStore).
 #[tokio::test]
-async fn test_produce_flow_tbin_s3() {
+async fn test_produce_flow_fl_s3() {
     let temp_dir = TempDir::new().unwrap();
     let store = LocalFsStore::new(temp_dir.path().to_path_buf());
 
@@ -48,32 +48,32 @@ async fn test_produce_flow_tbin_s3() {
         },
     ];
 
-    // Write TBIN
-    let mut writer = TbinWriter::new();
+    // Write FL
+    let mut writer = FlWriter::new();
     for batch in &batches {
         writer.add_segment(batch).unwrap();
     }
-    let tbin_data = writer.finish();
+    let fl_data = writer.finish();
 
     // Write to "S3" (local filesystem)
-    let key = "test/batch-001.tbin";
-    store.put(key, tbin_data.clone()).await.unwrap();
+    let key = "test/batch-001.fl";
+    store.put(key, fl_data.clone()).await.unwrap();
 
     // Read back from "S3"
     let read_data = store.get(key).await.unwrap();
-    assert_eq!(read_data, tbin_data);
+    assert_eq!(read_data, fl_data);
 
-    // Parse TBIN
-    let metas = TbinReader::read_footer(&read_data).unwrap();
+    // Parse FL
+    let metas = FlReader::read_footer(&read_data).unwrap();
     assert_eq!(metas.len(), 2);
 
     // Verify first batch
-    let records0 = TbinReader::read_segment(&read_data, &metas[0], true).unwrap();
+    let records0 = FlReader::read_segment(&read_data, &metas[0], true).unwrap();
     assert_eq!(records0.len(), 2);
     assert_eq!(records0[0].key, Some(Bytes::from("user-1")));
 
     // Verify second batch
-    let records1 = TbinReader::read_segment(&read_data, &metas[1], true).unwrap();
+    let records1 = FlReader::read_segment(&read_data, &metas[1], true).unwrap();
     assert_eq!(records1.len(), 1);
     assert_eq!(records1[0].key, Some(Bytes::from("user-3")));
 }
@@ -195,9 +195,9 @@ async fn test_buffer_merge_multiple_producers() {
     assert_eq!(acks3[0].end_offset.0, 1); // p3 contributed 1 record to partition 1
 }
 
-/// Test TBIN compression efficiency.
+/// Test FL compression efficiency.
 #[tokio::test]
-async fn test_tbin_compression_efficiency() {
+async fn test_fl_compression_efficiency() {
     // Create a batch with repetitive data (should compress well)
     let mut records = Vec::with_capacity(1000);
     for i in 0..1000 {
@@ -221,12 +221,12 @@ async fn test_tbin_compression_efficiency() {
         .map(|r| r.key.as_ref().map(|k| k.len()).unwrap_or(0) + r.value.len())
         .sum();
 
-    // Write TBIN
-    let mut writer = TbinWriter::new();
+    // Write FL
+    let mut writer = FlWriter::new();
     writer.add_segment(&batch).unwrap();
-    let tbin_data = writer.finish();
+    let fl_data = writer.finish();
 
-    let compressed_size = tbin_data.len();
+    let compressed_size = fl_data.len();
     let compression_ratio = uncompressed_size as f64 / compressed_size as f64;
 
     println!(
@@ -242,11 +242,11 @@ async fn test_tbin_compression_efficiency() {
     );
 
     // Verify we can read it back
-    let metas = TbinReader::read_footer(&tbin_data).unwrap();
+    let metas = FlReader::read_footer(&fl_data).unwrap();
     assert_eq!(metas.len(), 1);
     assert_eq!(metas[0].record_count, 1000);
 
-    let read_records = TbinReader::read_segment(&tbin_data, &metas[0], true).unwrap();
+    let read_records = FlReader::read_segment(&fl_data, &metas[0], true).unwrap();
     assert_eq!(read_records.len(), 1000);
     assert_eq!(read_records[0].key, Some(Bytes::from("key-00000")));
     assert_eq!(read_records[999].key, Some(Bytes::from("key-00999")));
@@ -306,7 +306,7 @@ async fn test_wire_protocol_large_payload() {
     }
 }
 
-/// Test end-to-end flow: buffer -> TBIN -> S3 -> read.
+/// Test end-to-end flow: buffer -> FL -> S3 -> read.
 #[tokio::test]
 async fn test_e2e_buffer_to_s3() {
     use std::time::Duration;
@@ -347,14 +347,14 @@ async fn test_e2e_buffer_to_s3() {
     let result = buffer.drain();
     assert_eq!(result.batches.len(), 3); // 3 partitions
 
-    let mut writer = TbinWriter::new();
+    let mut writer = FlWriter::new();
     for batch in &result.batches {
         writer.add_segment(batch).unwrap();
     }
-    let tbin_data = writer.finish();
+    let fl_data = writer.finish();
 
-    let key = "batches/2024-01-15/batch-001.tbin";
-    store.put(key, tbin_data.clone()).await.unwrap();
+    let key = "batches/2024-01-15/batch-001.fl";
+    store.put(key, fl_data.clone()).await.unwrap();
 
     // Simulate offset assignment
     let segment_offsets: Vec<(u64, u64)> = result
@@ -374,7 +374,7 @@ async fn test_e2e_buffer_to_s3() {
 
     // Simulate reader read: read from S3
     let read_data = store.get(key).await.unwrap();
-    let metas = TbinReader::read_footer(&read_data).unwrap();
+    let metas = FlReader::read_footer(&read_data).unwrap();
     assert_eq!(metas.len(), 3);
 
     // Count total records

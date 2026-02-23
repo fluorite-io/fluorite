@@ -9,7 +9,7 @@ pub struct BenchmarkConfig {
     pub record_count: usize,
     /// Size of record values in bytes.
     pub record_size: usize,
-    /// Number of batches per TBIN file.
+    /// Number of batches per FL file.
     pub segments_per_file: usize,
     /// Whether to include keys in records.
     pub include_keys: bool,

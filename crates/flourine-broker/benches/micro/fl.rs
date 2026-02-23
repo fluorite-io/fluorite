@@ -1,8 +1,8 @@
-//! TBIN encode/decode benchmarks.
+//! FL encode/decode benchmarks.
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-use flourine_broker::{TbinReader, TbinWriter};
+use flourine_broker::{FlReader, FlWriter};
 use flourine_common::ids::{PartitionId, SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
@@ -21,9 +21,9 @@ fn make_segment(record_count: usize, value_size: usize) -> RecordBatch {
     }
 }
 
-/// Benchmark TBIN encoding with compression.
-pub fn bench_tbin_encode(c: &mut Criterion) {
-    let mut group = c.benchmark_group("tbin_encode");
+/// Benchmark FL encoding with compression.
+pub fn bench_fl_encode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fl_encode");
 
     // Various record sizes
     for (record_count, value_size) in &[(100, 100), (100, 1024), (1000, 256), (100, 10_000)] {
@@ -36,7 +36,7 @@ pub fn bench_tbin_encode(c: &mut Criterion) {
             &batch,
             |b, seg| {
                 b.iter(|| {
-                    let mut writer = TbinWriter::new();
+                    let mut writer = FlWriter::new();
                     writer.add_segment(black_box(seg)).unwrap();
                     black_box(writer.finish())
                 })
@@ -47,20 +47,20 @@ pub fn bench_tbin_encode(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark TBIN decoding (decompression + parsing).
-pub fn bench_tbin_decode(c: &mut Criterion) {
-    let mut group = c.benchmark_group("tbin_decode");
+/// Benchmark FL decoding (decompression + parsing).
+pub fn bench_fl_decode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fl_decode");
 
     for (record_count, value_size) in &[(100, 100), (100, 1024), (1000, 256), (100, 10_000)] {
         let batch = make_segment(*record_count, *value_size);
 
         // Pre-encode the batch
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         writer.add_segment(&batch).unwrap();
         let file_bytes = writer.finish();
 
         // Parse footer first
-        let metas = TbinReader::read_footer(&file_bytes).unwrap();
+        let metas = FlReader::read_footer(&file_bytes).unwrap();
 
         group.throughput(Throughput::Elements(*record_count as u64));
         group.bench_with_input(
@@ -68,7 +68,7 @@ pub fn bench_tbin_decode(c: &mut Criterion) {
             &(file_bytes, metas),
             |b, (data, metas)| {
                 b.iter(|| {
-                    black_box(TbinReader::read_segment(black_box(data), &metas[0], true).unwrap())
+                    black_box(FlReader::read_segment(black_box(data), &metas[0], true).unwrap())
                 })
             },
         );
@@ -78,12 +78,12 @@ pub fn bench_tbin_decode(c: &mut Criterion) {
 }
 
 /// Benchmark footer parsing only.
-pub fn bench_tbin_footer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("tbin_footer");
+pub fn bench_fl_footer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fl_footer");
 
     // Create file with multiple batches
     for segment_count in &[1, 10, 50] {
-        let mut writer = TbinWriter::new();
+        let mut writer = FlWriter::new();
         for i in 0..*segment_count {
             let batch = RecordBatch {
                 topic_id: TopicId(1),
@@ -101,7 +101,7 @@ pub fn bench_tbin_footer(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("batches", segment_count),
             &file_bytes,
-            |b, data| b.iter(|| black_box(TbinReader::read_footer(black_box(data)).unwrap())),
+            |b, data| b.iter(|| black_box(FlReader::read_footer(black_box(data)).unwrap())),
         );
     }
 
@@ -156,7 +156,7 @@ pub fn bench_compression_ratio(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(uncompressed_rep as u64));
     group.bench_function("repetitive", |b| {
         b.iter(|| {
-            let mut writer = TbinWriter::new();
+            let mut writer = FlWriter::new();
             writer.add_segment(black_box(&repetitive_segment)).unwrap();
             black_box(writer.finish())
         })
@@ -165,7 +165,7 @@ pub fn bench_compression_ratio(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(uncompressed_rand as u64));
     group.bench_function("random", |b| {
         b.iter(|| {
-            let mut writer = TbinWriter::new();
+            let mut writer = FlWriter::new();
             writer.add_segment(black_box(&random_segment)).unwrap();
             black_box(writer.finish())
         })

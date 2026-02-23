@@ -79,9 +79,9 @@ static WRITER_STATE_ROWS_BUMP: LazyLock<StdMutex<Bump>> = LazyLock::new(|| {
 pub struct BrokerConfig {
     /// Address to bind to.
     pub bind_addr: SocketAddr,
-    /// S3 bucket for storing TBIN files.
+    /// S3 bucket for storing FL files.
     pub bucket: String,
-    /// S3 key prefix for TBIN files.
+    /// S3 key prefix for FL files.
     pub key_prefix: String,
     /// Buffer configuration.
     pub buffer: BufferConfig,

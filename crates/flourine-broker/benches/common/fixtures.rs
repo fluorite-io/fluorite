@@ -50,7 +50,7 @@ pub fn generate_segment(
     }
 }
 
-/// Generate multiple batches for a TBIN file.
+/// Generate multiple batches for a FL file.
 pub fn generate_segments(config: &BenchmarkConfig) -> Vec<RecordBatch> {
     (0..config.segments_per_file)
         .map(|i| generate_segment(TopicId(1), PartitionId(i as u32 % 8), SchemaId(100), config))
