@@ -188,7 +188,7 @@ SELECT setval('schemas_schema_id_seq', 100, false);
 CREATE TABLE reader_groups (
     group_id VARCHAR(255) NOT NULL,
     topic_id INT NOT NULL REFERENCES topics(topic_id) ON DELETE CASCADE,
-    generation BIGINT NOT NULL DEFAULT 1,
+    generation BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (group_id, topic_id)
 );

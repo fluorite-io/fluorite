@@ -65,7 +65,18 @@
       "Bash(gh api:*)",
       "Bash(curl:*)",
       "Bash(git clone:*)",
-      "Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id_ed25519_nikhilsimha -o IdentitiesOnly=yes\" git push origin main)"
+      "Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id_ed25519_nikhilsimha -o IdentitiesOnly=yes\" git push origin main)",
+      "Bash(git mv:*)",
+      "Bash(echo:*)",
+      "Bash(env:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker exec:*)",
+      "Bash(DATABASE_URL=\"postgres://postgres:postgres@localhost:5433/flourine\" AWS_ENDPOINT_URL=\"http://localhost:4566\" AWS_ACCESS_KEY_ID=\"test\" AWS_SECRET_ACCESS_KEY=\"test\" AWS_DEFAULT_REGION=\"us-east-1\" cargo test:*)",
+      "Bash(DATABASE_URL=\"postgres://postgres:postgres@localhost:5433\" AWS_ENDPOINT_URL=\"http://localhost:4566\" AWS_ACCESS_KEY_ID=\"test\" AWS_SECRET_ACCESS_KEY=\"test\" AWS_DEFAULT_REGION=\"us-east-1\" cargo test:*)",
+      "Bash(git push:*)",
+      "Bash(pg_isready:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433/flourine cargo test:*)",
+      "WebFetch(domain:rust.iceberg.apache.org)"
     ]
   }
 }

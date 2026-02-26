@@ -40,6 +40,8 @@ Each writer maintains a monotonically increasing `append_seq` (`AtomicU64`, star
 
 Appends are processed synchronously on the connection handler to preserve per-writer TCP arrival order. Non-append messages are dispatched concurrently to spawned tasks.
 
+ACL check happens in the connection handler before `enqueue_append` is called. If the principal lacks append permission for the target topic, the request is rejected with `ERR_AUTHZ_DENIED` without entering the dedup or buffering path.
+
 ```
 enqueue_append(req):
   1. in_flight_append_decision(writer_id, append_seq)
@@ -310,6 +312,16 @@ Multiple readers in a group must split partitions among themselves. When readers
 | `reader_members` | `(group_id, topic_id, reader_id, broker_id, last_heartbeat)` |
 | `reader_assignments` | `(group_id, topic_id, partition_id, reader_id, generation, committed_offset, lease_expires_at)` |
 
+### Coordinator Configuration (`crates/flourine-broker/src/coordinator/mod.rs`)
+
+`CoordinatorConfig` has three fields:
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `lease_duration` | 45s | How long a partition lease remains valid after renewal |
+| `session_timeout` | 30s | How long before a member without heartbeat is considered expired |
+| `broker_id` | random UUID | Identifies this broker instance; stored in `reader_members.broker_id` on join/heartbeat |
+
 ### Partition Assignment Algorithm (`crates/flourine-broker/src/coordinator/mod.rs`)
 
 Deterministic range-based assignment. Given a sorted member list and partition count:
@@ -453,6 +465,11 @@ The rejoin loop retries if it receives `RebalanceNeeded` from the broker (anothe
 | Two readers claim same partition | Prevented by `WHERE reader_id IS NULL OR lease_expires_at < NOW()` in claim query. Only one succeeds in the Postgres transaction |
 | Concurrent joins | Each join bumps generation and computes assignment. Serialized by Postgres transactions. Last joiner's generation wins; previous joiners get `RebalanceNeeded` on next heartbeat |
 | Commit after eviction | `commit_offset` checks generation match. Returns `StaleGeneration` or `NotOwner` — the stale reader cannot corrupt another reader's offset |
+
+### Current Limitations
+
+- **Single-topic groups only:** `join_group` accepts a single `topic_id`. Multi-topic reader groups are not yet supported.
+- **Non-atomic multi-partition commit:** `commit_offset` handles one `(partition_id, offset)` at a time. A batch of commits from the SDK can partially succeed if the broker crashes mid-way.
 
 ---
 

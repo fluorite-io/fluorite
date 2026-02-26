@@ -214,3 +214,53 @@ async fn test_read_corrupt_fl_returns_error_not_panic() {
         "broker should still accept writes after corrupt read"
     );
 }
+
+/// Write batch, confirm ack. Inject get_range fault → read fails.
+/// Heal → retry read returns the committed data.
+/// Invariant: read failure never returns stale/corrupt data; retry after heal succeeds.
+#[tokio::test]
+async fn test_stale_s3_read_after_batch_index_update() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("read-fault-stale", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    let broker = CrashableWsBroker::start(db.pool.clone()).await;
+    let mut ws = ws_connect(broker.addr()).await;
+
+    // Write 3 records and confirm acks
+    let writer_id = WriterId::new();
+    for i in 0..3 {
+        let resp = ws_produce(
+            &mut ws, writer_id, i + 1, topic_id, partition_id,
+            &format!("v{}", i),
+        ).await;
+        assert!(resp.success, "write {} should succeed", i);
+    }
+
+    // Inject get_range fault — next read will fail
+    broker.faulty_store().fail_next_get_range();
+
+    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    assert!(!resp.success, "read should fail with injected get_range fault");
+    assert_eq!(resp.error_code, ERR_INTERNAL_ERROR);
+
+    // Fault consumed — heal is implicit. Retry should succeed with correct data.
+    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    assert!(resp.success, "retry after heal should succeed");
+    let record_count: usize = resp.results.iter().map(|r| r.records.len()).sum();
+    assert_eq!(record_count, 3, "retry should return all 3 committed records");
+
+    // Verify values are correct (not stale/corrupt)
+    let values: Vec<Bytes> = resp
+        .results
+        .iter()
+        .flat_map(|r| r.records.iter().map(|rec| rec.value.clone()))
+        .collect();
+    for i in 0..3 {
+        assert!(
+            values.contains(&Bytes::from(format!("v{}", i))),
+            "value v{} should be present after retry",
+            i
+        );
+    }
+}

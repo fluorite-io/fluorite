@@ -1085,3 +1085,225 @@ async fn test_lease_expiry_under_clock_manipulation() {
         "No partition should be actively leased to both A and B"
     );
 }
+
+/// 8 readers join the same group concurrently (spawned as 8 tasks).
+/// Verify: final assignment has no duplicate partitions, all partitions
+/// assigned, generation is consistent across all assignment rows.
+/// Invariant: concurrent joins serialize correctly via Postgres row locks.
+#[tokio::test]
+async fn test_concurrent_join_group_serialization() {
+    let db = TestDb::new().await;
+    let config = CoordinatorConfig {
+        lease_duration: Duration::from_secs(45),
+        session_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let coordinator = Arc::new(Coordinator::new(db.pool.clone(), config));
+
+    let num_partitions = 8u32;
+    let topic_id = TopicId(db.create_topic("concurrent-join-8", num_partitions as i32).await as u32);
+    let num_readers = 8;
+
+    // Spawn 8 readers joining concurrently
+    let mut handles = vec![];
+    for i in 0..num_readers {
+        let coord = coordinator.clone();
+        let reader_id = format!("reader-{}", i);
+        handles.push(tokio::spawn(async move {
+            coord
+                .join_group("cj8-group", topic_id, &reader_id)
+                .await
+        }));
+    }
+
+    let results: Vec<_> = futures::future::join_all(handles).await;
+    for (i, result) in results.iter().enumerate() {
+        result
+            .as_ref()
+            .unwrap_or_else(|e| panic!("task {} panicked: {}", i, e))
+            .as_ref()
+            .unwrap_or_else(|e| panic!("join {} failed: {}", i, e));
+    }
+
+    // Settle: get current generation and have all readers rejoin
+    let max_rounds = 10;
+    for _round in 0..max_rounds {
+        let current_gen: i64 = sqlx::query_scalar(
+            "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+        )
+        .bind("cj8-group")
+        .bind(topic_id.0 as i32)
+        .fetch_one(&db.pool)
+        .await
+        .expect("query gen");
+
+        let generation = flourine_common::ids::Generation(current_gen as u64);
+
+        let mut all_ok = true;
+        for i in 0..num_readers {
+            let reader_id = format!("reader-{}", i);
+            let result = coordinator
+                .rejoin("cj8-group", topic_id, &reader_id, generation)
+                .await
+                .expect("rejoin should succeed");
+
+            if result.status != flourine_broker::RejoinStatus::Ok {
+                all_ok = false;
+            }
+        }
+
+        if all_ok {
+            break;
+        }
+    }
+
+    // Get final assignments
+    let current_gen: i64 = sqlx::query_scalar(
+        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cj8-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query final gen");
+
+    let generation = flourine_common::ids::Generation(current_gen as u64);
+
+    let mut all_assignments: Vec<(String, u32)> = vec![];
+    for i in 0..num_readers {
+        let reader_id = format!("reader-{}", i);
+        let result = coordinator
+            .rejoin("cj8-group", topic_id, &reader_id, generation)
+            .await
+            .expect("final rejoin should succeed");
+
+        for assignment in &result.assignments {
+            all_assignments.push((reader_id.clone(), assignment.partition_id.0));
+        }
+    }
+
+    // No duplicate partitions
+    let mut partition_owners: std::collections::HashMap<u32, Vec<String>> =
+        std::collections::HashMap::new();
+    for (reader, partition) in &all_assignments {
+        partition_owners
+            .entry(*partition)
+            .or_default()
+            .push(reader.clone());
+    }
+
+    for partition_id in 0..num_partitions {
+        let owners = partition_owners
+            .get(&partition_id)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            owners.len(),
+            1,
+            "Partition {} should have exactly 1 owner after concurrent joins, but has: {:?}",
+            partition_id,
+            owners
+        );
+    }
+
+    // All partitions assigned
+    let assigned_partitions: HashSet<u32> = all_assignments.iter().map(|(_, p)| *p).collect();
+    let expected_partitions: HashSet<u32> = (0..num_partitions).collect();
+    assert_eq!(
+        assigned_partitions, expected_partitions,
+        "All partitions should be assigned"
+    );
+
+    // Generation consistent in DB: all assignment rows for this group should have
+    // the same generation
+    let distinct_gens: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT generation FROM reader_assignments \
+         WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cj8-group")
+    .bind(topic_id.0 as i32)
+    .fetch_all(&db.pool)
+    .await
+    .expect("query distinct generations");
+
+    assert_eq!(
+        distinct_gens.len(),
+        1,
+        "All assignment rows should have the same generation, got {:?}",
+        distinct_gens
+    );
+}
+
+/// Commit offset with wrong generation is rejected.
+/// Reader joins group (gen=1). Second reader joins (triggers rebalance, gen=2).
+/// First reader attempts commit with gen=1. Verify: commit is rejected.
+/// Invariant: generation-fenced commits prevent stale readers from corrupting offsets.
+#[tokio::test]
+async fn test_commit_offset_wrong_generation_rejected() {
+    let db = TestDb::new().await;
+    let config = CoordinatorConfig {
+        lease_duration: Duration::from_secs(45),
+        session_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let coordinator = Coordinator::new(db.pool.clone(), config);
+
+    let topic_id = TopicId(db.create_topic("gen-fence-test", 4).await as u32);
+
+    // Reader A joins — gen=1
+    let result_a = coordinator
+        .join_group("gf-group", topic_id, "reader-a")
+        .await
+        .expect("Join should succeed");
+    let gen_a = result_a.generation;
+    assert!(!result_a.assignments.is_empty(), "A should get assignments");
+    let partition_a = result_a.assignments[0].partition_id;
+
+    // Reader B joins — triggers rebalance, gen bumps
+    let result_b = coordinator
+        .join_group("gf-group", topic_id, "reader-b")
+        .await
+        .expect("Join should succeed");
+    let gen_b = result_b.generation;
+    assert!(gen_b.0 > gen_a.0, "generation should increase after B joins");
+
+    // Reader A attempts commit with stale gen=1
+    let status = coordinator
+        .commit_offset(
+            "gf-group",
+            topic_id,
+            "reader-a",
+            gen_a,
+            partition_a,
+            Offset(999),
+        )
+        .await
+        .expect("commit should not error");
+
+    // Should be rejected — either StaleGeneration or NotOwner
+    assert!(
+        status == CommitStatus::StaleGeneration || status == CommitStatus::NotOwner,
+        "commit with stale generation should be rejected, got {:?}",
+        status
+    );
+
+    // Verify the stale commit did NOT actually persist
+    let db_offset: Option<i64> = sqlx::query_scalar(
+        "SELECT committed_offset FROM reader_assignments \
+         WHERE group_id = $1 AND topic_id = $2 AND partition_id = $3 AND reader_id = $4",
+    )
+    .bind("gf-group")
+    .bind(topic_id.0 as i32)
+    .bind(partition_a.0 as i32)
+    .bind("reader-a")
+    .fetch_optional(&db.pool)
+    .await
+    .expect("query committed offset");
+
+    if let Some(offset) = db_offset {
+        assert_ne!(
+            offset, 999,
+            "stale generation commit should NOT have persisted offset 999"
+        );
+    }
+}

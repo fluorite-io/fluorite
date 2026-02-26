@@ -577,6 +577,104 @@ async fn test_transient_s3_failure_recovery() {
     );
 }
 
+/// Orphan S3 file after DB commit failure: first batch commits normally,
+/// then S3 put for the second batch succeeds but the broker crashes before
+/// DB commit. After restart, the orphan S3 file exists but only the first
+/// batch's data is visible. New writes proceed correctly.
+/// Invariant: orphan S3 files do not affect correctness; uncommitted writes are invisible.
+#[tokio::test]
+async fn test_orphan_s3_file_after_db_commit_failure() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("orphan-s3", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
+    let addr = broker.addr();
+
+    // First write: commits normally
+    let mut ws = ws_connect(addr).await;
+    let w1 = WriterId::new();
+    let resp = ws_produce(&mut ws, w1, 1, topic_id, partition_id, "committed-ok")
+        .await
+        .expect("first write should succeed");
+    assert!(resp.success);
+
+    // Set long S3 delay so second write's S3 put takes time
+    broker.faulty_store().set_put_delay_ms(3000);
+
+    // Send second write — S3 put will be in flight
+    let addr2 = broker.addr();
+    let produce_handle = tokio::spawn(async move {
+        let mut ws2 = ws_connect(addr2).await;
+        let w2 = WriterId::new();
+        ws_produce(&mut ws2, w2, 1, topic_id, partition_id, "orphan-val").await
+    });
+
+    // Wait for S3 put to start but not finish (put delay is 3s)
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Crash the broker while S3 put is in progress (before DB commit)
+    drop(ws);
+    broker.crash();
+    drop(produce_handle);
+
+    // Verify only the first batch is in topic_batches
+    let batch_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1 AND partition_id = $2",
+    )
+    .bind(topic_id.0 as i32)
+    .bind(partition_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query batch count");
+    assert_eq!(batch_count, 1, "only the first committed batch should exist in DB");
+
+    // Watermark should reflect only the first batch
+    let watermark: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+    )
+    .bind(topic_id.0 as i32)
+    .bind(partition_id.0 as i32)
+    .fetch_optional(&db.pool)
+    .await
+    .expect("query watermark")
+    .unwrap_or(0);
+    assert_eq!(watermark, 1, "watermark should be 1 (only first write committed)");
+
+    // Restart broker — new writes should succeed and not collide with orphan
+    broker.restart().await;
+    let mut ws = ws_connect(broker.addr()).await;
+    let w3 = WriterId::new();
+    let resp = ws_produce(&mut ws, w3, 1, topic_id, partition_id, "after-orphan")
+        .await
+        .expect("write after restart should succeed");
+    assert!(resp.success, "new write should succeed after restart with orphan");
+
+    // Verify data: first write + after-orphan visible, orphan-val NOT visible
+    let read = ws_read_all(&mut ws, topic_id, partition_id)
+        .await
+        .expect("read should succeed");
+    assert!(read.success);
+    let values: Vec<Bytes> = read
+        .results
+        .iter()
+        .flat_map(|r| r.records.iter().map(|rec| rec.value.clone()))
+        .collect();
+    assert!(
+        values.contains(&Bytes::from("committed-ok")),
+        "first committed write should be visible"
+    );
+    assert!(
+        values.contains(&Bytes::from("after-orphan")),
+        "post-restart write should be visible"
+    );
+    assert!(
+        !values.contains(&Bytes::from("orphan-val")),
+        "orphan write should NOT be visible"
+    );
+
+}
+
 /// Sustained S3 failure causes backpressure; recovery after fault clears.
 #[tokio::test]
 async fn test_backpressure_under_sustained_s3_failure() {

@@ -1,6 +1,6 @@
 //! Common test utilities for integration tests.
 
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 mod db;
 mod fault_injection;
@@ -15,11 +15,11 @@ use sqlx::PgPool;
 use flourine_broker::{Coordinator, CoordinatorConfig, ObjectStore};
 
 // Re-export sub-module types so test files don't need to change imports.
-pub use db::{TestDb, cleanup_test_db, produce_records};
+pub use db::{TestDb, produce_records};
 pub use fault_injection::{
     CrashableBroker, CrashableWsBroker, DbBlocker, FaultyObjectStore, MultiBrokerCluster,
 };
-pub use operation_history::{OperationHistory, ReadOp, SharedHistory, WriteOp};
+pub use operation_history::OperationHistory;
 
 // ============ Test-Only Broker Types ============
 

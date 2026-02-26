@@ -1093,3 +1093,230 @@ async fn test_write_broker_a_read_broker_b_immediately() {
         hwm.0
     );
 }
+
+/// L2: Cross-broker reader group reconnect.
+/// 2-broker cluster. Reader connects to broker A. Crash broker A.
+/// Reader reconnects to broker B, calls join_group. Verify: reader gets
+/// assignments and committed offsets are preserved (state is in Postgres).
+/// Invariant: reader group state is in Postgres, not broker memory.
+#[tokio::test]
+async fn test_cross_broker_reader_group_reconnect() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("cross-reconnect", 4).await as u32);
+
+    let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
+
+    // Reader A joins via broker 0
+    let mut ws_a = ws_connect(cluster.broker(0).addr()).await;
+    let join_req = reader::JoinGroupRequest {
+        group_id: "xr-group".to_string(),
+        topic_ids: vec![topic_id],
+        reader_id: "reader-a".to_string(),
+    };
+    let buf = ws_helpers::encode_client_frame(ClientMessage::JoinGroup(join_req), 8192);
+    ws_a.send(Message::Binary(buf)).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), ws_a.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let join_resp = ws_helpers::decode_join_response(match &msg {
+        Message::Binary(d) => d,
+        _ => panic!("expected binary"),
+    });
+    assert!(join_resp.success, "join via broker 0 should succeed");
+
+    // Get generation and commit an offset via broker 0
+    let current_gen: i64 = sqlx::query_scalar(
+        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("xr-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(cluster.pool())
+    .await
+    .expect("query gen");
+
+    let commit_req = reader::CommitRequest {
+        group_id: "xr-group".to_string(),
+        reader_id: "reader-a".to_string(),
+        generation: Generation(current_gen as u64),
+        commits: vec![reader::PartitionCommit {
+            topic_id,
+            partition_id: PartitionId(0),
+            offset: Offset(42),
+        }],
+    };
+    let buf = ws_helpers::encode_client_frame(ClientMessage::Commit(commit_req), 8192);
+    ws_a.send(Message::Binary(buf)).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), ws_a.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let commit_resp = ws_helpers::decode_commit_response(match &msg {
+        Message::Binary(d) => d,
+        _ => panic!("expected binary"),
+    });
+    assert!(commit_resp.success, "commit via broker 0 should succeed");
+
+    // Crash broker 0
+    drop(ws_a);
+    cluster.crash_broker(0).await;
+
+    // Reader reconnects to broker 1
+    let mut ws_b = ws_connect(cluster.broker(1).addr()).await;
+
+    // Leave and rejoin via broker 1 to simulate reconnect
+    let leave_req = reader::LeaveGroupRequest {
+        group_id: "xr-group".to_string(),
+        topic_id,
+        reader_id: "reader-a".to_string(),
+    };
+    let buf = ws_helpers::encode_client_frame(ClientMessage::LeaveGroup(leave_req), 8192);
+    ws_b.send(Message::Binary(buf)).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), ws_b.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    match ws_helpers::decode_server_frame(match &msg {
+        Message::Binary(d) => d,
+        _ => panic!("expected binary"),
+    }) {
+        flourine_wire::ServerMessage::LeaveGroup(r) => {
+            assert!(r.success, "leave via broker 1 should succeed");
+        }
+        other => panic!("expected leave response, got {:?}", other),
+    }
+
+    // Rejoin via broker 1
+    let join_req2 = reader::JoinGroupRequest {
+        group_id: "xr-group".to_string(),
+        topic_ids: vec![topic_id],
+        reader_id: "reader-a".to_string(),
+    };
+    let buf = ws_helpers::encode_client_frame(ClientMessage::JoinGroup(join_req2), 8192);
+    ws_b.send(Message::Binary(buf)).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), ws_b.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let join_resp2 = ws_helpers::decode_join_response(match &msg {
+        Message::Binary(d) => d,
+        _ => panic!("expected binary"),
+    });
+    assert!(join_resp2.success, "rejoin via broker 1 should succeed");
+
+    // Verify: committed offset should be preserved
+    let partition_0_assignment = join_resp2
+        .assignments
+        .iter()
+        .find(|a| a.partition_id == PartitionId(0));
+    if let Some(assignment) = partition_0_assignment {
+        assert_eq!(
+            assignment.committed_offset,
+            Offset(42),
+            "committed offset should survive cross-broker reconnect"
+        );
+    } else {
+        // Verify from DB that the commit persisted
+        let db_offset: Option<i64> = sqlx::query_scalar(
+            "SELECT committed_offset FROM reader_assignments \
+             WHERE group_id = $1 AND topic_id = $2 AND partition_id = 0",
+        )
+        .bind("xr-group")
+        .bind(topic_id.0 as i32)
+        .fetch_optional(cluster.pool())
+        .await
+        .expect("query");
+        assert_eq!(
+            db_offset,
+            Some(42),
+            "committed offset should persist in DB across broker crash"
+        );
+    }
+}
+
+/// L3: Sustained S3 impairment with multi-broker writes.
+/// 2-broker cluster. Partition S3 puts on broker A only. Broker B continues.
+/// After 5s, heal broker A. No duplicate offsets, all acked writes readable.
+/// Invariant: asymmetric S3 faults don't cause cross-broker offset conflicts.
+#[tokio::test]
+async fn test_sustained_s3_impairment_multi_broker() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("sustained-s3", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    let cluster = MultiBrokerCluster::start(db.url(), 2).await;
+
+    // Write baseline data via broker 0
+    let mut ws0 = ws_connect(cluster.broker(0).addr()).await;
+    let w0 = WriterId::new();
+    for i in 0..3 {
+        let resp = ws_produce(
+            &mut ws0, w0, i + 1, topic_id, partition_id,
+            &format!("baseline-{}", i),
+        )
+        .await
+        .expect("baseline write");
+        assert!(resp.success);
+    }
+
+    // Partition broker 0 from S3 (puts only)
+    cluster.broker_store(0).partition_puts();
+
+    // Broker B continues writing for ~3 seconds
+    let mut ws1 = ws_connect(cluster.broker(1).addr()).await;
+    let w1 = WriterId::new();
+    let mut acked_b1 = Vec::new();
+    for i in 0..10 {
+        let val = format!("b1-sustained-{}", i);
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+            .await
+            .expect("broker 1 write should succeed");
+        assert!(resp.success, "broker 1 write {} should succeed", i);
+        acked_b1.push(Bytes::from(val));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    // Broker A writes should hang during this period
+    let w0b = WriterId::new();
+    let hung = tokio::time::timeout(
+        Duration::from_secs(1),
+        ws_produce(&mut ws0, w0b, 1, topic_id, partition_id, "should-hang"),
+    )
+    .await;
+    assert!(hung.is_err(), "broker 0 write should hang while S3 partitioned");
+
+    // Heal broker A
+    cluster.broker_store(0).heal_partition();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Read all data via broker 1
+    let (values, hwm) = ws_read_all(&mut ws1, topic_id, partition_id)
+        .await
+        .expect("final read should succeed");
+
+    // All broker 1 acked writes should be visible
+    for v in &acked_b1 {
+        assert!(
+            values.contains(v),
+            "broker 1 acked value {:?} should be visible",
+            v
+        );
+    }
+
+    // No duplicate offsets: values count == watermark (contiguous)
+    assert_eq!(
+        values.len() as u64,
+        hwm.0,
+        "offsets should be contiguous: {} values but hwm {}",
+        values.len(),
+        hwm.0
+    );
+
+    // No duplicate values
+    let unique: HashSet<&Bytes> = values.iter().collect();
+    assert_eq!(values.len(), unique.len(), "no duplicate values from both brokers");
+}

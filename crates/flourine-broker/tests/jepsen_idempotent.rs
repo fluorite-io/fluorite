@@ -335,6 +335,109 @@ async fn test_stale_seq_rejected() {
     );
 }
 
+/// Dedup cache eviction then DB fallback: writer sends seq=1, cache is flushed
+/// (via broker restart which clears LRU), retry seq=1 hits DB dedup → no duplicate.
+/// Invariant: dedup is correct even after in-memory cache eviction.
+#[tokio::test]
+async fn test_dedup_cache_eviction_db_fallback() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("idem-evict", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
+    let writer_id = WriterId::new();
+
+    // Write seq=1 and get ack
+    let mut ws = ws_connect(broker.addr()).await;
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "evict-val")
+        .await
+        .expect("first produce should succeed");
+    assert!(resp.success);
+    let ack1 = resp.append_acks.clone();
+
+    // Restart broker to clear LRU cache (simulates cache eviction)
+    drop(ws);
+    broker.restart().await;
+
+    // Retry seq=1 — cache miss, DB lookup should find Duplicate
+    let mut ws = ws_connect(broker.addr()).await;
+    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "evict-val")
+        .await
+        .expect("retry should succeed");
+    assert!(resp2.success, "DB dedup should return cached ack after eviction");
+    assert_eq!(resp2.append_acks, ack1, "acks should match original");
+
+    // Verify exactly 1 record — no duplicate
+    let values = ws_read_all(&mut ws, topic_id, partition_id)
+        .await
+        .expect("read should succeed");
+    assert_eq!(values.len(), 1, "no duplicate after cache eviction + DB fallback");
+    assert_eq!(values[0], Bytes::from("evict-val"));
+}
+
+/// Writer state GC doesn't break active writers: writer A sends seq=1,
+/// writer_state is deleted (simulating GC with zero retention), retry seq=1
+/// is treated as a new write (no cached ack), but offsets remain valid.
+/// Invariant: GC of writer state is safe; worst case is a new offset.
+#[tokio::test]
+async fn test_writer_state_gc_does_not_break_active_writers() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("idem-gc", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
+    let writer_id = WriterId::new();
+
+    // Write seq=1 and get ack
+    let mut ws = ws_connect(broker.addr()).await;
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "gc-val")
+        .await
+        .expect("first produce should succeed");
+    assert!(resp.success);
+
+    // Simulate GC: delete writer_state from DB and restart to clear cache
+    sqlx::query("DELETE FROM writer_state WHERE writer_id = $1")
+        .bind(writer_id.0)
+        .execute(&db.pool)
+        .await
+        .expect("GC delete should succeed");
+
+    drop(ws);
+    broker.restart().await;
+
+    // Retry seq=1 — no cached ack in cache or DB, treated as new write
+    let mut ws = ws_connect(broker.addr()).await;
+    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "gc-val")
+        .await
+        .expect("retry after GC should succeed");
+    assert!(resp2.success, "retry after GC should succeed as new write");
+
+    // May have 1 or 2 records (duplicate is acceptable per whitepaper)
+    let values = ws_read_all(&mut ws, topic_id, partition_id)
+        .await
+        .expect("read should succeed");
+    assert!(
+        values.len() >= 1 && values.len() <= 2,
+        "should have 1 or 2 records after GC, got {}",
+        values.len()
+    );
+
+    // Offsets should be valid (no gaps in watermark)
+    let watermark: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+    )
+    .bind(topic_id.0 as i32)
+    .bind(partition_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query watermark");
+    assert_eq!(
+        watermark as usize,
+        values.len(),
+        "watermark should match actual record count"
+    );
+}
+
 /// Fail S3 put → flush fails → retry same seq → Accept (first never committed).
 #[tokio::test]
 async fn test_retry_after_failed_flush() {

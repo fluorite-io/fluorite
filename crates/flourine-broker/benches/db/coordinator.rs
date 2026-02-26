@@ -149,6 +149,7 @@ async fn create_test_db() -> Option<BenchDb> {
             group_id TEXT NOT NULL,
             topic_id INT NOT NULL,
             reader_id TEXT NOT NULL,
+            broker_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
             last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             PRIMARY KEY (group_id, topic_id, reader_id)
         )
@@ -192,6 +193,7 @@ pub fn bench_coordinator_join(c: &mut Criterion) {
     let config = CoordinatorConfig {
         lease_duration: Duration::from_secs(30),
         session_timeout: Duration::from_secs(60),
+        ..Default::default()
     };
     let _coordinator = Coordinator::new(pool.clone(), config);
 
@@ -208,6 +210,7 @@ pub fn bench_coordinator_join(c: &mut Criterion) {
             let config = CoordinatorConfig {
                 lease_duration: Duration::from_secs(30),
                 session_timeout: Duration::from_secs(60),
+                ..Default::default()
             };
             async move {
                 let coord = Coordinator::new(pool, config);
@@ -237,6 +240,7 @@ pub fn bench_coordinator_heartbeat(c: &mut Criterion) {
     let config = CoordinatorConfig {
         lease_duration: Duration::from_secs(30),
         session_timeout: Duration::from_secs(60),
+        ..Default::default()
     };
     let coordinator = Coordinator::new(pool.clone(), config);
 
@@ -259,6 +263,7 @@ pub fn bench_coordinator_heartbeat(c: &mut Criterion) {
                 let config = CoordinatorConfig {
                     lease_duration: Duration::from_secs(30),
                     session_timeout: Duration::from_secs(60),
+                    ..Default::default()
                 };
                 let coord = Coordinator::new(pool, config);
                 let result = coord
@@ -289,15 +294,17 @@ pub fn bench_coordinator_commit(c: &mut Criterion) {
     let config = CoordinatorConfig {
         lease_duration: Duration::from_secs(30),
         session_timeout: Duration::from_secs(60),
+        ..Default::default()
     };
     let coordinator = Coordinator::new(pool.clone(), config);
 
     // Pre-join a reader
-    rt.block_on(async {
+    let generation = rt.block_on(async {
         coordinator
             .join_group("commit-bench", TopicId(1), "reader-1")
             .await
             .unwrap()
+            .generation
     });
 
     let mut group = c.benchmark_group("coordinator_commit");
@@ -307,10 +314,12 @@ pub fn bench_coordinator_commit(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let off = offset_counter.fetch_add(100, Ordering::SeqCst);
             let pool = pool.clone();
+            let commit_gen = generation;
             async move {
                 let config = CoordinatorConfig {
                     lease_duration: Duration::from_secs(30),
                     session_timeout: Duration::from_secs(60),
+                    ..Default::default()
                 };
                 let coord = Coordinator::new(pool, config);
                 let result = coord
@@ -318,6 +327,7 @@ pub fn bench_coordinator_commit(c: &mut Criterion) {
                         "commit-bench",
                         TopicId(1),
                         "reader-1",
+                        commit_gen,
                         PartitionId(0),
                         Offset(off),
                     )
@@ -354,6 +364,7 @@ pub fn bench_coordinator_rebalance(c: &mut Criterion) {
                         let config = CoordinatorConfig {
                             lease_duration: Duration::from_secs(30),
                             session_timeout: Duration::from_secs(60),
+                            ..Default::default()
                         };
 
                         // Pre-join consumers except the last
@@ -375,6 +386,7 @@ pub fn bench_coordinator_rebalance(c: &mut Criterion) {
                         let config = CoordinatorConfig {
                             lease_duration: Duration::from_secs(30),
                             session_timeout: Duration::from_secs(60),
+                            ..Default::default()
                         };
                         let coord = Coordinator::new(bench_db.pool.clone(), config);
                         // Join the last reader (triggers rebalance)

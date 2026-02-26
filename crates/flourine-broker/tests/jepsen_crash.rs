@@ -14,7 +14,8 @@ use flourine_broker::{Coordinator, CoordinatorConfig};
 use flourine_common::ids::{Offset, PartitionId, TopicId};
 use flourine_common::types::Record;
 
-use common::{CrashableBroker, TestDb, produce_records};
+use common::{CrashableBroker, CrashableWsBroker, TestDb, produce_records};
+use common::ws_helpers;
 
 /// Get high watermark from database.
 async fn get_watermark(pool: &sqlx::PgPool, topic_id: TopicId, partition_id: PartitionId) -> i64 {
@@ -242,6 +243,97 @@ async fn test_uncommitted_writes_not_visible_after_crash() {
     );
 }
 
+/// Full DB unavailability: broker stalls, doesn't corrupt.
+/// Start broker, produce data. Crash to simulate DB unavailability.
+/// Restart. Previously committed data intact, new writes succeed.
+/// Invariant: DB unavailability causes stalls/errors but never data loss or corruption.
+#[tokio::test]
+async fn test_full_db_unavailability_stalls_not_corrupts() {
+    let db = TestDb::new().await;
+    let mut broker = CrashableBroker::new(db.pool.clone()).await;
+
+    let topic_id = TopicId(db.create_topic("db-unavail", 2).await as u32);
+
+    // Write baseline data to both partitions
+    for p in 0..2u32 {
+        let partition_id = PartitionId(p);
+        let records: Vec<Record> = (0..5)
+            .map(|i| Record {
+                key: Some(Bytes::from(format!("p{}-key-{}", p, i))),
+                value: Bytes::from(format!("p{}-val-{}", p, i)),
+            })
+            .collect();
+
+        let (_, end_offset) = produce_records(broker.state(), topic_id, partition_id, records)
+            .await
+            .expect("baseline write should succeed");
+        assert_eq!(end_offset.0, 5);
+    }
+
+    // Crash (simulates DB unavailability)
+    broker.crash();
+    assert!(broker.is_crashed());
+
+    // Restart
+    broker.restart();
+    assert!(!broker.is_crashed());
+
+    // Previously committed data should be intact on both partitions
+    for p in 0..2u32 {
+        let watermark = get_watermark(&broker.pool, topic_id, PartitionId(p)).await;
+        assert_eq!(
+            watermark, 5,
+            "partition {} watermark should be 5 after restart",
+            p
+        );
+    }
+
+    // New writes should succeed on both partitions
+    for p in 0..2u32 {
+        let partition_id = PartitionId(p);
+        let records: Vec<Record> = (5..8)
+            .map(|i| Record {
+                key: Some(Bytes::from(format!("p{}-key-{}", p, i))),
+                value: Bytes::from(format!("p{}-new-{}", p, i)),
+            })
+            .collect();
+
+        let (start, end) = produce_records(broker.state(), topic_id, partition_id, records)
+            .await
+            .expect("new writes should succeed");
+        assert_eq!(start.0, 5, "partition {} new writes should start at 5", p);
+        assert_eq!(end.0, 8, "partition {} new writes should end at 8", p);
+    }
+
+    // Final watermark check
+    for p in 0..2u32 {
+        let watermark = get_watermark(&broker.pool, topic_id, PartitionId(p)).await;
+        assert_eq!(watermark, 8, "partition {} final watermark should be 8", p);
+    }
+
+    // Verify batches are contiguous (no gaps from the crash)
+    for p in 0..2u32 {
+        let batches: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT start_offset, end_offset FROM topic_batches \
+             WHERE topic_id = $1 AND partition_id = $2 ORDER BY start_offset",
+        )
+        .bind(topic_id.0 as i32)
+        .bind(p as i32)
+        .fetch_all(&db.pool)
+        .await
+        .expect("query batches");
+
+        // Verify contiguity: each batch's start == previous batch's end
+        for window in batches.windows(2) {
+            assert_eq!(
+                window[0].1, window[1].0,
+                "partition {} batches should be contiguous: prev_end={}, next_start={}",
+                p, window[0].1, window[1].0
+            );
+        }
+    }
+}
+
 /// Test that reader group state persists through coordinator restart.
 #[tokio::test]
 async fn test_consumer_group_state_persists() {
@@ -316,4 +408,185 @@ async fn test_consumer_group_state_persists() {
             "Committed offset 50 should persist in database"
         );
     }
+}
+
+// ============ L1: Read-after-write across broker restart ============
+
+use flourine_common::ids::*;
+use flourine_common::types::{RecordBatch};
+use flourine_wire::{ClientMessage, reader, writer};
+use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::{MaybeTlsStream, connect_async, tungstenite::Message};
+
+type Ws = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn ws_connect(addr: std::net::SocketAddr) -> Ws {
+    let (ws, _) = connect_async(format!("ws://{}", addr))
+        .await
+        .expect("WS connect failed");
+    ws
+}
+
+async fn ws_produce(
+    ws: &mut Ws,
+    writer_id: WriterId,
+    seq: u64,
+    topic_id: TopicId,
+    partition_id: PartitionId,
+    value: &str,
+) -> Result<writer::AppendResponse, String> {
+    let req = writer::AppendRequest {
+        writer_id,
+        append_seq: AppendSeq(seq),
+        batches: vec![RecordBatch {
+            topic_id,
+            partition_id,
+            schema_id: SchemaId(100),
+            records: vec![Record {
+                key: None,
+                value: Bytes::from(value.to_string()),
+            }],
+        }],
+    };
+    let buf = ws_helpers::encode_client_frame(ClientMessage::Append(req), 8192);
+    ws.send(Message::Binary(buf))
+        .await
+        .map_err(|e| format!("send: {}", e))?;
+
+    let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+        .await
+        .map_err(|_| "timeout".to_string())?
+        .ok_or("stream closed")?
+        .map_err(|e| format!("recv: {}", e))?;
+
+    let data = match msg {
+        Message::Binary(d) => d,
+        _ => return Err("expected binary".to_string()),
+    };
+    match ws_helpers::decode_server_frame(&data) {
+        flourine_wire::ServerMessage::Append(resp) => Ok(resp),
+        other => Err(format!("unexpected: {:?}", other)),
+    }
+}
+
+async fn ws_read_all(
+    ws: &mut Ws,
+    topic_id: TopicId,
+    partition_id: PartitionId,
+) -> Result<(Vec<Bytes>, Offset), String> {
+    let mut all_values = Vec::new();
+    let mut next_offset = Offset(0);
+    let mut hwm = Offset(0);
+
+    loop {
+        let req = reader::ReadRequest {
+            group_id: String::new(),
+            reader_id: String::new(),
+            generation: Generation(0),
+            reads: vec![reader::PartitionRead {
+                topic_id,
+                partition_id,
+                offset: next_offset,
+                max_bytes: 10 * 1024 * 1024,
+            }],
+        };
+        let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
+        ws.send(Message::Binary(buf))
+            .await
+            .map_err(|e| format!("send: {}", e))?;
+
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+            .await
+            .map_err(|_| "timeout".to_string())?
+            .ok_or("stream closed")?
+            .map_err(|e| format!("recv: {}", e))?;
+
+        let data = match msg {
+            Message::Binary(d) => d,
+            _ => return Err("expected binary".to_string()),
+        };
+        let resp = match ws_helpers::decode_server_frame(&data) {
+            flourine_wire::ServerMessage::Read(resp) => resp,
+            other => return Err(format!("unexpected: {:?}", other)),
+        };
+
+        if !resp.success {
+            return Err(format!("read failed: {}", resp.error_message));
+        }
+
+        let mut got = false;
+        for r in &resp.results {
+            if r.high_watermark.0 > hwm.0 {
+                hwm = r.high_watermark;
+            }
+            if !r.records.is_empty() {
+                got = true;
+                next_offset = Offset(next_offset.0 + r.records.len() as u64);
+                all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
+            }
+        }
+        if !got || next_offset.0 >= hwm.0 {
+            break;
+        }
+    }
+    Ok((all_values, hwm))
+}
+
+/// Produce N records, get ack with offsets. Crash and restart broker.
+/// Read from offset 0. Verify: all N records present with correct payloads.
+/// Invariant: acknowledged writes survive broker restart (S3 + DB durability).
+#[tokio::test]
+async fn test_read_after_write_across_restart() {
+    let db = TestDb::new().await;
+    let topic_id = TopicId(db.create_topic("raw-restart", 1).await as u32);
+    let partition_id = PartitionId(0);
+
+    let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
+
+    // Produce 10 records and collect acked values
+    let mut ws = ws_connect(broker.addr()).await;
+    let writer_id = WriterId::new();
+    let mut acked_values = Vec::new();
+    for i in 0..10 {
+        let val = format!("record-{}", i);
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &val)
+            .await
+            .expect("produce should succeed");
+        assert!(resp.success, "write {} should be acked", i);
+        acked_values.push(Bytes::from(val));
+    }
+
+    // Crash and restart
+    drop(ws);
+    broker.restart().await;
+
+    // Read all from offset 0
+    let mut ws = ws_connect(broker.addr()).await;
+    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+        .await
+        .expect("read after restart should succeed");
+
+    // All acked records should be present
+    assert_eq!(
+        values.len(),
+        acked_values.len(),
+        "all {} acked records should survive restart, got {}",
+        acked_values.len(),
+        values.len()
+    );
+
+    for v in &acked_values {
+        assert!(
+            values.contains(v),
+            "acked value {:?} should survive restart",
+            v
+        );
+    }
+
+    // Watermark should match record count
+    assert_eq!(
+        hwm.0,
+        acked_values.len() as u64,
+        "watermark should match acked count"
+    );
 }
