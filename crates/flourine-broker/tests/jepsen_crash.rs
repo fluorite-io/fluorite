@@ -11,19 +11,18 @@ use bytes::Bytes;
 use std::time::Duration;
 
 use flourine_broker::{Coordinator, CoordinatorConfig};
-use flourine_common::ids::{Offset, PartitionId, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 use flourine_common::types::Record;
 
 use common::{CrashableBroker, CrashableWsBroker, TestDb, produce_records};
 use common::ws_helpers;
 
 /// Get high watermark from database.
-async fn get_watermark(pool: &sqlx::PgPool, topic_id: TopicId, partition_id: PartitionId) -> i64 {
+async fn get_watermark(pool: &sqlx::PgPool, topic_id: TopicId) -> i64 {
     sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(pool)
     .await
     .unwrap()
@@ -36,8 +35,7 @@ async fn test_broker_restart_watermark_fresh() {
     let db = TestDb::new().await;
     let mut broker = CrashableBroker::new(db.pool.clone()).await;
 
-    let topic_id = TopicId(db.create_topic("crash-watermark-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("crash-watermark-test").await as u32);
 
     // Append 10 records
     let records: Vec<Record> = (0..10)
@@ -47,14 +45,14 @@ async fn test_broker_restart_watermark_fresh() {
         })
         .collect();
 
-    let (_, end_offset) = produce_records(broker.state(), topic_id, partition_id, records)
+    let (_, end_offset) = produce_records(broker.state(), topic_id, records)
         .await
         .expect("Append should succeed");
 
     assert_eq!(end_offset.0, 10);
 
     // Verify watermark before crash
-    let watermark_before = get_watermark(&broker.pool, topic_id, partition_id).await;
+    let watermark_before = get_watermark(&broker.pool, topic_id).await;
     assert_eq!(watermark_before, 10);
 
     // Simulate crash and restart
@@ -65,7 +63,7 @@ async fn test_broker_restart_watermark_fresh() {
     assert!(!broker.is_crashed());
 
     // Watermark should still be 10 after restart (loaded from DB)
-    let watermark_after = get_watermark(&broker.pool, topic_id, partition_id).await;
+    let watermark_after = get_watermark(&broker.pool, topic_id).await;
     assert_eq!(
         watermark_after, 10,
         "Watermark should be fresh from DB after restart"
@@ -79,7 +77,7 @@ async fn test_broker_restart_watermark_fresh() {
         })
         .collect();
 
-    let (_, new_end_offset) = produce_records(broker.state(), topic_id, partition_id, more_records)
+    let (_, new_end_offset) = produce_records(broker.state(), topic_id, more_records)
         .await
         .expect("Append after restart should succeed");
 
@@ -97,27 +95,57 @@ async fn test_consumer_reconnect_resumes_offset() {
     };
     let coordinator = Coordinator::new(db.pool.clone(), config);
 
-    let topic_id = TopicId(db.create_topic("reconnect-test", 2).await as u32);
+    let topic_id = TopicId(db.create_topic("reconnect-test").await as u32);
 
     // Reader joins
-    let result1 = coordinator
+    coordinator
         .join_group("reconnect-group", topic_id, "reader-1")
         .await
         .expect("Join should succeed");
 
-    // Commit offset 100 to first partition
-    let partition = result1.assignments[0].partition_id;
-    coordinator
-        .commit_offset(
+    // Simulate an inflight range (normally created by poll)
+    sqlx::query(
+        r#"
+        INSERT INTO reader_inflight
+        (group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at)
+        VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '45 seconds')
+        "#,
+    )
+    .bind("reconnect-group")
+    .bind(topic_id.0 as i32)
+    .bind(0i64)
+    .bind(100i64)
+    .bind("reader-1")
+    .execute(&db.pool)
+    .await
+    .expect("Insert inflight");
+
+    // Also advance dispatch_cursor so watermark can advance
+    sqlx::query(
+        "UPDATE reader_group_state SET dispatch_cursor = 100 WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("reconnect-group")
+    .bind(topic_id.0 as i32)
+    .execute(&db.pool)
+    .await
+    .expect("Update dispatch cursor");
+
+    // Commit range [0, 100)
+    let status = coordinator
+        .commit_range(
             "reconnect-group",
             topic_id,
             "reader-1",
-            result1.generation,
-            partition,
+            Offset(0),
             Offset(100),
         )
         .await
         .expect("Commit should succeed");
+    assert_eq!(
+        status,
+        flourine_broker::CommitStatus::Ok,
+        "Commit should return Ok"
+    );
 
     // Simulate reader disconnect by leaving
     coordinator
@@ -126,24 +154,27 @@ async fn test_consumer_reconnect_resumes_offset() {
         .expect("Leave should succeed");
 
     // Reader reconnects
-    let result2 = coordinator
+    coordinator
         .join_group("reconnect-group", topic_id, "reader-1")
         .await
         .expect("Rejoin should succeed");
 
-    // Find the same partition in new assignments
-    let same_partition = result2
-        .assignments
-        .iter()
-        .find(|a| a.partition_id == partition);
+    // Verify committed state via DB
+    let committed: Option<i64> = sqlx::query_scalar(
+        "SELECT committed_watermark FROM reader_group_state WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("reconnect-group")
+    .bind(topic_id.0 as i32)
+    .fetch_optional(&db.pool)
+    .await
+    .expect("Query should succeed");
 
-    if let Some(assignment) = same_partition {
-        assert_eq!(
-            assignment.committed_offset.0, 100,
-            "Reader should resume from committed offset 100, got {}",
-            assignment.committed_offset.0
-        );
-    }
+    // Committed watermark should reflect what was committed
+    assert_eq!(
+        committed,
+        Some(100),
+        "Committed watermark should be 100 after rejoin"
+    );
 }
 
 /// Test that writes are not lost during broker crash.
@@ -152,8 +183,7 @@ async fn test_crash_does_not_lose_committed_writes() {
     let db = TestDb::new().await;
     let mut broker = CrashableBroker::new(db.pool.clone()).await;
 
-    let topic_id = TopicId(db.create_topic("no-loss-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("no-loss-test").await as u32);
 
     // Track all committed record values
     let mut committed_values = vec![];
@@ -171,7 +201,7 @@ async fn test_crash_does_not_lose_committed_writes() {
             })
             .collect();
 
-        produce_records(broker.state(), topic_id, partition_id, records)
+        produce_records(broker.state(), topic_id, records)
             .await
             .expect("Append should succeed");
 
@@ -186,12 +216,11 @@ async fn test_crash_does_not_lose_committed_writes() {
     let batches: Vec<(i64, i64)> = sqlx::query_as(
         r#"
         SELECT start_offset, end_offset FROM topic_batches
-        WHERE topic_id = $1 AND partition_id = $2
+        WHERE topic_id = $1
         ORDER BY start_offset
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_all(&db.pool)
     .await
     .expect("Query should succeed");
@@ -203,7 +232,7 @@ async fn test_crash_does_not_lose_committed_writes() {
     assert_eq!(total_records, 15, "Should have 15 total records");
 
     // Verify watermark matches
-    let watermark = get_watermark(&db.pool, topic_id, partition_id).await;
+    let watermark = get_watermark(&db.pool, topic_id).await;
     assert_eq!(watermark, 15, "Watermark should be 15");
 }
 
@@ -213,8 +242,7 @@ async fn test_uncommitted_writes_not_visible_after_crash() {
     let db = TestDb::new().await;
     let mut broker = CrashableBroker::new(db.pool.clone()).await;
 
-    let topic_id = TopicId(db.create_topic("uncommitted-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("uncommitted-test").await as u32);
 
     // Append some records (this commits to DB)
     let records: Vec<Record> = (0..5)
@@ -224,11 +252,11 @@ async fn test_uncommitted_writes_not_visible_after_crash() {
         })
         .collect();
 
-    produce_records(broker.state(), topic_id, partition_id, records)
+    produce_records(broker.state(), topic_id, records)
         .await
         .expect("Append should succeed");
 
-    let watermark_before = get_watermark(&broker.pool, topic_id, partition_id).await;
+    let watermark_before = get_watermark(&broker.pool, topic_id).await;
     assert_eq!(watermark_before, 5);
 
     // Crash the broker
@@ -236,7 +264,7 @@ async fn test_uncommitted_writes_not_visible_after_crash() {
     broker.restart();
 
     // Watermark should still be 5 (committed writes visible)
-    let watermark_after = get_watermark(&broker.pool, topic_id, partition_id).await;
+    let watermark_after = get_watermark(&broker.pool, topic_id).await;
     assert_eq!(
         watermark_after, 5,
         "Only committed writes should be visible after crash"
@@ -252,23 +280,20 @@ async fn test_full_db_unavailability_stalls_not_corrupts() {
     let db = TestDb::new().await;
     let mut broker = CrashableBroker::new(db.pool.clone()).await;
 
-    let topic_id = TopicId(db.create_topic("db-unavail", 2).await as u32);
+    let topic_id = TopicId(db.create_topic("db-unavail").await as u32);
 
-    // Write baseline data to both partitions
-    for p in 0..2u32 {
-        let partition_id = PartitionId(p);
-        let records: Vec<Record> = (0..5)
-            .map(|i| Record {
-                key: Some(Bytes::from(format!("p{}-key-{}", p, i))),
-                value: Bytes::from(format!("p{}-val-{}", p, i)),
-            })
-            .collect();
+    // Write baseline data
+    let records: Vec<Record> = (0..5)
+        .map(|i| Record {
+            key: Some(Bytes::from(format!("key-{}", i))),
+            value: Bytes::from(format!("val-{}", i)),
+        })
+        .collect();
 
-        let (_, end_offset) = produce_records(broker.state(), topic_id, partition_id, records)
-            .await
-            .expect("baseline write should succeed");
-        assert_eq!(end_offset.0, 5);
-    }
+    let (_, end_offset) = produce_records(broker.state(), topic_id, records)
+        .await
+        .expect("baseline write should succeed");
+    assert_eq!(end_offset.0, 5);
 
     // Crash (simulates DB unavailability)
     broker.crash();
@@ -278,59 +303,45 @@ async fn test_full_db_unavailability_stalls_not_corrupts() {
     broker.restart();
     assert!(!broker.is_crashed());
 
-    // Previously committed data should be intact on both partitions
-    for p in 0..2u32 {
-        let watermark = get_watermark(&broker.pool, topic_id, PartitionId(p)).await;
-        assert_eq!(
-            watermark, 5,
-            "partition {} watermark should be 5 after restart",
-            p
-        );
-    }
+    // Previously committed data should be intact
+    let watermark = get_watermark(&broker.pool, topic_id).await;
+    assert_eq!(watermark, 5, "watermark should be 5 after restart");
 
-    // New writes should succeed on both partitions
-    for p in 0..2u32 {
-        let partition_id = PartitionId(p);
-        let records: Vec<Record> = (5..8)
-            .map(|i| Record {
-                key: Some(Bytes::from(format!("p{}-key-{}", p, i))),
-                value: Bytes::from(format!("p{}-new-{}", p, i)),
-            })
-            .collect();
+    // New writes should succeed
+    let records: Vec<Record> = (5..8)
+        .map(|i| Record {
+            key: Some(Bytes::from(format!("key-{}", i))),
+            value: Bytes::from(format!("new-{}", i)),
+        })
+        .collect();
 
-        let (start, end) = produce_records(broker.state(), topic_id, partition_id, records)
-            .await
-            .expect("new writes should succeed");
-        assert_eq!(start.0, 5, "partition {} new writes should start at 5", p);
-        assert_eq!(end.0, 8, "partition {} new writes should end at 8", p);
-    }
+    let (start, end) = produce_records(broker.state(), topic_id, records)
+        .await
+        .expect("new writes should succeed");
+    assert_eq!(start.0, 5, "new writes should start at 5");
+    assert_eq!(end.0, 8, "new writes should end at 8");
 
     // Final watermark check
-    for p in 0..2u32 {
-        let watermark = get_watermark(&broker.pool, topic_id, PartitionId(p)).await;
-        assert_eq!(watermark, 8, "partition {} final watermark should be 8", p);
-    }
+    let watermark = get_watermark(&broker.pool, topic_id).await;
+    assert_eq!(watermark, 8, "final watermark should be 8");
 
     // Verify batches are contiguous (no gaps from the crash)
-    for p in 0..2u32 {
-        let batches: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT start_offset, end_offset FROM topic_batches \
-             WHERE topic_id = $1 AND partition_id = $2 ORDER BY start_offset",
-        )
-        .bind(topic_id.0 as i32)
-        .bind(p as i32)
-        .fetch_all(&db.pool)
-        .await
-        .expect("query batches");
+    let batches: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT start_offset, end_offset FROM topic_batches \
+         WHERE topic_id = $1 ORDER BY start_offset",
+    )
+    .bind(topic_id.0 as i32)
+    .fetch_all(&db.pool)
+    .await
+    .expect("query batches");
 
-        // Verify contiguity: each batch's start == previous batch's end
-        for window in batches.windows(2) {
-            assert_eq!(
-                window[0].1, window[1].0,
-                "partition {} batches should be contiguous: prev_end={}, next_start={}",
-                p, window[0].1, window[1].0
-            );
-        }
+    // Verify contiguity: each batch's start == previous batch's end
+    for window in batches.windows(2) {
+        assert_eq!(
+            window[0].1, window[1].0,
+            "batches should be contiguous: prev_end={}, next_start={}",
+            window[0].1, window[1].0
+        );
     }
 }
 
@@ -344,30 +355,56 @@ async fn test_consumer_group_state_persists() {
         ..Default::default()
     };
 
-    let topic_id = TopicId(db.create_topic("persist-cg-test", 2).await as u32);
+    let topic_id = TopicId(db.create_topic("persist-cg-test").await as u32);
 
     // First coordinator instance
     {
         let coordinator = Coordinator::new(db.pool.clone(), config.clone());
 
-        let result = coordinator
+        coordinator
             .join_group("persist-cg", topic_id, "reader-1")
             .await
             .expect("Join should succeed");
 
-        // Commit offset 50
-        let partition = result.assignments[0].partition_id;
-        coordinator
-            .commit_offset(
+        // Simulate an inflight range (normally created by poll)
+        sqlx::query(
+            r#"
+            INSERT INTO reader_inflight
+            (group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at)
+            VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '45 seconds')
+            "#,
+        )
+        .bind("persist-cg")
+        .bind(topic_id.0 as i32)
+        .bind(0i64)
+        .bind(50i64)
+        .bind("reader-1")
+        .execute(&db.pool)
+        .await
+        .expect("Insert inflight");
+
+        // Advance dispatch_cursor so watermark can advance
+        sqlx::query(
+            "UPDATE reader_group_state SET dispatch_cursor = 50 WHERE group_id = $1 AND topic_id = $2",
+        )
+        .bind("persist-cg")
+        .bind(topic_id.0 as i32)
+        .execute(&db.pool)
+        .await
+        .expect("Update dispatch cursor");
+
+        // Commit range [0, 50)
+        let status = coordinator
+            .commit_range(
                 "persist-cg",
                 topic_id,
                 "reader-1",
-                result.generation,
-                partition,
+                Offset(0),
                 Offset(50),
             )
             .await
             .expect("Commit should succeed");
+        assert_eq!(status, flourine_broker::CommitStatus::Ok);
     }
     // First coordinator dropped here
 
@@ -375,37 +412,29 @@ async fn test_consumer_group_state_persists() {
     {
         let coordinator = Coordinator::new(db.pool.clone(), config);
 
-        // Leave and rejoin to get fresh assignment
+        // Leave and rejoin to get fresh state
         let _ = coordinator
             .leave_group("persist-cg", topic_id, "reader-1")
             .await;
 
-        let result = coordinator
+        coordinator
             .join_group("persist-cg", topic_id, "reader-1")
             .await
             .expect("Rejoin should succeed");
 
-        // Committed offset should persist
-        for assignment in &result.assignments {
-            if assignment.committed_offset.0 == 50 {
-                // Found the partition with committed offset
-                return;
-            }
-        }
-
-        // Verify directly from DB
-        let committed: Option<i64> = sqlx::query_scalar(
-            "SELECT committed_offset FROM reader_assignments WHERE group_id = $1 AND topic_id = $2 AND committed_offset = 50",
+        // Verify group state persists in DB with correct watermark
+        let watermark: i64 = sqlx::query_scalar(
+            "SELECT committed_watermark FROM reader_group_state WHERE group_id = $1 AND topic_id = $2",
         )
         .bind("persist-cg")
         .bind(topic_id.0 as i32)
-        .fetch_optional(&db.pool)
+        .fetch_one(&db.pool)
         .await
-        .expect("Query should succeed");
+        .expect("Reader group state should persist in database");
 
-        assert!(
-            committed.is_some(),
-            "Committed offset 50 should persist in database"
+        assert_eq!(
+            watermark, 50,
+            "Committed watermark should be 50 after coordinator restart"
         );
     }
 }
@@ -413,7 +442,7 @@ async fn test_consumer_group_state_persists() {
 // ============ L1: Read-after-write across broker restart ============
 
 use flourine_common::ids::*;
-use flourine_common::types::{RecordBatch};
+use flourine_common::types::RecordBatch;
 use flourine_wire::{ClientMessage, reader, writer};
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::{MaybeTlsStream, connect_async, tungstenite::Message};
@@ -432,7 +461,6 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
     let req = writer::AppendRequest {
@@ -440,7 +468,6 @@ async fn ws_produce(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -472,7 +499,6 @@ async fn ws_produce(
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
@@ -480,15 +506,9 @@ async fn ws_read_all(
 
     loop {
         let req = reader::ReadRequest {
-            group_id: String::new(),
-            reader_id: String::new(),
-            generation: Generation(0),
-            reads: vec![reader::PartitionRead {
-                topic_id,
-                partition_id,
-                offset: next_offset,
-                max_bytes: 10 * 1024 * 1024,
-            }],
+            topic_id,
+            offset: next_offset,
+            max_bytes: 10 * 1024 * 1024,
         };
         let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
         ws.send(Message::Binary(buf))
@@ -538,8 +558,7 @@ async fn ws_read_all(
 #[tokio::test]
 async fn test_read_after_write_across_restart() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("raw-restart", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("raw-restart").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
 
@@ -549,7 +568,7 @@ async fn test_read_after_write_across_restart() {
     let mut acked_values = Vec::new();
     for i in 0..10 {
         let val = format!("record-{}", i);
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &val)
             .await
             .expect("produce should succeed");
         assert!(resp.success, "write {} should be acked", i);
@@ -562,7 +581,7 @@ async fn test_read_after_write_across_restart() {
 
     // Read all from offset 0
     let mut ws = ws_connect(broker.addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read after restart should succeed");
 

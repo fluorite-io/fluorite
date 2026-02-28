@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use flourine_broker::{Coordinator, CoordinatorConfig};
-use flourine_common::ids::{Offset, PartitionId, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 
 static DB_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -24,10 +24,8 @@ pub struct BenchDb {
 
 impl Drop for BenchDb {
     fn drop(&mut self) {
-        // Close all connections to allow dropping (returns future but we can't await in Drop)
         let _ = self.pool.close();
 
-        // Use a new runtime for cleanup since we can't use async in Drop
         let admin_url = format!("{}/postgres", self.base_url);
         let db_name = self.db_name.clone();
 
@@ -39,7 +37,6 @@ impl Drop for BenchDb {
                     .connect(&admin_url)
                     .await
                 {
-                    // Force disconnect other sessions
                     let _ = sqlx::query(&format!(
                         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}'",
                         db_name
@@ -90,13 +87,11 @@ async fn create_test_db() -> Option<BenchDb> {
         .await
         .ok()?;
 
-    // Create required tables
     sqlx::query(
         r#"
         CREATE TABLE topics (
             topic_id SERIAL PRIMARY KEY,
-            name VARCHAR(255) UNIQUE NOT NULL,
-            partition_count INT NOT NULL DEFAULT 1
+            name VARCHAR(255) UNIQUE NOT NULL
         )
         "#,
     )
@@ -109,35 +104,9 @@ async fn create_test_db() -> Option<BenchDb> {
         CREATE TABLE reader_groups (
             group_id TEXT NOT NULL,
             topic_id INT NOT NULL,
-            generation BIGINT NOT NULL DEFAULT 0,
             PRIMARY KEY (group_id, topic_id)
         )
         "#,
-    )
-    .execute(&pool)
-    .await
-    .ok()?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE reader_assignments (
-            group_id TEXT NOT NULL,
-            topic_id INT NOT NULL,
-            partition_id INT NOT NULL,
-            reader_id TEXT,
-            lease_expires_at TIMESTAMPTZ,
-            committed_offset BIGINT NOT NULL DEFAULT 0,
-            generation BIGINT NOT NULL DEFAULT 0,
-            PRIMARY KEY (group_id, topic_id, partition_id)
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .ok()?;
-
-    sqlx::query(
-        "CREATE INDEX idx_assignments ON reader_assignments (group_id, topic_id, reader_id)",
     )
     .execute(&pool)
     .await
@@ -159,8 +128,102 @@ async fn create_test_db() -> Option<BenchDb> {
     .await
     .ok()?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE topic_offsets (
+            topic_id INT PRIMARY KEY REFERENCES topics(topic_id) ON DELETE CASCADE,
+            next_offset BIGINT NOT NULL DEFAULT 0
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
+    sqlx::query(
+        r#"
+        CREATE OR REPLACE FUNCTION create_topic_offset()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            INSERT INTO topic_offsets (topic_id, next_offset)
+            VALUES (NEW.topic_id, 0);
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
+    sqlx::query(
+        r#"
+        CREATE TRIGGER trigger_create_topic_offset
+        AFTER INSERT ON topics
+        FOR EACH ROW
+        EXECUTE FUNCTION create_topic_offset()
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE reader_group_state (
+            group_id VARCHAR(255) NOT NULL,
+            topic_id INT NOT NULL,
+            dispatch_cursor BIGINT NOT NULL DEFAULT 0,
+            committed_watermark BIGINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (group_id, topic_id),
+            FOREIGN KEY (group_id, topic_id)
+                REFERENCES reader_groups(group_id, topic_id) ON DELETE CASCADE
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE reader_inflight (
+            group_id VARCHAR(255) NOT NULL,
+            topic_id INT NOT NULL,
+            start_offset BIGINT NOT NULL,
+            end_offset BIGINT NOT NULL,
+            reader_id VARCHAR(255) NOT NULL,
+            lease_expires_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (group_id, topic_id, start_offset),
+            FOREIGN KEY (group_id, topic_id)
+                REFERENCES reader_groups(group_id, topic_id) ON DELETE CASCADE,
+            CHECK (end_offset > start_offset)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
+    sqlx::query(
+        "CREATE INDEX idx_reader_inflight_lease
+         ON reader_inflight (lease_expires_at)
+         WHERE lease_expires_at IS NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
+    sqlx::query(
+        "CREATE INDEX idx_reader_inflight_reader
+         ON reader_inflight (group_id, topic_id, reader_id)",
+    )
+    .execute(&pool)
+    .await
+    .ok()?;
+
     // Create test topic
-    sqlx::query("INSERT INTO topics (name, partition_count) VALUES ('bench-topic', 16)")
+    sqlx::query("INSERT INTO topics (name) VALUES ('bench-topic')")
         .execute(&pool)
         .await
         .ok()?;
@@ -200,7 +263,6 @@ pub fn bench_coordinator_join(c: &mut Criterion) {
     let mut group = c.benchmark_group("coordinator_join");
     let counter = AtomicU32::new(0);
 
-    // First reader join (creates group)
     group.bench_function("first_consumer", |b| {
         b.to_async(&rt).iter(|| {
             let n = counter.fetch_add(1, Ordering::SeqCst);
@@ -245,12 +307,11 @@ pub fn bench_coordinator_heartbeat(c: &mut Criterion) {
     let coordinator = Coordinator::new(pool.clone(), config);
 
     // Pre-join a reader
-    let generation = rt.block_on(async {
+    rt.block_on(async {
         coordinator
             .join_group("heartbeat-bench", TopicId(1), "reader-1")
             .await
-            .unwrap()
-            .generation
+            .unwrap();
     });
 
     let mut group = c.benchmark_group("coordinator_heartbeat");
@@ -258,7 +319,6 @@ pub fn bench_coordinator_heartbeat(c: &mut Criterion) {
     group.bench_function("single_consumer", |b| {
         b.to_async(&rt).iter(|| {
             let pool = pool.clone();
-            let consumer_gen = generation;
             async move {
                 let config = CoordinatorConfig {
                     lease_duration: Duration::from_secs(30),
@@ -267,7 +327,7 @@ pub fn bench_coordinator_heartbeat(c: &mut Criterion) {
                 };
                 let coord = Coordinator::new(pool, config);
                 let result = coord
-                    .heartbeat("heartbeat-bench", TopicId(1), "reader-1", consumer_gen)
+                    .heartbeat("heartbeat-bench", TopicId(1), "reader-1")
                     .await;
                 black_box(result)
             }
@@ -277,7 +337,7 @@ pub fn bench_coordinator_heartbeat(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark commit offset operation.
+/// Benchmark commit range operation.
 pub fn bench_coordinator_commit(c: &mut Criterion) {
     if !db_available() {
         return;
@@ -299,22 +359,20 @@ pub fn bench_coordinator_commit(c: &mut Criterion) {
     let coordinator = Coordinator::new(pool.clone(), config);
 
     // Pre-join a reader
-    let generation = rt.block_on(async {
+    rt.block_on(async {
         coordinator
             .join_group("commit-bench", TopicId(1), "reader-1")
             .await
-            .unwrap()
-            .generation
+            .unwrap();
     });
 
     let mut group = c.benchmark_group("coordinator_commit");
     let offset_counter = AtomicU64::new(0);
 
-    group.bench_function("single_partition", |b| {
+    group.bench_function("single_topic", |b| {
         b.to_async(&rt).iter(|| {
             let off = offset_counter.fetch_add(100, Ordering::SeqCst);
             let pool = pool.clone();
-            let commit_gen = generation;
             async move {
                 let config = CoordinatorConfig {
                     lease_duration: Duration::from_secs(30),
@@ -323,13 +381,12 @@ pub fn bench_coordinator_commit(c: &mut Criterion) {
                 };
                 let coord = Coordinator::new(pool, config);
                 let result = coord
-                    .commit_offset(
+                    .commit_range(
                         "commit-bench",
                         TopicId(1),
                         "reader-1",
-                        commit_gen,
-                        PartitionId(0),
                         Offset(off),
+                        Offset(off + 100),
                     )
                     .await;
                 black_box(result)
@@ -340,66 +397,60 @@ pub fn bench_coordinator_commit(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark rebalance with multiple consumers.
-pub fn bench_coordinator_rebalance(c: &mut Criterion) {
+/// Benchmark join with multiple consumers.
+pub fn bench_coordinator_reset(c: &mut Criterion) {
     if !db_available() {
         return;
     }
 
     let rt = Runtime::new().unwrap();
 
-    let mut group = c.benchmark_group("coordinator_rebalance");
+    let bench_db = match rt.block_on(create_test_db()) {
+        Some(db) => db,
+        None => return,
+    };
+    let pool = bench_db.pool.clone();
+
+    let mut group = c.benchmark_group("coordinator_join_scaling");
+    let iteration = AtomicU32::new(0);
 
     for consumer_count in &[2, 4, 8] {
+        let count = *consumer_count;
+
+        // Pre-join consumers for each iteration using unique group names
         group.bench_with_input(
             BenchmarkId::new("consumers", consumer_count),
             consumer_count,
-            |b, &count| {
-                b.to_async(&rt).iter_batched(
-                    || {
-                        let rt_inner = Runtime::new().unwrap();
-                        let bench_db = rt_inner.block_on(create_test_db()).unwrap();
-                        let pool = bench_db.pool.clone();
-
+            |b, _| {
+                b.to_async(&rt).iter(|| {
+                    let n = iteration.fetch_add(1, Ordering::SeqCst);
+                    let group_id = format!("join-bench-{}-{}", count, n);
+                    let pool = pool.clone();
+                    async move {
                         let config = CoordinatorConfig {
                             lease_duration: Duration::from_secs(30),
                             session_timeout: Duration::from_secs(60),
                             ..Default::default()
                         };
+                        let coord = Coordinator::new(pool.clone(), config.clone());
 
                         // Pre-join consumers except the last
                         for i in 0..(count - 1) {
                             let reader_id = format!("reader-{}", i);
-                            let pool_clone = pool.clone();
-                            rt_inner.block_on(async {
-                                let coord = Coordinator::new(pool_clone, config.clone());
-                                coord
-                                    .join_group("rebalance-bench", TopicId(1), &reader_id)
-                                    .await
-                                    .unwrap();
-                            });
+                            coord
+                                .join_group(&group_id, TopicId(1), &reader_id)
+                                .await
+                                .unwrap();
                         }
 
-                        (bench_db, count)
-                    },
-                    |(bench_db, count)| async move {
-                        let config = CoordinatorConfig {
-                            lease_duration: Duration::from_secs(30),
-                            session_timeout: Duration::from_secs(60),
-                            ..Default::default()
-                        };
-                        let coord = Coordinator::new(bench_db.pool.clone(), config);
-                        // Join the last reader (triggers rebalance)
+                        // Measure joining the Nth consumer
                         let reader_id = format!("reader-{}", count - 1);
                         let result = coord
-                            .join_group("rebalance-bench", TopicId(1), &reader_id)
+                            .join_group(&group_id, TopicId(1), &reader_id)
                             .await;
-                        // BenchDb is dropped here, cleaning up the database
-                        drop(bench_db);
                         black_box(result)
-                    },
-                    criterion::BatchSize::PerIteration,
-                )
+                    }
+                })
             },
         );
     }

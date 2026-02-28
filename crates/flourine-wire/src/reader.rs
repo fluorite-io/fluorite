@@ -1,6 +1,6 @@
 //! Reader protocol messages and reader group messages using protobuf.
 
-use flourine_common::ids::{Generation, Offset, PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{Offset, SchemaId, TopicId};
 use flourine_common::types::Record;
 
 use crate::proto_conv::{
@@ -8,38 +8,27 @@ use crate::proto_conv::{
 };
 use crate::{DecodeError, EncodeError, proto};
 
-/// A read request from a reader to an broker.
+/// A direct read request (for tail/CLI, not group-based).
 #[derive(Debug, Clone)]
 pub struct ReadRequest {
-    pub group_id: String,
-    pub reader_id: String,
-    pub generation: Generation,
-    pub reads: Vec<PartitionRead>,
-}
-
-/// A single partition read within a ReadRequest.
-#[derive(Debug, Clone)]
-pub struct PartitionRead {
     pub topic_id: TopicId,
-    pub partition_id: PartitionId,
     pub offset: Offset,
     pub max_bytes: u32,
 }
 
-/// A read response from an broker to a reader.
+/// A read response.
 #[derive(Debug, Clone)]
 pub struct ReadResponse {
     pub success: bool,
     pub error_code: u16,
     pub error_message: String,
-    pub results: Vec<PartitionResult>,
+    pub results: Vec<TopicResult>,
 }
 
-/// Result for a single partition in a ReadResponse.
+/// Result for a topic in a ReadResponse or PollResponse.
 #[derive(Debug, Clone)]
-pub struct PartitionResult {
+pub struct TopicResult {
     pub topic_id: TopicId,
-    pub partition_id: PartitionId,
     pub schema_id: SchemaId,
     pub high_watermark: Offset,
     pub records: Vec<Record>,
@@ -53,22 +42,12 @@ pub struct JoinGroupRequest {
     pub topic_ids: Vec<TopicId>,
 }
 
-/// Reader group join response.
+/// Reader group join response (no assignments - readers poll for work).
 #[derive(Debug, Clone)]
 pub struct JoinGroupResponse {
     pub success: bool,
     pub error_code: u16,
     pub error_message: String,
-    pub generation: Generation,
-    pub assignments: Vec<PartitionAssignment>,
-}
-
-/// A partition assignment for a reader.
-#[derive(Debug, Clone)]
-pub struct PartitionAssignment {
-    pub topic_id: TopicId,
-    pub partition_id: PartitionId,
-    pub committed_offset: Offset,
 }
 
 /// Heartbeat request to maintain reader membership.
@@ -77,30 +56,53 @@ pub struct HeartbeatRequest {
     pub group_id: String,
     pub topic_id: TopicId,
     pub reader_id: String,
-    pub generation: Generation,
 }
 
-/// Legacy heartbeat response.
+/// Heartbeat response status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeartbeatStatus {
+    Ok,
+    UnknownMember,
+}
+
+/// Heartbeat response with status enum.
 #[derive(Debug, Clone)]
-pub struct HeartbeatResponse {
-    pub rebalance_needed: bool,
+pub struct HeartbeatResponseExt {
+    pub success: bool,
+    pub error_code: u16,
+    pub error_message: String,
+    pub status: HeartbeatStatus,
 }
 
-/// Commit offset request.
+/// Poll request — reader asks broker for work.
+#[derive(Debug, Clone)]
+pub struct PollRequest {
+    pub group_id: String,
+    pub topic_id: TopicId,
+    pub reader_id: String,
+    pub max_bytes: u32,
+}
+
+/// Poll response — broker hands out offset range and records.
+#[derive(Debug, Clone)]
+pub struct PollResponse {
+    pub success: bool,
+    pub error_code: u16,
+    pub error_message: String,
+    pub results: Vec<TopicResult>,
+    pub start_offset: Offset,
+    pub end_offset: Offset,
+    pub lease_deadline_ms: u64,
+}
+
+/// Commit request — reader commits a processed offset range.
 #[derive(Debug, Clone)]
 pub struct CommitRequest {
     pub group_id: String,
     pub reader_id: String,
-    pub generation: Generation,
-    pub commits: Vec<PartitionCommit>,
-}
-
-/// A single partition commit.
-#[derive(Debug, Clone)]
-pub struct PartitionCommit {
     pub topic_id: TopicId,
-    pub partition_id: PartitionId,
-    pub offset: Offset,
+    pub start_offset: Offset,
+    pub end_offset: Offset,
 }
 
 /// Commit response.
@@ -127,57 +129,13 @@ pub struct LeaveGroupResponse {
     pub error_message: String,
 }
 
-/// Rejoin request (after rebalance notification).
-#[derive(Debug, Clone)]
-pub struct RejoinRequest {
-    pub group_id: String,
-    pub topic_id: TopicId,
-    pub reader_id: String,
-    pub generation: Generation,
-}
-
-/// Rejoin response status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RejoinStatus {
-    Ok,
-    RebalanceNeeded,
-}
-
-/// Rejoin response.
-#[derive(Debug, Clone)]
-pub struct RejoinResponse {
-    pub success: bool,
-    pub error_code: u16,
-    pub error_message: String,
-    pub generation: Generation,
-    pub status: RejoinStatus,
-    pub assignments: Vec<PartitionAssignment>,
-}
-
-/// Heartbeat response status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HeartbeatStatus {
-    Ok,
-    RebalanceNeeded,
-    UnknownMember,
-}
-
-/// Extended heartbeat response with status enum.
-#[derive(Debug, Clone)]
-pub struct HeartbeatResponseExt {
-    pub success: bool,
-    pub error_code: u16,
-    pub error_message: String,
-    pub generation: Generation,
-    pub status: HeartbeatStatus,
-}
+// ============ Encoding/Decoding ============
 
 pub fn encode_read_request(req: &ReadRequest, buf: &mut [u8]) -> usize {
     let msg = proto::ReadRequest {
-        group_id: req.group_id.clone(),
-        reader_id: req.reader_id.clone(),
-        generation: req.generation.0,
-        reads: req.reads.iter().map(to_proto_partition_read).collect(),
+        topic_id: req.topic_id.0,
+        offset: req.offset.0,
+        max_bytes: req.max_bytes,
     };
     encode_proto(&msg, buf)
 }
@@ -186,14 +144,9 @@ pub fn decode_read_request(buf: &[u8]) -> Result<(ReadRequest, usize), DecodeErr
     let msg = decode_proto::<proto::ReadRequest>(buf, "invalid protobuf read request")?;
     Ok((
         ReadRequest {
-            group_id: msg.group_id,
-            reader_id: msg.reader_id,
-            generation: Generation(msg.generation),
-            reads: msg
-                .reads
-                .into_iter()
-                .map(from_proto_partition_read)
-                .collect(),
+            topic_id: TopicId(msg.topic_id),
+            offset: Offset(msg.offset),
+            max_bytes: msg.max_bytes,
         },
         buf.len(),
     ))
@@ -211,7 +164,7 @@ pub fn encode_read_response_checked(
         success: resp.success,
         error_code: resp.error_code as u32,
         error_message: resp.error_message.clone(),
-        results: resp.results.iter().map(to_proto_partition_result).collect(),
+        results: resp.results.iter().map(to_proto_topic_result).collect(),
     };
     encode_proto_checked(&msg, buf)
 }
@@ -226,7 +179,7 @@ pub fn decode_read_response(buf: &[u8]) -> Result<(ReadResponse, usize), DecodeE
             results: msg
                 .results
                 .into_iter()
-                .map(from_proto_partition_result)
+                .map(from_proto_topic_result)
                 .collect(),
         },
         buf.len(),
@@ -266,8 +219,6 @@ pub fn encode_join_response_checked(
         success: resp.success,
         error_code: resp.error_code as u32,
         error_message: resp.error_message.clone(),
-        generation: resp.generation.0,
-        assignments: resp.assignments.iter().map(to_proto_assignment).collect(),
     };
     encode_proto_checked(&msg, buf)
 }
@@ -279,12 +230,6 @@ pub fn decode_join_response(buf: &[u8]) -> Result<(JoinGroupResponse, usize), De
             success: msg.success,
             error_code: msg.error_code as u16,
             error_message: msg.error_message,
-            generation: Generation(msg.generation),
-            assignments: msg
-                .assignments
-                .into_iter()
-                .map(from_proto_assignment)
-                .collect(),
         },
         buf.len(),
     ))
@@ -295,7 +240,6 @@ pub fn encode_heartbeat_request(req: &HeartbeatRequest, buf: &mut [u8]) -> usize
         group_id: req.group_id.clone(),
         topic_id: req.topic_id.0,
         reader_id: req.reader_id.clone(),
-        generation: req.generation.0,
     };
     encode_proto(&msg, buf)
 }
@@ -307,33 +251,98 @@ pub fn decode_heartbeat_request(buf: &[u8]) -> Result<(HeartbeatRequest, usize),
             group_id: msg.group_id,
             topic_id: TopicId(msg.topic_id),
             reader_id: msg.reader_id,
-            generation: Generation(msg.generation),
         },
         buf.len(),
     ))
 }
 
-pub fn encode_heartbeat_response(resp: &HeartbeatResponse, buf: &mut [u8]) -> usize {
-    let status = if resp.rebalance_needed {
-        proto::HeartbeatStatus::RebalanceNeeded
-    } else {
-        proto::HeartbeatStatus::Ok
-    };
+pub fn encode_heartbeat_response_ext(resp: &HeartbeatResponseExt, buf: &mut [u8]) -> usize {
+    encode_heartbeat_response_ext_checked(resp, buf)
+        .expect("buffer too small for heartbeat response")
+}
+
+pub fn encode_heartbeat_response_ext_checked(
+    resp: &HeartbeatResponseExt,
+    buf: &mut [u8],
+) -> Result<usize, EncodeError> {
     let msg = proto::HeartbeatResponse {
-        success: true,
-        error_code: 0,
-        error_message: String::new(),
-        generation: 0,
-        status: status as i32,
+        success: resp.success,
+        error_code: resp.error_code as u32,
+        error_message: resp.error_message.clone(),
+        status: hb_status_to_proto(resp.status) as i32,
+    };
+    encode_proto_checked(&msg, buf)
+}
+
+pub fn decode_heartbeat_response_ext(
+    buf: &[u8],
+) -> Result<(HeartbeatResponseExt, usize), DecodeError> {
+    let msg = decode_proto::<proto::HeartbeatResponse>(buf, "invalid protobuf heartbeat response")?;
+    Ok((
+        HeartbeatResponseExt {
+            success: msg.success,
+            error_code: msg.error_code as u16,
+            error_message: msg.error_message,
+            status: proto_to_hb_status(msg.status),
+        },
+        buf.len(),
+    ))
+}
+
+pub fn encode_poll_request(req: &PollRequest, buf: &mut [u8]) -> usize {
+    let msg = proto::PollRequest {
+        group_id: req.group_id.clone(),
+        topic_id: req.topic_id.0,
+        reader_id: req.reader_id.clone(),
+        max_bytes: req.max_bytes,
     };
     encode_proto(&msg, buf)
 }
 
-pub fn decode_heartbeat_response(buf: &[u8]) -> Result<(HeartbeatResponse, usize), DecodeError> {
-    let msg = decode_proto::<proto::HeartbeatResponse>(buf, "invalid protobuf heartbeat response")?;
+pub fn decode_poll_request(buf: &[u8]) -> Result<(PollRequest, usize), DecodeError> {
+    let msg = decode_proto::<proto::PollRequest>(buf, "invalid protobuf poll request")?;
     Ok((
-        HeartbeatResponse {
-            rebalance_needed: proto_to_hb_status(msg.status) == HeartbeatStatus::RebalanceNeeded,
+        PollRequest {
+            group_id: msg.group_id,
+            topic_id: TopicId(msg.topic_id),
+            reader_id: msg.reader_id,
+            max_bytes: msg.max_bytes,
+        },
+        buf.len(),
+    ))
+}
+
+pub fn encode_poll_response(resp: &PollResponse, buf: &mut [u8]) -> usize {
+    encode_poll_response_checked(resp, buf).expect("buffer too small for poll response")
+}
+
+pub fn encode_poll_response_checked(
+    resp: &PollResponse,
+    buf: &mut [u8],
+) -> Result<usize, EncodeError> {
+    let msg = proto::PollResponse {
+        success: resp.success,
+        error_code: resp.error_code as u32,
+        error_message: resp.error_message.clone(),
+        results: resp.results.iter().map(to_proto_topic_result).collect(),
+        start_offset: resp.start_offset.0,
+        end_offset: resp.end_offset.0,
+        lease_deadline_ms: resp.lease_deadline_ms,
+    };
+    encode_proto_checked(&msg, buf)
+}
+
+pub fn decode_poll_response(buf: &[u8]) -> Result<(PollResponse, usize), DecodeError> {
+    let msg = decode_proto::<proto::PollResponse>(buf, "invalid protobuf poll response")?;
+    Ok((
+        PollResponse {
+            success: msg.success,
+            error_code: msg.error_code as u16,
+            error_message: msg.error_message,
+            results: msg.results.into_iter().map(from_proto_topic_result).collect(),
+            start_offset: Offset(msg.start_offset),
+            end_offset: Offset(msg.end_offset),
+            lease_deadline_ms: msg.lease_deadline_ms,
         },
         buf.len(),
     ))
@@ -343,8 +352,9 @@ pub fn encode_commit_request(req: &CommitRequest, buf: &mut [u8]) -> usize {
     let msg = proto::CommitRequest {
         group_id: req.group_id.clone(),
         reader_id: req.reader_id.clone(),
-        generation: req.generation.0,
-        commits: req.commits.iter().map(to_proto_commit).collect(),
+        topic_id: req.topic_id.0,
+        start_offset: req.start_offset.0,
+        end_offset: req.end_offset.0,
     };
     encode_proto(&msg, buf)
 }
@@ -355,8 +365,9 @@ pub fn decode_commit_request(buf: &[u8]) -> Result<(CommitRequest, usize), Decod
         CommitRequest {
             group_id: msg.group_id,
             reader_id: msg.reader_id,
-            generation: Generation(msg.generation),
-            commits: msg.commits.into_iter().map(from_proto_commit).collect(),
+            topic_id: TopicId(msg.topic_id),
+            start_offset: Offset(msg.start_offset),
+            end_offset: Offset(msg.end_offset),
         },
         buf.len(),
     ))
@@ -439,177 +450,27 @@ pub fn decode_leave_response(buf: &[u8]) -> Result<(LeaveGroupResponse, usize), 
     ))
 }
 
-pub fn encode_rejoin_request(req: &RejoinRequest, buf: &mut [u8]) -> usize {
-    let msg = proto::RejoinRequest {
-        group_id: req.group_id.clone(),
-        topic_id: req.topic_id.0,
-        reader_id: req.reader_id.clone(),
-        generation: req.generation.0,
-    };
-    encode_proto(&msg, buf)
-}
-
-pub fn decode_rejoin_request(buf: &[u8]) -> Result<(RejoinRequest, usize), DecodeError> {
-    let msg = decode_proto::<proto::RejoinRequest>(buf, "invalid protobuf rejoin request")?;
-    Ok((
-        RejoinRequest {
-            group_id: msg.group_id,
-            topic_id: TopicId(msg.topic_id),
-            reader_id: msg.reader_id,
-            generation: Generation(msg.generation),
-        },
-        buf.len(),
-    ))
-}
-
-pub fn encode_rejoin_response(resp: &RejoinResponse, buf: &mut [u8]) -> usize {
-    encode_rejoin_response_checked(resp, buf).expect("buffer too small for rejoin response")
-}
-
-pub fn encode_rejoin_response_checked(
-    resp: &RejoinResponse,
-    buf: &mut [u8],
-) -> Result<usize, EncodeError> {
-    let msg = proto::RejoinResponse {
-        success: resp.success,
-        error_code: resp.error_code as u32,
-        error_message: resp.error_message.clone(),
-        generation: resp.generation.0,
-        status: rejoin_status_to_proto(resp.status) as i32,
-        assignments: resp.assignments.iter().map(to_proto_assignment).collect(),
-    };
-    encode_proto_checked(&msg, buf)
-}
-
-pub fn decode_rejoin_response(buf: &[u8]) -> Result<(RejoinResponse, usize), DecodeError> {
-    let msg = decode_proto::<proto::RejoinResponse>(buf, "invalid protobuf rejoin response")?;
-    Ok((
-        RejoinResponse {
-            success: msg.success,
-            error_code: msg.error_code as u16,
-            error_message: msg.error_message,
-            generation: Generation(msg.generation),
-            status: proto_to_rejoin_status(msg.status),
-            assignments: msg
-                .assignments
-                .into_iter()
-                .map(from_proto_assignment)
-                .collect(),
-        },
-        buf.len(),
-    ))
-}
-
-pub fn encode_heartbeat_response_ext(resp: &HeartbeatResponseExt, buf: &mut [u8]) -> usize {
-    encode_heartbeat_response_ext_checked(resp, buf)
-        .expect("buffer too small for heartbeat response")
-}
-
-pub fn encode_heartbeat_response_ext_checked(
-    resp: &HeartbeatResponseExt,
-    buf: &mut [u8],
-) -> Result<usize, EncodeError> {
-    let msg = proto::HeartbeatResponse {
-        success: resp.success,
-        error_code: resp.error_code as u32,
-        error_message: resp.error_message.clone(),
-        generation: resp.generation.0,
-        status: hb_status_to_proto(resp.status) as i32,
-    };
-    encode_proto_checked(&msg, buf)
-}
-
-pub fn decode_heartbeat_response_ext(
-    buf: &[u8],
-) -> Result<(HeartbeatResponseExt, usize), DecodeError> {
-    let msg = decode_proto::<proto::HeartbeatResponse>(buf, "invalid protobuf heartbeat response")?;
-    Ok((
-        HeartbeatResponseExt {
-            success: msg.success,
-            error_code: msg.error_code as u16,
-            error_message: msg.error_message,
-            generation: Generation(msg.generation),
-            status: proto_to_hb_status(msg.status),
-        },
-        buf.len(),
-    ))
-}
-
-
-fn to_proto_partition_read(read: &PartitionRead) -> proto::PartitionRead {
-    proto::PartitionRead {
-        topic_id: read.topic_id.0,
-        partition_id: read.partition_id.0,
-        offset: read.offset.0,
-        max_bytes: read.max_bytes,
-    }
-}
-
-fn from_proto_partition_read(read: proto::PartitionRead) -> PartitionRead {
-    PartitionRead {
-        topic_id: TopicId(read.topic_id),
-        partition_id: PartitionId(read.partition_id),
-        offset: Offset(read.offset),
-        max_bytes: read.max_bytes,
-    }
-}
-
-fn to_proto_partition_result(result: &PartitionResult) -> proto::PartitionResult {
-    proto::PartitionResult {
+fn to_proto_topic_result(result: &TopicResult) -> proto::TopicResult {
+    proto::TopicResult {
         topic_id: result.topic_id.0,
-        partition_id: result.partition_id.0,
         schema_id: result.schema_id.0,
         high_watermark: result.high_watermark.0,
         records: result.records.iter().map(to_proto_record).collect(),
     }
 }
 
-fn from_proto_partition_result(result: proto::PartitionResult) -> PartitionResult {
-    PartitionResult {
+fn from_proto_topic_result(result: proto::TopicResult) -> TopicResult {
+    TopicResult {
         topic_id: TopicId(result.topic_id),
-        partition_id: PartitionId(result.partition_id),
         schema_id: SchemaId(result.schema_id),
         high_watermark: Offset(result.high_watermark),
         records: result.records.into_iter().map(from_proto_record).collect(),
     }
 }
 
-fn to_proto_assignment(assignment: &PartitionAssignment) -> proto::PartitionAssignment {
-    proto::PartitionAssignment {
-        topic_id: assignment.topic_id.0,
-        partition_id: assignment.partition_id.0,
-        committed_offset: assignment.committed_offset.0,
-    }
-}
-
-fn from_proto_assignment(assignment: proto::PartitionAssignment) -> PartitionAssignment {
-    PartitionAssignment {
-        topic_id: TopicId(assignment.topic_id),
-        partition_id: PartitionId(assignment.partition_id),
-        committed_offset: Offset(assignment.committed_offset),
-    }
-}
-
-fn to_proto_commit(commit: &PartitionCommit) -> proto::PartitionCommit {
-    proto::PartitionCommit {
-        topic_id: commit.topic_id.0,
-        partition_id: commit.partition_id.0,
-        offset: commit.offset.0,
-    }
-}
-
-fn from_proto_commit(commit: proto::PartitionCommit) -> PartitionCommit {
-    PartitionCommit {
-        topic_id: TopicId(commit.topic_id),
-        partition_id: PartitionId(commit.partition_id),
-        offset: Offset(commit.offset),
-    }
-}
-
 fn hb_status_to_proto(status: HeartbeatStatus) -> proto::HeartbeatStatus {
     match status {
         HeartbeatStatus::Ok => proto::HeartbeatStatus::Ok,
-        HeartbeatStatus::RebalanceNeeded => proto::HeartbeatStatus::RebalanceNeeded,
         HeartbeatStatus::UnknownMember => proto::HeartbeatStatus::UnknownMember,
     }
 }
@@ -618,22 +479,7 @@ fn proto_to_hb_status(status: i32) -> HeartbeatStatus {
     match proto::HeartbeatStatus::try_from(status).unwrap_or(proto::HeartbeatStatus::UnknownMember)
     {
         proto::HeartbeatStatus::Ok => HeartbeatStatus::Ok,
-        proto::HeartbeatStatus::RebalanceNeeded => HeartbeatStatus::RebalanceNeeded,
         proto::HeartbeatStatus::UnknownMember => HeartbeatStatus::UnknownMember,
-    }
-}
-
-fn rejoin_status_to_proto(status: RejoinStatus) -> proto::RejoinStatus {
-    match status {
-        RejoinStatus::Ok => proto::RejoinStatus::Ok,
-        RejoinStatus::RebalanceNeeded => proto::RejoinStatus::RebalanceNeeded,
-    }
-}
-
-fn proto_to_rejoin_status(status: i32) -> RejoinStatus {
-    match proto::RejoinStatus::try_from(status).unwrap_or(proto::RejoinStatus::RebalanceNeeded) {
-        proto::RejoinStatus::Ok => RejoinStatus::Ok,
-        proto::RejoinStatus::RebalanceNeeded => RejoinStatus::RebalanceNeeded,
     }
 }
 
@@ -642,25 +488,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fetch_request_roundtrip() {
+    fn test_read_request_roundtrip() {
         let req = ReadRequest {
-            group_id: "my-group".to_string(),
-            reader_id: "reader-1".to_string(),
-            generation: Generation(5),
-            reads: vec![PartitionRead {
-                topic_id: TopicId(1),
-                partition_id: PartitionId(0),
-                offset: Offset(100),
-                max_bytes: 1024,
-            }],
+            topic_id: TopicId(1),
+            offset: Offset(100),
+            max_bytes: 1024,
         };
 
         let mut buf = [0u8; 512];
         let encoded_len = encode_read_request(&req, &mut buf);
         let (decoded, decoded_len) = decode_read_request(&buf[..encoded_len]).unwrap();
         assert_eq!(decoded_len, encoded_len);
-        assert_eq!(decoded.group_id, req.group_id);
-        assert_eq!(decoded.reads.len(), 1);
+        assert_eq!(decoded.topic_id.0, 1);
+        assert_eq!(decoded.offset.0, 100);
     }
 
     #[test]
@@ -669,12 +509,6 @@ mod tests {
             success: true,
             error_code: 0,
             error_message: String::new(),
-            generation: Generation(10),
-            assignments: vec![PartitionAssignment {
-                topic_id: TopicId(1),
-                partition_id: PartitionId(0),
-                committed_offset: Offset(42),
-            }],
         };
 
         let mut buf = [0u8; 512];
@@ -682,7 +516,41 @@ mod tests {
         let (decoded, decoded_len) = decode_join_response(&buf[..encoded_len]).unwrap();
         assert_eq!(decoded_len, encoded_len);
         assert!(decoded.success);
-        assert_eq!(decoded.generation.0, 10);
-        assert_eq!(decoded.assignments.len(), 1);
+    }
+
+    #[test]
+    fn test_poll_request_roundtrip() {
+        let req = PollRequest {
+            group_id: "my-group".to_string(),
+            topic_id: TopicId(1),
+            reader_id: "reader-1".to_string(),
+            max_bytes: 1024,
+        };
+
+        let mut buf = [0u8; 512];
+        let encoded_len = encode_poll_request(&req, &mut buf);
+        let (decoded, decoded_len) = decode_poll_request(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded_len, encoded_len);
+        assert_eq!(decoded.group_id, "my-group");
+        assert_eq!(decoded.topic_id.0, 1);
+        assert_eq!(decoded.max_bytes, 1024);
+    }
+
+    #[test]
+    fn test_commit_request_roundtrip() {
+        let req = CommitRequest {
+            group_id: "my-group".to_string(),
+            reader_id: "reader-1".to_string(),
+            topic_id: TopicId(1),
+            start_offset: Offset(100),
+            end_offset: Offset(200),
+        };
+
+        let mut buf = [0u8; 512];
+        let encoded_len = encode_commit_request(&req, &mut buf);
+        let (decoded, decoded_len) = decode_commit_request(&buf[..encoded_len]).unwrap();
+        assert_eq!(decoded_len, encoded_len);
+        assert_eq!(decoded.start_offset.0, 100);
+        assert_eq!(decoded.end_offset.0, 200);
     }
 }

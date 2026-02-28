@@ -30,7 +30,6 @@ private static final long serialVersionUID = 0L;
   private CommitRequest() {
     groupId_ = "";
     readerId_ = "";
-    commits_ = java.util.Collections.emptyList();
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -124,56 +123,37 @@ private static final long serialVersionUID = 0L;
     }
   }
 
-  public static final int GENERATION_FIELD_NUMBER = 3;
-  private long generation_ = 0L;
+  public static final int TOPIC_ID_FIELD_NUMBER = 3;
+  private int topicId_ = 0;
   /**
-   * <code>uint64 generation = 3;</code>
-   * @return The generation.
+   * <code>uint32 topic_id = 3;</code>
+   * @return The topicId.
    */
   @java.lang.Override
-  public long getGeneration() {
-    return generation_;
+  public int getTopicId() {
+    return topicId_;
   }
 
-  public static final int COMMITS_FIELD_NUMBER = 4;
-  @SuppressWarnings("serial")
-  private java.util.List<io.flourine.sdk.proto.PartitionCommit> commits_;
+  public static final int START_OFFSET_FIELD_NUMBER = 4;
+  private long startOffset_ = 0L;
   /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
+   * <code>uint64 start_offset = 4;</code>
+   * @return The startOffset.
    */
   @java.lang.Override
-  public java.util.List<io.flourine.sdk.proto.PartitionCommit> getCommitsList() {
-    return commits_;
+  public long getStartOffset() {
+    return startOffset_;
   }
+
+  public static final int END_OFFSET_FIELD_NUMBER = 5;
+  private long endOffset_ = 0L;
   /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
+   * <code>uint64 end_offset = 5;</code>
+   * @return The endOffset.
    */
   @java.lang.Override
-  public java.util.List<? extends io.flourine.sdk.proto.PartitionCommitOrBuilder> 
-      getCommitsOrBuilderList() {
-    return commits_;
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-   */
-  @java.lang.Override
-  public int getCommitsCount() {
-    return commits_.size();
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-   */
-  @java.lang.Override
-  public io.flourine.sdk.proto.PartitionCommit getCommits(int index) {
-    return commits_.get(index);
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-   */
-  @java.lang.Override
-  public io.flourine.sdk.proto.PartitionCommitOrBuilder getCommitsOrBuilder(
-      int index) {
-    return commits_.get(index);
+  public long getEndOffset() {
+    return endOffset_;
   }
 
   private byte memoizedIsInitialized = -1;
@@ -196,11 +176,14 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(readerId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 2, readerId_);
     }
-    if (generation_ != 0L) {
-      output.writeUInt64(3, generation_);
+    if (topicId_ != 0) {
+      output.writeUInt32(3, topicId_);
     }
-    for (int i = 0; i < commits_.size(); i++) {
-      output.writeMessage(4, commits_.get(i));
+    if (startOffset_ != 0L) {
+      output.writeUInt64(4, startOffset_);
+    }
+    if (endOffset_ != 0L) {
+      output.writeUInt64(5, endOffset_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -217,13 +200,17 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(readerId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(2, readerId_);
     }
-    if (generation_ != 0L) {
+    if (topicId_ != 0) {
       size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(3, generation_);
+        .computeUInt32Size(3, topicId_);
     }
-    for (int i = 0; i < commits_.size(); i++) {
+    if (startOffset_ != 0L) {
       size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(4, commits_.get(i));
+        .computeUInt64Size(4, startOffset_);
+    }
+    if (endOffset_ != 0L) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeUInt64Size(5, endOffset_);
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -244,10 +231,12 @@ private static final long serialVersionUID = 0L;
         .equals(other.getGroupId())) return false;
     if (!getReaderId()
         .equals(other.getReaderId())) return false;
-    if (getGeneration()
-        != other.getGeneration()) return false;
-    if (!getCommitsList()
-        .equals(other.getCommitsList())) return false;
+    if (getTopicId()
+        != other.getTopicId()) return false;
+    if (getStartOffset()
+        != other.getStartOffset()) return false;
+    if (getEndOffset()
+        != other.getEndOffset()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -263,13 +252,14 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getGroupId().hashCode();
     hash = (37 * hash) + READER_ID_FIELD_NUMBER;
     hash = (53 * hash) + getReaderId().hashCode();
-    hash = (37 * hash) + GENERATION_FIELD_NUMBER;
+    hash = (37 * hash) + TOPIC_ID_FIELD_NUMBER;
+    hash = (53 * hash) + getTopicId();
+    hash = (37 * hash) + START_OFFSET_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-        getGeneration());
-    if (getCommitsCount() > 0) {
-      hash = (37 * hash) + COMMITS_FIELD_NUMBER;
-      hash = (53 * hash) + getCommitsList().hashCode();
-    }
+        getStartOffset());
+    hash = (37 * hash) + END_OFFSET_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+        getEndOffset());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -403,14 +393,9 @@ private static final long serialVersionUID = 0L;
       bitField0_ = 0;
       groupId_ = "";
       readerId_ = "";
-      generation_ = 0L;
-      if (commitsBuilder_ == null) {
-        commits_ = java.util.Collections.emptyList();
-      } else {
-        commits_ = null;
-        commitsBuilder_.clear();
-      }
-      bitField0_ = (bitField0_ & ~0x00000008);
+      topicId_ = 0;
+      startOffset_ = 0L;
+      endOffset_ = 0L;
       return this;
     }
 
@@ -437,22 +422,9 @@ private static final long serialVersionUID = 0L;
     @java.lang.Override
     public io.flourine.sdk.proto.CommitRequest buildPartial() {
       io.flourine.sdk.proto.CommitRequest result = new io.flourine.sdk.proto.CommitRequest(this);
-      buildPartialRepeatedFields(result);
       if (bitField0_ != 0) { buildPartial0(result); }
       onBuilt();
       return result;
-    }
-
-    private void buildPartialRepeatedFields(io.flourine.sdk.proto.CommitRequest result) {
-      if (commitsBuilder_ == null) {
-        if (((bitField0_ & 0x00000008) != 0)) {
-          commits_ = java.util.Collections.unmodifiableList(commits_);
-          bitField0_ = (bitField0_ & ~0x00000008);
-        }
-        result.commits_ = commits_;
-      } else {
-        result.commits_ = commitsBuilder_.build();
-      }
     }
 
     private void buildPartial0(io.flourine.sdk.proto.CommitRequest result) {
@@ -464,7 +436,13 @@ private static final long serialVersionUID = 0L;
         result.readerId_ = readerId_;
       }
       if (((from_bitField0_ & 0x00000004) != 0)) {
-        result.generation_ = generation_;
+        result.topicId_ = topicId_;
+      }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.startOffset_ = startOffset_;
+      }
+      if (((from_bitField0_ & 0x00000010) != 0)) {
+        result.endOffset_ = endOffset_;
       }
     }
 
@@ -490,34 +468,14 @@ private static final long serialVersionUID = 0L;
         bitField0_ |= 0x00000002;
         onChanged();
       }
-      if (other.getGeneration() != 0L) {
-        setGeneration(other.getGeneration());
+      if (other.getTopicId() != 0) {
+        setTopicId(other.getTopicId());
       }
-      if (commitsBuilder_ == null) {
-        if (!other.commits_.isEmpty()) {
-          if (commits_.isEmpty()) {
-            commits_ = other.commits_;
-            bitField0_ = (bitField0_ & ~0x00000008);
-          } else {
-            ensureCommitsIsMutable();
-            commits_.addAll(other.commits_);
-          }
-          onChanged();
-        }
-      } else {
-        if (!other.commits_.isEmpty()) {
-          if (commitsBuilder_.isEmpty()) {
-            commitsBuilder_.dispose();
-            commitsBuilder_ = null;
-            commits_ = other.commits_;
-            bitField0_ = (bitField0_ & ~0x00000008);
-            commitsBuilder_ = 
-              com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders ?
-                 internalGetCommitsFieldBuilder() : null;
-          } else {
-            commitsBuilder_.addAllMessages(other.commits_);
-          }
-        }
+      if (other.getStartOffset() != 0L) {
+        setStartOffset(other.getStartOffset());
+      }
+      if (other.getEndOffset() != 0L) {
+        setEndOffset(other.getEndOffset());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -556,23 +514,20 @@ private static final long serialVersionUID = 0L;
               break;
             } // case 18
             case 24: {
-              generation_ = input.readUInt64();
+              topicId_ = input.readUInt32();
               bitField0_ |= 0x00000004;
               break;
             } // case 24
-            case 34: {
-              io.flourine.sdk.proto.PartitionCommit m =
-                  input.readMessage(
-                      io.flourine.sdk.proto.PartitionCommit.parser(),
-                      extensionRegistry);
-              if (commitsBuilder_ == null) {
-                ensureCommitsIsMutable();
-                commits_.add(m);
-              } else {
-                commitsBuilder_.addMessage(m);
-              }
+            case 32: {
+              startOffset_ = input.readUInt64();
+              bitField0_ |= 0x00000008;
               break;
-            } // case 34
+            } // case 32
+            case 40: {
+              endOffset_ = input.readUInt64();
+              bitField0_ |= 0x00000010;
+              break;
+            } // case 40
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -734,276 +689,100 @@ private static final long serialVersionUID = 0L;
       return this;
     }
 
-    private long generation_ ;
+    private int topicId_ ;
     /**
-     * <code>uint64 generation = 3;</code>
-     * @return The generation.
+     * <code>uint32 topic_id = 3;</code>
+     * @return The topicId.
      */
     @java.lang.Override
-    public long getGeneration() {
-      return generation_;
+    public int getTopicId() {
+      return topicId_;
     }
     /**
-     * <code>uint64 generation = 3;</code>
-     * @param value The generation to set.
+     * <code>uint32 topic_id = 3;</code>
+     * @param value The topicId to set.
      * @return This builder for chaining.
      */
-    public Builder setGeneration(long value) {
+    public Builder setTopicId(int value) {
 
-      generation_ = value;
+      topicId_ = value;
       bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }
     /**
-     * <code>uint64 generation = 3;</code>
+     * <code>uint32 topic_id = 3;</code>
      * @return This builder for chaining.
      */
-    public Builder clearGeneration() {
+    public Builder clearTopicId() {
       bitField0_ = (bitField0_ & ~0x00000004);
-      generation_ = 0L;
+      topicId_ = 0;
       onChanged();
       return this;
     }
 
-    private java.util.List<io.flourine.sdk.proto.PartitionCommit> commits_ =
-      java.util.Collections.emptyList();
-    private void ensureCommitsIsMutable() {
-      if (!((bitField0_ & 0x00000008) != 0)) {
-        commits_ = new java.util.ArrayList<io.flourine.sdk.proto.PartitionCommit>(commits_);
-        bitField0_ |= 0x00000008;
-       }
+    private long startOffset_ ;
+    /**
+     * <code>uint64 start_offset = 4;</code>
+     * @return The startOffset.
+     */
+    @java.lang.Override
+    public long getStartOffset() {
+      return startOffset_;
+    }
+    /**
+     * <code>uint64 start_offset = 4;</code>
+     * @param value The startOffset to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStartOffset(long value) {
+
+      startOffset_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>uint64 start_offset = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearStartOffset() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      startOffset_ = 0L;
+      onChanged();
+      return this;
     }
 
-    private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionCommit, io.flourine.sdk.proto.PartitionCommit.Builder, io.flourine.sdk.proto.PartitionCommitOrBuilder> commitsBuilder_;
+    private long endOffset_ ;
+    /**
+     * <code>uint64 end_offset = 5;</code>
+     * @return The endOffset.
+     */
+    @java.lang.Override
+    public long getEndOffset() {
+      return endOffset_;
+    }
+    /**
+     * <code>uint64 end_offset = 5;</code>
+     * @param value The endOffset to set.
+     * @return This builder for chaining.
+     */
+    public Builder setEndOffset(long value) {
 
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public java.util.List<io.flourine.sdk.proto.PartitionCommit> getCommitsList() {
-      if (commitsBuilder_ == null) {
-        return java.util.Collections.unmodifiableList(commits_);
-      } else {
-        return commitsBuilder_.getMessageList();
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public int getCommitsCount() {
-      if (commitsBuilder_ == null) {
-        return commits_.size();
-      } else {
-        return commitsBuilder_.getCount();
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionCommit getCommits(int index) {
-      if (commitsBuilder_ == null) {
-        return commits_.get(index);
-      } else {
-        return commitsBuilder_.getMessage(index);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder setCommits(
-        int index, io.flourine.sdk.proto.PartitionCommit value) {
-      if (commitsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureCommitsIsMutable();
-        commits_.set(index, value);
-        onChanged();
-      } else {
-        commitsBuilder_.setMessage(index, value);
-      }
+      endOffset_ = value;
+      bitField0_ |= 0x00000010;
+      onChanged();
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
+     * <code>uint64 end_offset = 5;</code>
+     * @return This builder for chaining.
      */
-    public Builder setCommits(
-        int index, io.flourine.sdk.proto.PartitionCommit.Builder builderForValue) {
-      if (commitsBuilder_ == null) {
-        ensureCommitsIsMutable();
-        commits_.set(index, builderForValue.build());
-        onChanged();
-      } else {
-        commitsBuilder_.setMessage(index, builderForValue.build());
-      }
+    public Builder clearEndOffset() {
+      bitField0_ = (bitField0_ & ~0x00000010);
+      endOffset_ = 0L;
+      onChanged();
       return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder addCommits(io.flourine.sdk.proto.PartitionCommit value) {
-      if (commitsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureCommitsIsMutable();
-        commits_.add(value);
-        onChanged();
-      } else {
-        commitsBuilder_.addMessage(value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder addCommits(
-        int index, io.flourine.sdk.proto.PartitionCommit value) {
-      if (commitsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureCommitsIsMutable();
-        commits_.add(index, value);
-        onChanged();
-      } else {
-        commitsBuilder_.addMessage(index, value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder addCommits(
-        io.flourine.sdk.proto.PartitionCommit.Builder builderForValue) {
-      if (commitsBuilder_ == null) {
-        ensureCommitsIsMutable();
-        commits_.add(builderForValue.build());
-        onChanged();
-      } else {
-        commitsBuilder_.addMessage(builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder addCommits(
-        int index, io.flourine.sdk.proto.PartitionCommit.Builder builderForValue) {
-      if (commitsBuilder_ == null) {
-        ensureCommitsIsMutable();
-        commits_.add(index, builderForValue.build());
-        onChanged();
-      } else {
-        commitsBuilder_.addMessage(index, builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder addAllCommits(
-        java.lang.Iterable<? extends io.flourine.sdk.proto.PartitionCommit> values) {
-      if (commitsBuilder_ == null) {
-        ensureCommitsIsMutable();
-        com.google.protobuf.AbstractMessageLite.Builder.addAll(
-            values, commits_);
-        onChanged();
-      } else {
-        commitsBuilder_.addAllMessages(values);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder clearCommits() {
-      if (commitsBuilder_ == null) {
-        commits_ = java.util.Collections.emptyList();
-        bitField0_ = (bitField0_ & ~0x00000008);
-        onChanged();
-      } else {
-        commitsBuilder_.clear();
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public Builder removeCommits(int index) {
-      if (commitsBuilder_ == null) {
-        ensureCommitsIsMutable();
-        commits_.remove(index);
-        onChanged();
-      } else {
-        commitsBuilder_.remove(index);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionCommit.Builder getCommitsBuilder(
-        int index) {
-      return internalGetCommitsFieldBuilder().getBuilder(index);
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionCommitOrBuilder getCommitsOrBuilder(
-        int index) {
-      if (commitsBuilder_ == null) {
-        return commits_.get(index);  } else {
-        return commitsBuilder_.getMessageOrBuilder(index);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public java.util.List<? extends io.flourine.sdk.proto.PartitionCommitOrBuilder> 
-         getCommitsOrBuilderList() {
-      if (commitsBuilder_ != null) {
-        return commitsBuilder_.getMessageOrBuilderList();
-      } else {
-        return java.util.Collections.unmodifiableList(commits_);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionCommit.Builder addCommitsBuilder() {
-      return internalGetCommitsFieldBuilder().addBuilder(
-          io.flourine.sdk.proto.PartitionCommit.getDefaultInstance());
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionCommit.Builder addCommitsBuilder(
-        int index) {
-      return internalGetCommitsFieldBuilder().addBuilder(
-          index, io.flourine.sdk.proto.PartitionCommit.getDefaultInstance());
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-     */
-    public java.util.List<io.flourine.sdk.proto.PartitionCommit.Builder> 
-         getCommitsBuilderList() {
-      return internalGetCommitsFieldBuilder().getBuilderList();
-    }
-    private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionCommit, io.flourine.sdk.proto.PartitionCommit.Builder, io.flourine.sdk.proto.PartitionCommitOrBuilder> 
-        internalGetCommitsFieldBuilder() {
-      if (commitsBuilder_ == null) {
-        commitsBuilder_ = new com.google.protobuf.RepeatedFieldBuilder<
-            io.flourine.sdk.proto.PartitionCommit, io.flourine.sdk.proto.PartitionCommit.Builder, io.flourine.sdk.proto.PartitionCommitOrBuilder>(
-                commits_,
-                ((bitField0_ & 0x00000008) != 0),
-                getParentForChildren(),
-                isClean());
-        commits_ = null;
-      }
-      return commitsBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:flourine.wire.CommitRequest)

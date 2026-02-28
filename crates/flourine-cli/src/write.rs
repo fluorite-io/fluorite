@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use apache_avro::Schema as AvroSchema;
 use apache_avro::to_avro_datum;
 use apache_avro::types::Value as AvroValue;
-use flourine_common::ids::{PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{SchemaId, TopicId};
 use flourine_common::types::Record;
 use flourine_sdk::writer::{Writer, WriterConfig};
 
@@ -92,7 +92,6 @@ pub async fn run(
     api_key: Option<&str>,
     client: &FlourineClient,
     topic_id: u32,
-    partition_id: u32,
     schema_id: u32,
     key: Option<String>,
     value: Option<String>,
@@ -132,17 +131,12 @@ pub async fn run(
     };
 
     let ack = writer
-        .append(
-            TopicId(topic_id),
-            PartitionId(partition_id),
-            SchemaId(schema_id),
-            vec![record],
-        )
+        .append(TopicId(topic_id), SchemaId(schema_id), vec![record])
         .await?;
 
     println!(
-        "Appended to topic {} partition {} (offsets {}-{})",
-        ack.topic_id.0, ack.partition_id.0, ack.start_offset.0, ack.end_offset.0,
+        "Appended to topic {} (offsets {}-{})",
+        ack.topic_id.0, ack.start_offset.0, ack.end_offset.0,
     );
     Ok(())
 }

@@ -4,7 +4,7 @@
 //!
 //! ```ignore
 //! let writer = Writer::connect("ws://localhost:9000").await?;
-//! writer.append(topic_id, partition_id, schema_id, records).await?;
+//! writer.append(topic_id, schema_id, records).await?;
 //! ```
 //!
 //! # Reader Example
@@ -18,14 +18,14 @@
 //!     ..Default::default()
 //! };
 //! let reader = Reader::join(config).await?;
-//! let records = reader.poll().await?;
+//! let batch = reader.poll().await?;
+//! reader.commit(&batch).await?;
 //! ```
 
 pub mod reader;
 pub mod error;
 pub mod writer;
 
-pub use reader::Reader;
-pub use reader::ReaderConfig;
+pub use reader::{PollBatch, Reader, ReaderConfig};
 pub use error::SdkError;
 pub use writer::Writer;

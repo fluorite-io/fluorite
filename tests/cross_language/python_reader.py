@@ -3,7 +3,7 @@
 Cross-language E2E test: Python reader.
 
 Usage:
-    python python_reader.py <url> <topic_id> <partition_id> <expected_count>
+    python python_reader.py <url> <topic_id> <expected_count>
 
 Reads records and prints them as JSON to stdout.
 """
@@ -20,14 +20,13 @@ from flourine import GroupReader, ReaderConfig
 
 
 async def main():
-    if len(sys.argv) != 5:
-        print(f"Usage: {sys.argv[0]} <url> <topic_id> <partition_id> <expected_count>", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print(f"Usage: {sys.argv[0]} <url> <topic_id> <expected_count>", file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
     topic_id = int(sys.argv[2])
-    partition_id = int(sys.argv[3])
-    expected_count = int(sys.argv[4])
+    expected_count = int(sys.argv[3])
 
     config = ReaderConfig(
         url=url,
@@ -44,20 +43,19 @@ async def main():
         # Poll until we have all expected records or timeout
         max_attempts = 10
         for attempt in range(max_attempts):
-            results = await reader.poll()
-            for result in results:
-                if result.partition_id == partition_id:
-                    for record in result.records:
-                        try:
-                            value_str = record.value.decode('utf-8')
-                            value_json = json.loads(value_str)
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            value_json = {"raw": record.value.hex()}
+            batch = await reader.poll()
+            for result in batch.results:
+                for record in result.records:
+                    try:
+                        value_str = record.value.decode('utf-8')
+                        value_json = json.loads(value_str)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        value_json = {"raw": record.value.hex()}
 
-                        records_received.append({
-                            "key": record.key.decode('utf-8') if record.key else None,
-                            "value": value_json,
-                        })
+                    records_received.append({
+                        "key": record.key.decode('utf-8') if record.key else None,
+                        "value": value_json,
+                    })
 
             if len(records_received) >= expected_count:
                 break
@@ -67,7 +65,6 @@ async def main():
     result = {
         "reader": "python",
         "topic_id": topic_id,
-        "partition_id": partition_id,
         "record_count": len(records_received),
         "records": records_received,
     }

@@ -33,7 +33,6 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> writer::AppendResponse {
     let req = writer::AppendRequest {
@@ -41,7 +40,6 @@ async fn ws_produce(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -67,19 +65,12 @@ async fn ws_produce(
 async fn ws_read(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
     offset: Offset,
 ) -> reader::ReadResponse {
     let req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id,
-            partition_id,
-            offset,
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id,
+        offset,
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
     ws.send(Message::Binary(buf)).await.unwrap();
@@ -100,8 +91,7 @@ async fn ws_read(
 #[tokio::test]
 async fn test_read_returns_error_on_s3_get_range_failure() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("read-fault-1", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("read-fault-1").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
@@ -109,7 +99,7 @@ async fn test_read_returns_error_on_s3_get_range_failure() {
     // Write 5 records and wait for acks
     let writer_id = WriterId::new();
     for i in 0..5 {
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &format!("v{}", i)).await;
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("v{}", i)).await;
         assert!(resp.success, "write {} should succeed", i);
     }
 
@@ -117,18 +107,17 @@ async fn test_read_returns_error_on_s3_get_range_failure() {
     broker.faulty_store().fail_next_get_range();
 
     // Read should return an error, not hang
-    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
     assert!(!resp.success, "read should fail with injected get_range fault");
     assert_eq!(resp.error_code, ERR_INTERNAL_ERROR);
     assert_eq!(resp.error_message, "read failed");
 }
 
-/// Broker recovers from transient S3 read partition — post-heal reads succeed.
+/// Broker recovers from transient S3 read failure — post-heal reads succeed.
 #[tokio::test]
 async fn test_read_succeeds_after_s3_partition_heals() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("read-fault-2", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("read-fault-2").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
@@ -136,7 +125,7 @@ async fn test_read_succeeds_after_s3_partition_heals() {
     // Write records
     let writer_id = WriterId::new();
     for i in 0..3 {
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &format!("v{}", i)).await;
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("v{}", i)).await;
         assert!(resp.success);
     }
 
@@ -147,7 +136,7 @@ async fn test_read_succeeds_after_s3_partition_heals() {
     let addr = broker.addr();
     let hung_read = tokio::spawn(async move {
         let mut ws2 = ws_connect(addr).await;
-        ws_read(&mut ws2, topic_id, partition_id, Offset(0)).await
+        ws_read(&mut ws2, topic_id, Offset(0)).await
     });
 
     // Wait a bit, then heal
@@ -155,7 +144,7 @@ async fn test_read_succeeds_after_s3_partition_heals() {
     broker.faulty_store().heal_partition();
 
     // Send a fresh read on the original connection — should succeed
-    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
     assert!(resp.success, "post-heal read should succeed");
     let record_count: usize = resp.results.iter().map(|r| r.records.len()).sum();
     assert_eq!(record_count, 3, "should see all 3 records after heal");
@@ -174,15 +163,14 @@ async fn test_read_succeeds_after_s3_partition_heals() {
 #[tokio::test]
 async fn test_read_corrupt_fl_returns_error_not_panic() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("read-fault-corrupt", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("read-fault-corrupt").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
 
     // Write a record to get a FL file on disk
     let writer_id = WriterId::new();
-    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "corrupt-me").await;
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "corrupt-me").await;
     assert!(resp.success);
 
     // Find and completely corrupt every FL file on disk
@@ -200,15 +188,15 @@ async fn test_read_corrupt_fl_returns_error_not_panic() {
             .expect("put should succeed");
     }
 
-    // Read from corrupted partition — should get clean error
-    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    // Read from corrupted topic — should get clean error
+    let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
     assert!(!resp.success, "read of corrupted data should fail cleanly");
     assert_eq!(resp.error_code, ERR_INTERNAL_ERROR);
 
     // Broker should still be alive — can we still write new records?
     let w2 = WriterId::new();
     let mut ws2 = ws_connect(broker.addr()).await;
-    let resp = ws_produce(&mut ws2, w2, 1, topic_id, partition_id, "after-corrupt").await;
+    let resp = ws_produce(&mut ws2, w2, 1, topic_id, "after-corrupt").await;
     assert!(
         resp.success,
         "broker should still accept writes after corrupt read"
@@ -221,8 +209,7 @@ async fn test_read_corrupt_fl_returns_error_not_panic() {
 #[tokio::test]
 async fn test_stale_s3_read_after_batch_index_update() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("read-fault-stale", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("read-fault-stale").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
@@ -231,7 +218,7 @@ async fn test_stale_s3_read_after_batch_index_update() {
     let writer_id = WriterId::new();
     for i in 0..3 {
         let resp = ws_produce(
-            &mut ws, writer_id, i + 1, topic_id, partition_id,
+            &mut ws, writer_id, i + 1, topic_id,
             &format!("v{}", i),
         ).await;
         assert!(resp.success, "write {} should succeed", i);
@@ -240,12 +227,12 @@ async fn test_stale_s3_read_after_batch_index_update() {
     // Inject get_range fault — next read will fail
     broker.faulty_store().fail_next_get_range();
 
-    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
     assert!(!resp.success, "read should fail with injected get_range fault");
     assert_eq!(resp.error_code, ERR_INTERNAL_ERROR);
 
     // Fault consumed — heal is implicit. Retry should succeed with correct data.
-    let resp = ws_read(&mut ws, topic_id, partition_id, Offset(0)).await;
+    let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
     assert!(resp.success, "retry after heal should succeed");
     let record_count: usize = resp.results.iter().map(|r| r.records.len()).sum();
     assert_eq!(record_count, 3, "retry should return all 3 committed records");

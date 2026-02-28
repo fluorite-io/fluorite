@@ -17,14 +17,12 @@ pub struct GroupSummary {
     pub group_id: String,
     pub topic_id: i32,
     pub member_count: i32,
-    pub generation: i64,
 }
 
 /// Reader group member.
 #[derive(Debug, Serialize)]
 pub struct GroupMember {
     pub reader_id: String,
-    pub partitions: Vec<i32>,
     pub last_heartbeat: chrono::DateTime<chrono::Utc>,
 }
 
@@ -33,14 +31,13 @@ pub struct GroupMember {
 pub struct GroupDetails {
     pub group_id: String,
     pub topic_id: i32,
-    pub generation: i64,
     pub members: Vec<GroupMember>,
 }
 
-/// Response from force rebalance.
+/// Response from force reset.
 #[derive(Debug, Serialize)]
-pub struct RebalanceResponse {
-    pub new_generation: i64,
+pub struct ResetResponse {
+    pub success: bool,
 }
 
 pub fn router() -> Router<AdminState> {
@@ -48,8 +45,8 @@ pub fn router() -> Router<AdminState> {
         .route("/", get(list_groups))
         .route("/:group_id/topics/:topic_id", get(get_group))
         .route(
-            "/:group_id/topics/:topic_id/rebalance",
-            post(force_rebalance),
+            "/:group_id/topics/:topic_id/reset",
+            post(force_reset),
         )
         .route(
             "/:group_id/topics/:topic_id/members/:member_id",
@@ -65,7 +62,6 @@ async fn list_groups(
         SELECT
             group_id,
             topic_id,
-            generation,
             (SELECT COUNT(*)::int FROM reader_members cm
              WHERE cm.group_id = cg.group_id AND cm.topic_id = cg.topic_id) as member_count
         FROM reader_groups cg
@@ -82,7 +78,6 @@ async fn list_groups(
             group_id: r.group_id,
             topic_id: r.topic_id,
             member_count: r.member_count,
-            generation: r.generation,
         })
         .collect();
 
@@ -93,10 +88,10 @@ async fn get_group(
     State(state): State<AdminState>,
     Path((group_id, topic_id)): Path<(String, i32)>,
 ) -> Result<Json<GroupDetails>, StatusCode> {
-    // Get group info
-    let group: Option<(i64,)> = sqlx::query_as(
+    // Verify group exists
+    let exists: Option<(i32,)> = sqlx::query_as(
         r#"
-        SELECT generation
+        SELECT 1
         FROM reader_groups
         WHERE group_id = $1 AND topic_id = $2
         "#,
@@ -107,9 +102,11 @@ async fn get_group(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let generation = group.ok_or(StatusCode::NOT_FOUND)?.0;
+    if exists.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
-    // Get members with their partitions
+    // Get members
     let member_rows: Vec<MemberRow> = sqlx::query_as(
         r#"
         SELECT reader_id, last_heartbeat
@@ -124,53 +121,33 @@ async fn get_group(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut members = Vec::with_capacity(member_rows.len());
-    for member in member_rows {
-        let partitions: Vec<(i32,)> = sqlx::query_as(
-            r#"
-            SELECT partition_id
-            FROM reader_assignments
-            WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3
-            ORDER BY partition_id
-            "#,
-        )
-        .bind(&group_id)
-        .bind(topic_id)
-        .bind(&member.reader_id)
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        members.push(GroupMember {
-            reader_id: member.reader_id,
-            partitions: partitions.into_iter().map(|(p,)| p).collect(),
-            last_heartbeat: member.last_heartbeat,
-        });
-    }
+    let members: Vec<GroupMember> = member_rows
+        .into_iter()
+        .map(|m| GroupMember {
+            reader_id: m.reader_id,
+            last_heartbeat: m.last_heartbeat,
+        })
+        .collect();
 
     Ok(Json(GroupDetails {
         group_id,
         topic_id,
-        generation,
         members,
     }))
 }
 
-/// BREAK-GLASS: Force a rebalance by bumping the generation.
-async fn force_rebalance(
+/// BREAK-GLASS: Reset a consumer group by evicting all members and clearing inflight.
+async fn force_reset(
     State(state): State<AdminState>,
     Path((group_id, topic_id)): Path<(String, i32)>,
-) -> Result<Json<RebalanceResponse>, StatusCode> {
-    // Use coordinator to trigger rebalance
-    let result = state
+) -> Result<Json<ResetResponse>, StatusCode> {
+    state
         .coordinator
-        .force_rebalance(&group_id, TopicId(topic_id as u32))
+        .force_reset(&group_id, TopicId(topic_id as u32))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(RebalanceResponse {
-        new_generation: result.0 as i64,
-    }))
+    Ok(Json(ResetResponse { success: true }))
 }
 
 /// BREAK-GLASS: Force remove a member from the group.
@@ -192,7 +169,6 @@ async fn force_remove_member(
 struct GroupRow {
     group_id: String,
     topic_id: i32,
-    generation: i64,
     member_count: i32,
 }
 

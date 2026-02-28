@@ -22,15 +22,11 @@ macro_rules! newtype_id {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TopicId(pub u32);
 
-/// Unique identifier for a partition within a topic
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct PartitionId(pub u32);
-
 /// Unique identifier for a schema in the registry
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SchemaId(pub u32);
 
-/// Offset within a partition (monotonically increasing)
+/// Offset within a topic (monotonically increasing)
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -46,19 +42,11 @@ pub struct WriterId(pub uuid::Uuid);
 )]
 pub struct AppendSeq(pub u64);
 
-/// Generation number for reader group coordination
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub struct Generation(pub u64);
-
 newtype_id!(TopicId, u32);
-newtype_id!(PartitionId, u32);
 newtype_id!(SchemaId, u32);
 newtype_id!(Offset, u64);
 newtype_id!(WriterId, uuid::Uuid);
 newtype_id!(AppendSeq, u64);
-newtype_id!(Generation, u64);
 
 // WriterId specific implementations
 impl WriterId {
@@ -127,19 +115,6 @@ mod tests {
         let a = AppendSeq(1);
         let b = AppendSeq(2);
         assert!(a < b);
-    }
-
-    #[test]
-    fn test_generation_ordering() {
-        let a = Generation(1);
-        let b = Generation(2);
-        assert!(a < b);
-    }
-
-    #[test]
-    fn test_partition_id_display() {
-        let id = PartitionId(5);
-        assert_eq!(format!("{}", id), "5");
     }
 
     #[test]

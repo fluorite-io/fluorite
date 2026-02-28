@@ -90,9 +90,9 @@ The practical impact: Flourine cannot support read-process-write loops with exac
 | WarpStream | Kafka-compatible | Kafka-compatible | Any agent or backend |
 | Bufstream | Kafka-compatible | Kafka-compatible | Metadata backend |
 | Ursa | Kafka-compatible | Kafka-compatible | Oxia |
-| **Flourine** | **Custom (JoinGroup/Heartbeat/Rejoin/Leave/Commit)** | **Deterministic range-based only** | **Postgres leases** |
+| **Flourine** | **Custom (JoinGroup/Heartbeat/Poll/Leave/Commit)** | **Broker-driven offset-range dispatch** | **Postgres (dispatch cursor + inflight leases)** |
 
-Flourine's reader group protocol is simpler: a single deterministic range assignment function (`compute_assignment`) with lease-based partition ownership in Postgres. No pluggable assignors, no cooperative rebalance. This is sufficient for most use cases but lacks the flexibility of Kafka's protocol (sticky assignments minimize partition migration during rebalances).
+Flourine's reader group protocol uses a poll-based work dispatch model: instead of assigning fixed ownership of offsets to readers, the broker hands out leased offset ranges on demand via `Poll`. Readers request work, process it, and commit the range. Expired leases are automatically reclaimed and re-dispatched. When readers join or leave, work redistribution happens naturally through the poll mechanism — no separate coordination protocol is needed.
 
 ---
 
@@ -155,7 +155,7 @@ Flourine's operational model is comparable to Bufstream with Postgres as the met
 2. **Postgres SPOF** — WarpStream uses managed HA databases, Bufstream supports Spanner, Ursa has Oxia
 3. **No transactions** — Kafka, Redpanda, WarpStream, and Bufstream all have them
 4. **No native Iceberg/Parquet** — Bufstream and Ursa have zero-copy lakehouse; Flourine has the infra but hasn't connected it
-5. **Single assignment strategy** — no cooperative rebalance, no sticky assignments
+5. **Single dispatch cursor per group** — all polls serialize on one cursor; no per-topic parallelism beyond pipelined inflight ranges
 6. **Dedup is weaker** — single `last_seq` vs Kafka's per-partition window of 5
 
 **Architectural positioning:**

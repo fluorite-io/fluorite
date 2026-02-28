@@ -167,7 +167,7 @@ For comparison:
 1. **Batch multiple S3 PUTs** via segment merging (already implemented)
 2. **Connection pooling** for Postgres
 3. **Arena allocation** for wire decode to reduce allocs
-4. **Local SSD cache** for hot partitions (future)
+4. **Local SSD cache** for hot topics (future)
 
 ---
 

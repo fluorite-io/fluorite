@@ -18,7 +18,7 @@
 use bytes::{Bytes, BytesMut};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use flourine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{Offset, SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 use flourine_wire::{record, varint};
 
@@ -64,7 +64,6 @@ pub enum Codec {
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub topic_id: TopicId,
-    pub partition_id: PartitionId,
     pub schema_id: SchemaId,
     pub start_offset: Offset,
     pub end_offset: Offset,
@@ -133,7 +132,6 @@ impl FlWriter {
 
         let meta = SegmentMeta {
             topic_id: batch.topic_id,
-            partition_id: batch.partition_id,
             schema_id: batch.schema_id,
             start_offset: Offset(0), // Provisional, filled by DB commit
             end_offset: Offset(0),   // Provisional, filled by DB commit
@@ -279,10 +277,6 @@ fn encode_footer(metas: &[SegmentMeta]) -> Vec<u8> {
         let len = varint::encode_i64(meta.topic_id.0 as i64, &mut varint_buf);
         buf.extend_from_slice(&varint_buf[..len]);
 
-        // partition_id
-        let len = varint::encode_i64(meta.partition_id.0 as i64, &mut varint_buf);
-        buf.extend_from_slice(&varint_buf[..len]);
-
         // schema_id
         let len = varint::encode_i64(meta.schema_id.0 as i64, &mut varint_buf);
         buf.extend_from_slice(&varint_buf[..len]);
@@ -336,11 +330,6 @@ fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, FlError> {
         // topic_id
         let (topic_id, len) = varint::decode_i64(&data[offset..])
             .map_err(|e| FlError::InvalidFooter(format!("topic_id: {}", e)))?;
-        offset += len;
-
-        // partition_id
-        let (partition_id, len) = varint::decode_i64(&data[offset..])
-            .map_err(|e| FlError::InvalidFooter(format!("partition_id: {}", e)))?;
         offset += len;
 
         // schema_id
@@ -397,7 +386,6 @@ fn decode_footer(data: &[u8]) -> Result<Vec<SegmentMeta>, FlError> {
 
         metas.push(SegmentMeta {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(partition_id as u32),
             schema_id: SchemaId(schema_id as u32),
             start_offset: Offset(start_offset),
             end_offset: Offset(end_offset),
@@ -420,7 +408,6 @@ mod tests {
     fn sample_segment() -> RecordBatch {
         RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![
                 Record {
@@ -455,7 +442,6 @@ mod tests {
         let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].topic_id.0, 1);
-        assert_eq!(metas[0].partition_id.0, 0);
         assert_eq!(metas[0].record_count, 3);
         assert_eq!(metas[0].byte_offset, meta.byte_offset);
         assert_eq!(metas[0].byte_length, meta.byte_length);
@@ -473,7 +459,6 @@ mod tests {
     fn test_fl_multiple_segments() {
         let segment1 = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -483,7 +468,6 @@ mod tests {
 
         let segment2 = RecordBatch {
             topic_id: TopicId(2),
-            partition_id: PartitionId(1),
             schema_id: SchemaId(200),
             records: vec![
                 Record {
@@ -556,7 +540,6 @@ mod tests {
         // Create a batch with repetitive data (should compress well)
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: (0..100)
                 .map(|i| Record {
@@ -583,7 +566,6 @@ mod tests {
     fn test_fl_empty_segment() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![],
         };
@@ -610,7 +592,6 @@ mod tests {
         for i in 0..50 {
             let batch = RecordBatch {
                 topic_id: TopicId(i),
-                partition_id: PartitionId(i % 8),
                 schema_id: SchemaId(100 + i),
                 records: vec![Record {
                     key: Some(Bytes::from(format!("key-{}", i))),
@@ -628,7 +609,6 @@ mod tests {
         // Verify each batch
         for (i, meta) in metas.iter().enumerate() {
             assert_eq!(meta.topic_id.0, i as u32);
-            assert_eq!(meta.partition_id.0, (i % 8) as u32);
             assert_eq!(meta.record_count, 1);
 
             let records = FlReader::read_segment(&file_bytes, meta, true).unwrap();
@@ -643,7 +623,6 @@ mod tests {
 
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from_static(b"large")),
@@ -671,7 +650,6 @@ mod tests {
 
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from(binary_key.clone())),
@@ -697,7 +675,6 @@ mod tests {
     fn test_fl_max_id_values() {
         let batch = RecordBatch {
             topic_id: TopicId(u32::MAX),
-            partition_id: PartitionId(u32::MAX),
             schema_id: SchemaId(u32::MAX),
             records: vec![Record {
                 key: None,
@@ -711,7 +688,6 @@ mod tests {
 
         let metas = FlReader::read_footer(&file_bytes).unwrap();
         assert_eq!(metas[0].topic_id.0, u32::MAX);
-        assert_eq!(metas[0].partition_id.0, u32::MAX);
         assert_eq!(metas[0].schema_id.0, u32::MAX);
     }
 
@@ -740,7 +716,6 @@ mod tests {
     fn test_fl_segment_byte_range_validation() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -769,7 +744,6 @@ mod tests {
     fn test_fl_skip_crc_validation() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -801,7 +775,6 @@ mod tests {
     fn test_fl_many_records_per_segment() {
         let batch = RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: (0..1000)
                 .map(|i| Record {

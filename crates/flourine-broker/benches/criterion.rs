@@ -47,7 +47,7 @@ criterion_group! {
         micro::buffer::bench_buffer_merge,
         micro::buffer::bench_buffer_drain,
         micro::buffer::bench_distribute_acks,
-        micro::buffer::bench_multi_partition_insert
+        micro::buffer::bench_multi_topic_insert
 }
 
 criterion_group! {
@@ -67,7 +67,7 @@ criterion_group! {
     config = db_config();
     targets =
         db::commit::bench_commit_batch,
-        db::commit::bench_multi_partition_commit,
+        db::commit::bench_multi_topic_commit,
         db::commit::bench_batch_lookup
 }
 
@@ -78,7 +78,7 @@ criterion_group! {
         db::coordinator::bench_coordinator_join,
         db::coordinator::bench_coordinator_heartbeat,
         db::coordinator::bench_coordinator_commit,
-        db::coordinator::bench_coordinator_rebalance
+        db::coordinator::bench_coordinator_reset
 }
 
 // Run all benchmarks

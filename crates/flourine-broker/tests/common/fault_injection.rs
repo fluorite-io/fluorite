@@ -281,7 +281,7 @@ impl flourine_broker::ObjectStore for FaultyObjectStore {
     }
 }
 
-/// Blocks `commit_batch` by holding a `FOR UPDATE` row lock on `partition_offsets`.
+/// Blocks `commit_batch` by holding a `FOR UPDATE` row lock on `topic_offsets`.
 pub struct DbBlocker {
     pool: PgPool,
     tx: Option<sqlx::Transaction<'static, sqlx::Postgres>>,
@@ -292,19 +292,18 @@ impl DbBlocker {
         Self { pool, tx: None }
     }
 
-    /// Begin transaction and lock the target partition_offsets row.
+    /// Begin transaction and lock the target topic_offsets row.
     /// This stalls `commit_batch` at the offset allocation step.
-    pub async fn block_partition(&mut self, topic_id: i32, partition_id: i32) {
+    pub async fn block_topic(&mut self, topic_id: i32) {
         // Ensure the row exists so FOR UPDATE has something to lock
         sqlx::query(
-            "INSERT INTO partition_offsets (topic_id, partition_id, next_offset) \
-             VALUES ($1, $2, 0) ON CONFLICT DO NOTHING",
+            "INSERT INTO topic_offsets (topic_id, next_offset) \
+             VALUES ($1, 0) ON CONFLICT DO NOTHING",
         )
         .bind(topic_id)
-        .bind(partition_id)
         .execute(&self.pool)
         .await
-        .expect("Failed to ensure partition_offsets row exists");
+        .expect("Failed to ensure topic_offsets row exists");
 
         let mut tx = self
             .pool
@@ -312,14 +311,13 @@ impl DbBlocker {
             .await
             .expect("Failed to begin blocking transaction");
         let _: (i64,) = sqlx::query_as(
-            "SELECT next_offset FROM partition_offsets \
-             WHERE topic_id = $1 AND partition_id = $2 FOR UPDATE",
+            "SELECT next_offset FROM topic_offsets \
+             WHERE topic_id = $1 FOR UPDATE",
         )
         .bind(topic_id)
-        .bind(partition_id)
         .fetch_one(&mut *tx)
         .await
-        .expect("Failed to lock partition_offsets row");
+        .expect("Failed to lock topic_offsets row");
 
         self.tx = Some(tx);
     }

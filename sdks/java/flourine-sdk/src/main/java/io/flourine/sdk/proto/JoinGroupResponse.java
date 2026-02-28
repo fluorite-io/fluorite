@@ -29,7 +29,6 @@ private static final long serialVersionUID = 0L;
   }
   private JoinGroupResponse() {
     errorMessage_ = "";
-    assignments_ = java.util.Collections.emptyList();
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -106,58 +105,6 @@ private static final long serialVersionUID = 0L;
     }
   }
 
-  public static final int GENERATION_FIELD_NUMBER = 4;
-  private long generation_ = 0L;
-  /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
-   */
-  @java.lang.Override
-  public long getGeneration() {
-    return generation_;
-  }
-
-  public static final int ASSIGNMENTS_FIELD_NUMBER = 5;
-  @SuppressWarnings("serial")
-  private java.util.List<io.flourine.sdk.proto.PartitionAssignment> assignments_;
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  @java.lang.Override
-  public java.util.List<io.flourine.sdk.proto.PartitionAssignment> getAssignmentsList() {
-    return assignments_;
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  @java.lang.Override
-  public java.util.List<? extends io.flourine.sdk.proto.PartitionAssignmentOrBuilder> 
-      getAssignmentsOrBuilderList() {
-    return assignments_;
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  @java.lang.Override
-  public int getAssignmentsCount() {
-    return assignments_.size();
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  @java.lang.Override
-  public io.flourine.sdk.proto.PartitionAssignment getAssignments(int index) {
-    return assignments_.get(index);
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  @java.lang.Override
-  public io.flourine.sdk.proto.PartitionAssignmentOrBuilder getAssignmentsOrBuilder(
-      int index) {
-    return assignments_.get(index);
-  }
-
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -181,12 +128,6 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(errorMessage_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 3, errorMessage_);
     }
-    if (generation_ != 0L) {
-      output.writeUInt64(4, generation_);
-    }
-    for (int i = 0; i < assignments_.size(); i++) {
-      output.writeMessage(5, assignments_.get(i));
-    }
     getUnknownFields().writeTo(output);
   }
 
@@ -206,14 +147,6 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(errorMessage_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(3, errorMessage_);
-    }
-    if (generation_ != 0L) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(4, generation_);
-    }
-    for (int i = 0; i < assignments_.size(); i++) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(5, assignments_.get(i));
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -236,10 +169,6 @@ private static final long serialVersionUID = 0L;
         != other.getErrorCode()) return false;
     if (!getErrorMessage()
         .equals(other.getErrorMessage())) return false;
-    if (getGeneration()
-        != other.getGeneration()) return false;
-    if (!getAssignmentsList()
-        .equals(other.getAssignmentsList())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -258,13 +187,6 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getErrorCode();
     hash = (37 * hash) + ERROR_MESSAGE_FIELD_NUMBER;
     hash = (53 * hash) + getErrorMessage().hashCode();
-    hash = (37 * hash) + GENERATION_FIELD_NUMBER;
-    hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-        getGeneration());
-    if (getAssignmentsCount() > 0) {
-      hash = (37 * hash) + ASSIGNMENTS_FIELD_NUMBER;
-      hash = (53 * hash) + getAssignmentsList().hashCode();
-    }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -399,14 +321,6 @@ private static final long serialVersionUID = 0L;
       success_ = false;
       errorCode_ = 0;
       errorMessage_ = "";
-      generation_ = 0L;
-      if (assignmentsBuilder_ == null) {
-        assignments_ = java.util.Collections.emptyList();
-      } else {
-        assignments_ = null;
-        assignmentsBuilder_.clear();
-      }
-      bitField0_ = (bitField0_ & ~0x00000010);
       return this;
     }
 
@@ -433,22 +347,9 @@ private static final long serialVersionUID = 0L;
     @java.lang.Override
     public io.flourine.sdk.proto.JoinGroupResponse buildPartial() {
       io.flourine.sdk.proto.JoinGroupResponse result = new io.flourine.sdk.proto.JoinGroupResponse(this);
-      buildPartialRepeatedFields(result);
       if (bitField0_ != 0) { buildPartial0(result); }
       onBuilt();
       return result;
-    }
-
-    private void buildPartialRepeatedFields(io.flourine.sdk.proto.JoinGroupResponse result) {
-      if (assignmentsBuilder_ == null) {
-        if (((bitField0_ & 0x00000010) != 0)) {
-          assignments_ = java.util.Collections.unmodifiableList(assignments_);
-          bitField0_ = (bitField0_ & ~0x00000010);
-        }
-        result.assignments_ = assignments_;
-      } else {
-        result.assignments_ = assignmentsBuilder_.build();
-      }
     }
 
     private void buildPartial0(io.flourine.sdk.proto.JoinGroupResponse result) {
@@ -461,9 +362,6 @@ private static final long serialVersionUID = 0L;
       }
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.errorMessage_ = errorMessage_;
-      }
-      if (((from_bitField0_ & 0x00000008) != 0)) {
-        result.generation_ = generation_;
       }
     }
 
@@ -489,35 +387,6 @@ private static final long serialVersionUID = 0L;
         errorMessage_ = other.errorMessage_;
         bitField0_ |= 0x00000004;
         onChanged();
-      }
-      if (other.getGeneration() != 0L) {
-        setGeneration(other.getGeneration());
-      }
-      if (assignmentsBuilder_ == null) {
-        if (!other.assignments_.isEmpty()) {
-          if (assignments_.isEmpty()) {
-            assignments_ = other.assignments_;
-            bitField0_ = (bitField0_ & ~0x00000010);
-          } else {
-            ensureAssignmentsIsMutable();
-            assignments_.addAll(other.assignments_);
-          }
-          onChanged();
-        }
-      } else {
-        if (!other.assignments_.isEmpty()) {
-          if (assignmentsBuilder_.isEmpty()) {
-            assignmentsBuilder_.dispose();
-            assignmentsBuilder_ = null;
-            assignments_ = other.assignments_;
-            bitField0_ = (bitField0_ & ~0x00000010);
-            assignmentsBuilder_ = 
-              com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders ?
-                 internalGetAssignmentsFieldBuilder() : null;
-          } else {
-            assignmentsBuilder_.addAllMessages(other.assignments_);
-          }
-        }
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -560,24 +429,6 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 26
-            case 32: {
-              generation_ = input.readUInt64();
-              bitField0_ |= 0x00000008;
-              break;
-            } // case 32
-            case 42: {
-              io.flourine.sdk.proto.PartitionAssignment m =
-                  input.readMessage(
-                      io.flourine.sdk.proto.PartitionAssignment.parser(),
-                      extensionRegistry);
-              if (assignmentsBuilder_ == null) {
-                ensureAssignmentsIsMutable();
-                assignments_.add(m);
-              } else {
-                assignmentsBuilder_.addMessage(m);
-              }
-              break;
-            } // case 42
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -729,278 +580,6 @@ private static final long serialVersionUID = 0L;
       bitField0_ |= 0x00000004;
       onChanged();
       return this;
-    }
-
-    private long generation_ ;
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @return The generation.
-     */
-    @java.lang.Override
-    public long getGeneration() {
-      return generation_;
-    }
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @param value The generation to set.
-     * @return This builder for chaining.
-     */
-    public Builder setGeneration(long value) {
-
-      generation_ = value;
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearGeneration() {
-      bitField0_ = (bitField0_ & ~0x00000008);
-      generation_ = 0L;
-      onChanged();
-      return this;
-    }
-
-    private java.util.List<io.flourine.sdk.proto.PartitionAssignment> assignments_ =
-      java.util.Collections.emptyList();
-    private void ensureAssignmentsIsMutable() {
-      if (!((bitField0_ & 0x00000010) != 0)) {
-        assignments_ = new java.util.ArrayList<io.flourine.sdk.proto.PartitionAssignment>(assignments_);
-        bitField0_ |= 0x00000010;
-       }
-    }
-
-    private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionAssignment, io.flourine.sdk.proto.PartitionAssignment.Builder, io.flourine.sdk.proto.PartitionAssignmentOrBuilder> assignmentsBuilder_;
-
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public java.util.List<io.flourine.sdk.proto.PartitionAssignment> getAssignmentsList() {
-      if (assignmentsBuilder_ == null) {
-        return java.util.Collections.unmodifiableList(assignments_);
-      } else {
-        return assignmentsBuilder_.getMessageList();
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public int getAssignmentsCount() {
-      if (assignmentsBuilder_ == null) {
-        return assignments_.size();
-      } else {
-        return assignmentsBuilder_.getCount();
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public io.flourine.sdk.proto.PartitionAssignment getAssignments(int index) {
-      if (assignmentsBuilder_ == null) {
-        return assignments_.get(index);
-      } else {
-        return assignmentsBuilder_.getMessage(index);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder setAssignments(
-        int index, io.flourine.sdk.proto.PartitionAssignment value) {
-      if (assignmentsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureAssignmentsIsMutable();
-        assignments_.set(index, value);
-        onChanged();
-      } else {
-        assignmentsBuilder_.setMessage(index, value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder setAssignments(
-        int index, io.flourine.sdk.proto.PartitionAssignment.Builder builderForValue) {
-      if (assignmentsBuilder_ == null) {
-        ensureAssignmentsIsMutable();
-        assignments_.set(index, builderForValue.build());
-        onChanged();
-      } else {
-        assignmentsBuilder_.setMessage(index, builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder addAssignments(io.flourine.sdk.proto.PartitionAssignment value) {
-      if (assignmentsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureAssignmentsIsMutable();
-        assignments_.add(value);
-        onChanged();
-      } else {
-        assignmentsBuilder_.addMessage(value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder addAssignments(
-        int index, io.flourine.sdk.proto.PartitionAssignment value) {
-      if (assignmentsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureAssignmentsIsMutable();
-        assignments_.add(index, value);
-        onChanged();
-      } else {
-        assignmentsBuilder_.addMessage(index, value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder addAssignments(
-        io.flourine.sdk.proto.PartitionAssignment.Builder builderForValue) {
-      if (assignmentsBuilder_ == null) {
-        ensureAssignmentsIsMutable();
-        assignments_.add(builderForValue.build());
-        onChanged();
-      } else {
-        assignmentsBuilder_.addMessage(builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder addAssignments(
-        int index, io.flourine.sdk.proto.PartitionAssignment.Builder builderForValue) {
-      if (assignmentsBuilder_ == null) {
-        ensureAssignmentsIsMutable();
-        assignments_.add(index, builderForValue.build());
-        onChanged();
-      } else {
-        assignmentsBuilder_.addMessage(index, builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder addAllAssignments(
-        java.lang.Iterable<? extends io.flourine.sdk.proto.PartitionAssignment> values) {
-      if (assignmentsBuilder_ == null) {
-        ensureAssignmentsIsMutable();
-        com.google.protobuf.AbstractMessageLite.Builder.addAll(
-            values, assignments_);
-        onChanged();
-      } else {
-        assignmentsBuilder_.addAllMessages(values);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder clearAssignments() {
-      if (assignmentsBuilder_ == null) {
-        assignments_ = java.util.Collections.emptyList();
-        bitField0_ = (bitField0_ & ~0x00000010);
-        onChanged();
-      } else {
-        assignmentsBuilder_.clear();
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public Builder removeAssignments(int index) {
-      if (assignmentsBuilder_ == null) {
-        ensureAssignmentsIsMutable();
-        assignments_.remove(index);
-        onChanged();
-      } else {
-        assignmentsBuilder_.remove(index);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public io.flourine.sdk.proto.PartitionAssignment.Builder getAssignmentsBuilder(
-        int index) {
-      return internalGetAssignmentsFieldBuilder().getBuilder(index);
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public io.flourine.sdk.proto.PartitionAssignmentOrBuilder getAssignmentsOrBuilder(
-        int index) {
-      if (assignmentsBuilder_ == null) {
-        return assignments_.get(index);  } else {
-        return assignmentsBuilder_.getMessageOrBuilder(index);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public java.util.List<? extends io.flourine.sdk.proto.PartitionAssignmentOrBuilder> 
-         getAssignmentsOrBuilderList() {
-      if (assignmentsBuilder_ != null) {
-        return assignmentsBuilder_.getMessageOrBuilderList();
-      } else {
-        return java.util.Collections.unmodifiableList(assignments_);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public io.flourine.sdk.proto.PartitionAssignment.Builder addAssignmentsBuilder() {
-      return internalGetAssignmentsFieldBuilder().addBuilder(
-          io.flourine.sdk.proto.PartitionAssignment.getDefaultInstance());
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public io.flourine.sdk.proto.PartitionAssignment.Builder addAssignmentsBuilder(
-        int index) {
-      return internalGetAssignmentsFieldBuilder().addBuilder(
-          index, io.flourine.sdk.proto.PartitionAssignment.getDefaultInstance());
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-     */
-    public java.util.List<io.flourine.sdk.proto.PartitionAssignment.Builder> 
-         getAssignmentsBuilderList() {
-      return internalGetAssignmentsFieldBuilder().getBuilderList();
-    }
-    private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionAssignment, io.flourine.sdk.proto.PartitionAssignment.Builder, io.flourine.sdk.proto.PartitionAssignmentOrBuilder> 
-        internalGetAssignmentsFieldBuilder() {
-      if (assignmentsBuilder_ == null) {
-        assignmentsBuilder_ = new com.google.protobuf.RepeatedFieldBuilder<
-            io.flourine.sdk.proto.PartitionAssignment, io.flourine.sdk.proto.PartitionAssignment.Builder, io.flourine.sdk.proto.PartitionAssignmentOrBuilder>(
-                assignments_,
-                ((bitField0_ & 0x00000010) != 0),
-                getParentForChildren(),
-                isClean());
-        assignments_ = null;
-      }
-      return assignmentsBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:flourine.wire.JoinGroupResponse)

@@ -6,7 +6,7 @@
 //! At most one flush is in flight at a time, preserving offset ordering and
 //! dedup correctness.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -206,13 +206,18 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
         drain_result.pending_writers.len()
     );
 
-    // Generate S3 key
-    let timestamp = chrono::Utc::now().timestamp_millis();
+    // Generate S3 key.
+    // The counter ensures uniqueness even when orphaned flush tasks from a
+    // crashed broker overlap with new broker flush tasks in the same millisecond.
+    static FLUSH_KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = FLUSH_KEY_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now = chrono::Utc::now();
     let key = format!(
-        "{}/{}/{}.fl",
+        "{}/{}/{}-{}.fl",
         state.config.key_prefix,
-        chrono::Utc::now().format("%Y-%m-%d"),
-        timestamp
+        now.format("%Y-%m-%d"),
+        now.timestamp_millis(),
+        counter
     );
 
     // Build FL file
@@ -249,6 +254,7 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
 
     // Commit to database
     let db_start = Instant::now();
+    let ingest_time = chrono::Utc::now();
     let succeeded = match commit_batch(
         &drain_result.batches,
         &segment_metas,
@@ -256,12 +262,26 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
         &drain_result.pending_writers,
         &key,
         &state.pool,
+        ingest_time,
     )
     .instrument(tracing::debug_span!("db_commit_batch"))
     .await
     {
-        Ok(segment_offsets) => {
+        Ok((segment_offsets, _batch_ids)) => {
             DB_COMMIT_LATENCY_SECONDS.observe(db_start.elapsed().as_secs_f64());
+
+            // Push to Iceberg buffer if enabled (Bytes clone is O(1))
+            #[cfg(feature = "iceberg")]
+            if let Some(ref iceberg_buf) = state.iceberg_buffer {
+                iceberg_buf
+                    .push_committed_batches(
+                        &drain_result.batches,
+                        &segment_offsets,
+                        &_batch_ids,
+                        ingest_time,
+                    )
+                    .await;
+            }
 
             // Distribute append_acks to writers
             let ack_start = Instant::now();
@@ -288,6 +308,7 @@ async fn execute_flush<S: ObjectStore + Send + Sync>(
 }
 
 /// Commit a batch of batches to the database.
+/// Returns (segment_offsets, batch_ids).
 async fn commit_batch(
     batches: &[RecordBatch],
     segment_metas: &[crate::fl::SegmentMeta],
@@ -295,7 +316,8 @@ async fn commit_batch(
     pending_writers: &[crate::buffer::PendingWriter],
     s3_key: &str,
     pool: &PgPool,
-) -> Result<Vec<(u64, u64)>, sqlx::Error> {
+    ingest_time: chrono::DateTime<chrono::Utc>,
+) -> Result<(Vec<(u64, u64)>, Vec<i64>), sqlx::Error> {
     struct SegmentCommitInput {
         key: BatchKey,
         seg_idx: usize,
@@ -303,9 +325,9 @@ async fn commit_batch(
     }
 
     let mut tx = pool.begin().await?;
-    let ingest_time = chrono::Utc::now();
 
     let mut segment_offsets = vec![(0u64, 0u64); batches.len()];
+    let mut batch_ids = vec![0i64; batches.len()];
     let mut segment_inputs: Vec<SegmentCommitInput> = key_to_index
         .iter()
         .map(|(key, &seg_idx)| SegmentCommitInput {
@@ -316,72 +338,66 @@ async fn commit_batch(
         .collect();
     segment_inputs.sort_by_key(|s| s.seg_idx);
 
-    let mut partition_to_segment_inputs: std::collections::HashMap<(i32, i32), Vec<usize>> =
+    // Group segments by topic_id for offset allocation
+    let mut topic_to_segment_inputs: std::collections::HashMap<i32, Vec<usize>> =
         std::collections::HashMap::with_capacity(segment_inputs.len());
-    let mut partition_deltas: std::collections::HashMap<(i32, i32), i64> =
+    let mut topic_deltas: std::collections::HashMap<i32, i64> =
         std::collections::HashMap::with_capacity(segment_inputs.len());
 
     for (input_idx, input) in segment_inputs.iter().enumerate() {
-        let partition_key = (input.key.topic_id.0 as i32, input.key.partition_id.0 as i32);
-        partition_to_segment_inputs
-            .entry(partition_key)
+        let topic_key = input.key.topic_id.0 as i32;
+        topic_to_segment_inputs
+            .entry(topic_key)
             .or_default()
             .push(input_idx);
-        *partition_deltas.entry(partition_key).or_insert(0) += input.record_count;
+        *topic_deltas.entry(topic_key).or_insert(0) += input.record_count;
     }
 
-    if !partition_deltas.is_empty() {
+    if !topic_deltas.is_empty() {
         let offsets_start = std::time::Instant::now();
-        let partition_delta_rows: Vec<(i32, i32, i64)> = partition_deltas
+        let topic_delta_rows: Vec<(i32, i64)> = topic_deltas
             .iter()
-            .map(|(&(topic_id, partition_id), &delta)| (topic_id, partition_id, delta))
+            .map(|(&topic_id, &delta)| (topic_id, delta))
             .collect();
 
         let mut offset_qb = QueryBuilder::<Postgres>::new(
-            "INSERT INTO partition_offsets (topic_id, partition_id, next_offset) ",
+            "INSERT INTO topic_offsets (topic_id, next_offset) ",
         );
-        offset_qb.push_values(
-            partition_delta_rows,
-            |mut b, (topic_id, partition_id, delta)| {
-                b.push_bind(topic_id)
-                    .push_bind(partition_id)
-                    .push_bind(delta);
-            },
-        );
+        offset_qb.push_values(topic_delta_rows, |mut b, (topic_id, delta)| {
+            b.push_bind(topic_id).push_bind(delta);
+        });
         offset_qb.push(
-            " ON CONFLICT (topic_id, partition_id) \
-             DO UPDATE SET next_offset = partition_offsets.next_offset + EXCLUDED.next_offset \
-             RETURNING topic_id, partition_id, next_offset",
+            " ON CONFLICT (topic_id) \
+             DO UPDATE SET next_offset = topic_offsets.next_offset + EXCLUDED.next_offset \
+             RETURNING topic_id, next_offset",
         );
 
-        let updated_partition_offsets: Vec<(i32, i32, i64)> =
+        let updated_topic_offsets: Vec<(i32, i64)> =
             offset_qb.build_query_as().fetch_all(&mut *tx).await?;
-        let updated_offset_by_partition: std::collections::HashMap<(i32, i32), i64> =
-            updated_partition_offsets
+        let updated_offset_by_topic: std::collections::HashMap<i32, i64> =
+            updated_topic_offsets
                 .into_iter()
-                .map(|(topic_id, partition_id, next_offset)| {
-                    ((topic_id, partition_id), next_offset)
-                })
+                .map(|(topic_id, next_offset)| (topic_id, next_offset))
                 .collect();
 
-        for (partition_key, input_indices) in &partition_to_segment_inputs {
-            let total_delta = *partition_deltas.get(partition_key).ok_or_else(|| {
+        for (topic_key, input_indices) in &topic_to_segment_inputs {
+            let total_delta = *topic_deltas.get(topic_key).ok_or_else(|| {
                 sqlx::Error::Protocol(format!(
-                    "missing partition delta for topic={} partition={}",
-                    partition_key.0, partition_key.1
+                    "missing topic delta for topic={}",
+                    topic_key
                 ))
             })?;
-            let partition_end =
-                *updated_offset_by_partition
-                    .get(partition_key)
+            let topic_end =
+                *updated_offset_by_topic
+                    .get(topic_key)
                     .ok_or_else(|| {
                         sqlx::Error::Protocol(format!(
-                            "missing updated offset for topic={} partition={}",
-                            partition_key.0, partition_key.1
+                            "missing updated offset for topic={}",
+                            topic_key
                         ))
                     })?;
 
-            let mut cursor = partition_end - total_delta;
+            let mut cursor = topic_end - total_delta;
             for input_idx in input_indices {
                 let input = &segment_inputs[*input_idx];
                 let start_offset = cursor;
@@ -397,7 +413,7 @@ async fn commit_batch(
         let topic_batches_start = std::time::Instant::now();
         let mut batch_qb = QueryBuilder::<Postgres>::new(
             "INSERT INTO topic_batches (\
-                 topic_id, partition_id, schema_id, \
+                 topic_id, schema_id, \
                  start_offset, end_offset, record_count, \
                  s3_key, byte_offset, byte_length, ingest_time, crc32\
              ) ",
@@ -406,7 +422,6 @@ async fn commit_batch(
             let meta = &segment_metas[input.seg_idx];
             let (start_offset, end_offset) = segment_offsets[input.seg_idx];
             b.push_bind(input.key.topic_id.0 as i32)
-                .push_bind(input.key.partition_id.0 as i32)
                 .push_bind(input.key.schema_id.0 as i32)
                 .push_bind(start_offset as i64)
                 .push_bind(end_offset as i64)
@@ -417,7 +432,15 @@ async fn commit_batch(
                 .push_bind(ingest_time)
                 .push_bind(meta.crc32 as i64);
         });
-        batch_qb.build().execute(&mut *tx).await?;
+        batch_qb.push(" RETURNING batch_id");
+        let returned_ids: Vec<(i64,)> =
+            batch_qb.build_query_as().fetch_all(&mut *tx).await?;
+        // Map returned batch_ids back to segment indices
+        for (i, input) in segment_inputs.iter().enumerate() {
+            if let Some(row) = returned_ids.get(i) {
+                batch_ids[input.seg_idx] = row.0;
+            }
+        }
         DB_COMMIT_TOPIC_BATCHES_SECONDS.observe(topic_batches_start.elapsed().as_secs_f64());
     }
 
@@ -470,7 +493,7 @@ async fn commit_batch(
     tx.commit().await?;
     DB_COMMIT_TX_COMMIT_SECONDS.observe(tx_commit_start.elapsed().as_secs_f64());
 
-    Ok(segment_offsets)
+    Ok((segment_offsets, batch_ids))
 }
 
 fn build_writer_state_rows(

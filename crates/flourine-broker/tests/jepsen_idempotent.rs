@@ -33,10 +33,9 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, partition_id, value, Duration::from_secs(10))
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
         .await
 }
 
@@ -45,7 +44,6 @@ async fn ws_produce_timeout(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
     timeout: Duration,
 ) -> Result<writer::AppendResponse, String> {
@@ -54,7 +52,6 @@ async fn ws_produce_timeout(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -86,22 +83,15 @@ async fn ws_produce_timeout(
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<Vec<Bytes>, String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
 
     loop {
         let req = reader::ReadRequest {
-            group_id: String::new(),
-            reader_id: String::new(),
-            generation: Generation(0),
-            reads: vec![reader::PartitionRead {
-                topic_id,
-                partition_id,
-                offset: next_offset,
-                max_bytes: 10 * 1024 * 1024,
-            }],
+            topic_id,
+            offset: next_offset,
+            max_bytes: 10 * 1024 * 1024,
         };
         let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
         ws.send(Message::Binary(buf))
@@ -150,29 +140,28 @@ async fn ws_read_all(
 #[tokio::test]
 async fn test_retry_same_seq_returns_cached_ack() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-retry", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-retry").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
     let writer_id = WriterId::new();
 
     // First send
-    let resp1 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "dedup-val")
+    let resp1 = ws_produce(&mut ws, writer_id, 1, topic_id, "dedup-val")
         .await
         .expect("first produce should succeed");
     assert!(resp1.success);
     let ack1 = resp1.append_acks.clone();
 
     // Retry same (writer_id, seq=1)
-    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "dedup-val")
+    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, "dedup-val")
         .await
         .expect("retry produce should succeed");
     assert!(resp2.success, "retry should return cached ack");
     assert_eq!(resp2.append_acks, ack1, "acks should match");
 
     // Verify exactly 1 record
-    let values = ws_read_all(&mut ws, topic_id, partition_id)
+    let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert_eq!(values.len(), 1, "exactly 1 record should exist");
@@ -183,8 +172,7 @@ async fn test_retry_same_seq_returns_cached_ack() {
 #[tokio::test]
 async fn test_retry_during_slow_flush_no_duplicate() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-slow-flush", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-slow-flush").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     broker.faulty_store().set_put_delay_ms(2000);
@@ -199,7 +187,6 @@ async fn test_retry_during_slow_flush_no_duplicate() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -218,7 +205,6 @@ async fn test_retry_during_slow_flush_no_duplicate() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -257,7 +243,7 @@ async fn test_retry_during_slow_flush_no_duplicate() {
     broker.faulty_store().reset();
     tokio::time::sleep(Duration::from_millis(200)).await;
     let mut ws = ws_connect(addr).await;
-    let values = ws_read_all(&mut ws, topic_id, partition_id)
+    let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert_eq!(values.len(), 1, "exactly 1 record, no duplicate from slow flush retry");
@@ -267,15 +253,14 @@ async fn test_retry_during_slow_flush_no_duplicate() {
 #[tokio::test]
 async fn test_retry_after_crash_with_db_dedup() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-crash", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-crash").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let writer_id = WriterId::new();
 
     // Write and get ack
     let mut ws = ws_connect(broker.addr()).await;
-    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "crash-dedup")
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "crash-dedup")
         .await
         .expect("produce should succeed");
     assert!(resp.success);
@@ -286,13 +271,13 @@ async fn test_retry_after_crash_with_db_dedup() {
 
     // Retry same (writer_id, seq=1) — should hit DB dedup
     let mut ws = ws_connect(broker.addr()).await;
-    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "crash-dedup")
+    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, "crash-dedup")
         .await
         .expect("retry should succeed");
     assert!(resp2.success, "DB dedup should return cached ack");
 
     // Verify no duplicate
-    let values = ws_read_all(&mut ws, topic_id, partition_id)
+    let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert_eq!(values.len(), 1, "no duplicate after crash+restart");
@@ -302,27 +287,26 @@ async fn test_retry_after_crash_with_db_dedup() {
 #[tokio::test]
 async fn test_stale_seq_rejected() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-stale", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-stale").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
     let writer_id = WriterId::new();
 
     // Send seq=1
-    let resp1 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "val-1")
+    let resp1 = ws_produce(&mut ws, writer_id, 1, topic_id, "val-1")
         .await
         .expect("seq=1 should succeed");
     assert!(resp1.success);
 
     // Send seq=2
-    let resp2 = ws_produce(&mut ws, writer_id, 2, topic_id, partition_id, "val-2")
+    let resp2 = ws_produce(&mut ws, writer_id, 2, topic_id, "val-2")
         .await
         .expect("seq=2 should succeed");
     assert!(resp2.success);
 
     // Retry seq=1 (stale)
-    let resp3 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "val-1")
+    let resp3 = ws_produce(&mut ws, writer_id, 1, topic_id, "val-1")
         .await
         .expect("stale retry should return response");
 
@@ -341,15 +325,14 @@ async fn test_stale_seq_rejected() {
 #[tokio::test]
 async fn test_dedup_cache_eviction_db_fallback() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-evict", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-evict").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let writer_id = WriterId::new();
 
     // Write seq=1 and get ack
     let mut ws = ws_connect(broker.addr()).await;
-    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "evict-val")
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "evict-val")
         .await
         .expect("first produce should succeed");
     assert!(resp.success);
@@ -361,14 +344,14 @@ async fn test_dedup_cache_eviction_db_fallback() {
 
     // Retry seq=1 — cache miss, DB lookup should find Duplicate
     let mut ws = ws_connect(broker.addr()).await;
-    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "evict-val")
+    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, "evict-val")
         .await
         .expect("retry should succeed");
     assert!(resp2.success, "DB dedup should return cached ack after eviction");
     assert_eq!(resp2.append_acks, ack1, "acks should match original");
 
     // Verify exactly 1 record — no duplicate
-    let values = ws_read_all(&mut ws, topic_id, partition_id)
+    let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert_eq!(values.len(), 1, "no duplicate after cache eviction + DB fallback");
@@ -382,15 +365,14 @@ async fn test_dedup_cache_eviction_db_fallback() {
 #[tokio::test]
 async fn test_writer_state_gc_does_not_break_active_writers() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-gc", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-gc").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let writer_id = WriterId::new();
 
     // Write seq=1 and get ack
     let mut ws = ws_connect(broker.addr()).await;
-    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "gc-val")
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "gc-val")
         .await
         .expect("first produce should succeed");
     assert!(resp.success);
@@ -407,13 +389,13 @@ async fn test_writer_state_gc_does_not_break_active_writers() {
 
     // Retry seq=1 — no cached ack in cache or DB, treated as new write
     let mut ws = ws_connect(broker.addr()).await;
-    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "gc-val")
+    let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, "gc-val")
         .await
         .expect("retry after GC should succeed");
     assert!(resp2.success, "retry after GC should succeed as new write");
 
     // May have 1 or 2 records (duplicate is acceptable per whitepaper)
-    let values = ws_read_all(&mut ws, topic_id, partition_id)
+    let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(
@@ -424,10 +406,9 @@ async fn test_writer_state_gc_does_not_break_active_writers() {
 
     // Offsets should be valid (no gaps in watermark)
     let watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_one(&db.pool)
     .await
     .expect("query watermark");
@@ -442,8 +423,7 @@ async fn test_writer_state_gc_does_not_break_active_writers() {
 #[tokio::test]
 async fn test_retry_after_failed_flush() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("idem-fail-flush", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("idem-fail-flush").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let writer_id = WriterId::new();
@@ -452,7 +432,7 @@ async fn test_retry_after_failed_flush() {
     broker.faulty_store().fail_next_put();
 
     let mut ws = ws_connect(broker.addr()).await;
-    let result = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "fail-then-retry").await;
+    let result = ws_produce(&mut ws, writer_id, 1, topic_id, "fail-then-retry").await;
     let failed = result.is_err() || !result.as_ref().unwrap().success;
     assert!(failed, "write should fail during S3 failure");
 
@@ -462,13 +442,13 @@ async fn test_retry_after_failed_flush() {
     let mut ws = ws_connect(broker.addr()).await;
 
     // Retry same (writer_id, seq=1) — first never committed to DB, so dedup returns Accept
-    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "fail-then-retry")
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "fail-then-retry")
         .await
         .expect("retry should succeed");
     assert!(resp.success, "retry after failed flush should succeed");
 
     // Verify exactly 1 record
-    let values = ws_read_all(&mut ws, topic_id, partition_id)
+    let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert_eq!(values.len(), 1, "exactly 1 record after retry");

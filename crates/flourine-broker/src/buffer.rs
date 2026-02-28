@@ -1,21 +1,19 @@
 //! Broker buffer for batching append requests.
 //!
 //! Buffers incoming records from multiple writers, merges them by
-//! (topic_id, partition_id, schema_id), and flushes when size or time
-//! thresholds are reached.
+//! (topic_id, schema_id), and flushes when size or time thresholds are reached.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
-use flourine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch, BatchAck};
 
 /// Key for grouping records in the buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BatchKey {
     pub topic_id: TopicId,
-    pub partition_id: PartitionId,
     pub schema_id: SchemaId,
 }
 
@@ -160,7 +158,6 @@ impl BrokerBuffer {
         for batch in batches {
             let key = BatchKey {
                 topic_id: batch.topic_id,
-                partition_id: batch.partition_id,
                 schema_id: batch.schema_id,
             };
 
@@ -252,7 +249,6 @@ impl BrokerBuffer {
 
             batches.push(RecordBatch {
                 topic_id: key.topic_id,
-                partition_id: key.partition_id,
                 schema_id: key.schema_id,
                 records: buffered.records,
             });
@@ -308,7 +304,6 @@ impl BrokerBuffer {
 
                 append_acks.push(BatchAck {
                     topic_id: key.topic_id,
-                    partition_id: key.partition_id,
                     schema_id: key.schema_id,
                     start_offset: flourine_common::ids::Offset(writer_start),
                     end_offset: flourine_common::ids::Offset(writer_end),
@@ -342,10 +337,9 @@ mod tests {
         }
     }
 
-    fn make_segment(topic: u32, partition: u32, records: Vec<Record>) -> RecordBatch {
+    fn make_segment(topic: u32, records: Vec<Record>) -> RecordBatch {
         RecordBatch {
             topic_id: TopicId(topic),
-            partition_id: PartitionId(partition),
             schema_id: SchemaId(100),
             records,
         }
@@ -356,7 +350,7 @@ mod tests {
         let mut buffer = BrokerBuffer::new();
 
         let writer_id = WriterId(Uuid::new_v4());
-        let batches = vec![make_segment(1, 0, vec![make_record("k1", "v1")])];
+        let batches = vec![make_segment(1, vec![make_record("k1", "v1")])];
 
         let _rx = buffer.insert(writer_id, AppendSeq(1), batches);
 
@@ -369,7 +363,7 @@ mod tests {
     fn test_buffer_merge_same_key() {
         let mut buffer = BrokerBuffer::new();
 
-        // Two writers send to same partition
+        // Two writers send to same topic+schema
         let p1 = WriterId(Uuid::new_v4());
         let p2 = WriterId(Uuid::new_v4());
 
@@ -378,7 +372,6 @@ mod tests {
             AppendSeq(1),
             vec![make_segment(
                 1,
-                0,
                 vec![make_record("k1", "v1"), make_record("k2", "v2")],
             )],
         );
@@ -386,7 +379,7 @@ mod tests {
         let _rx2 = buffer.insert(
             p2,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k3", "v3")])],
+            vec![make_segment(1, vec![make_record("k3", "v3")])],
         );
 
         // Should have 1 merged batch with 3 records
@@ -400,19 +393,18 @@ mod tests {
     }
 
     #[test]
-    fn test_buffer_multiple_partitions() {
+    fn test_buffer_multiple_topics() {
         let mut buffer = BrokerBuffer::new();
 
         let writer = WriterId(Uuid::new_v4());
         let batches = vec![
-            make_segment(1, 0, vec![make_record("k1", "v1")]),
-            make_segment(1, 1, vec![make_record("k2", "v2")]),
-            make_segment(2, 0, vec![make_record("k3", "v3")]),
+            make_segment(1, vec![make_record("k1", "v1")]),
+            make_segment(2, vec![make_record("k2", "v2")]),
         ];
 
         let _rx = buffer.insert(writer, AppendSeq(1), batches);
 
-        assert_eq!(buffer.segment_count(), 3);
+        assert_eq!(buffer.segment_count(), 2);
         assert_eq!(buffer.pending_count(), 1);
     }
 
@@ -430,7 +422,7 @@ mod tests {
         let _rx1 = buffer.insert(
             p1,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k", "small")])],
+            vec![make_segment(1, vec![make_record("k", "small")])],
         );
         assert!(!buffer.should_flush());
 
@@ -440,7 +432,7 @@ mod tests {
         let _rx2 = buffer.insert(
             p2,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k", &large_value)])],
+            vec![make_segment(1, vec![make_record("k", &large_value)])],
         );
         assert!(buffer.should_flush());
     }
@@ -458,10 +450,9 @@ mod tests {
         let _rx = buffer.insert(
             writer,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k", "v")])],
+            vec![make_segment(1, vec![make_record("k", "v")])],
         );
 
-        // Initially should not flush (time not elapsed)
         // Wait and check again
         std::thread::sleep(Duration::from_millis(5));
         assert!(buffer.should_flush());
@@ -475,7 +466,7 @@ mod tests {
         let _rx = buffer.insert(
             writer,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k", "v")])],
+            vec![make_segment(1, vec![make_record("k", "v")])],
         );
 
         assert!(!buffer.is_empty());
@@ -496,17 +487,16 @@ mod tests {
             AppendSeq(1),
             vec![make_segment(
                 1,
-                0,
                 vec![make_record("k1", "v1"), make_record("k2", "v2")],
             )],
         );
 
-        // Writer 2 sends 1 record to same partition
+        // Writer 2 sends 1 record to same topic
         let p2 = WriterId(Uuid::new_v4());
         let mut rx2 = buffer.insert(
             p2,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k3", "v3")])],
+            vec![make_segment(1, vec![make_record("k3", "v3")])],
         );
 
         let result = buffer.drain();
@@ -545,7 +535,7 @@ mod tests {
         let _rx = buffer.insert(
             writer,
             AppendSeq(1),
-            vec![make_segment(1, 0, vec![make_record("k", &large_value)])],
+            vec![make_segment(1, vec![make_record("k", &large_value)])],
         );
 
         assert!(buffer.should_apply_backpressure());

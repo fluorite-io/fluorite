@@ -63,7 +63,6 @@ impl BenchmarkConfig {
 pub struct ScenarioConfig {
     pub name: &'static str,
     pub producers: usize,
-    pub partitions: usize,
     pub record_size: usize,
     pub duration: Duration,
 }
@@ -74,7 +73,6 @@ impl ScenarioConfig {
         Self {
             name: "baseline",
             producers: 1,
-            partitions: 1,
             record_size: 1024,
             duration: Duration::from_secs(10),
         }
@@ -85,7 +83,6 @@ impl ScenarioConfig {
         Self {
             name: "small_messages",
             producers: 10,
-            partitions: 8,
             record_size: 100,
             duration: Duration::from_secs(30),
         }
@@ -96,18 +93,16 @@ impl ScenarioConfig {
         Self {
             name: "large_messages",
             producers: 5,
-            partitions: 4,
             record_size: 100_000,
             duration: Duration::from_secs(30),
         }
     }
 
-    /// Many producers, partitions.
+    /// Many producers.
     pub fn high_fanout() -> Self {
         Self {
             name: "high_fanout",
             producers: 50,
-            partitions: 32,
             record_size: 1024,
             duration: Duration::from_secs(30),
         }
@@ -118,7 +113,6 @@ impl ScenarioConfig {
         Self {
             name: "batching_stress",
             producers: 100,
-            partitions: 4,
             record_size: 1024,
             duration: Duration::from_secs(30),
         }

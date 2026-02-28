@@ -3,7 +3,7 @@
 Cross-language schema E2E test: Python reader with Avro-decoded values.
 
 Usage:
-    python python_schema_reader.py <url> <topic_id> <partition_id> <expected_count>
+    python python_schema_reader.py <url> <topic_id> <expected_count>
 
 Reads records, deserializes values with TestOrder.from_bytes(), prints decoded fields as JSON.
 """
@@ -29,14 +29,13 @@ class TestOrder:
 
 
 async def main():
-    if len(sys.argv) != 5:
-        print(f"Usage: {sys.argv[0]} <url> <topic_id> <partition_id> <expected_count>", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print(f"Usage: {sys.argv[0]} <url> <topic_id> <expected_count>", file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
     topic_id = int(sys.argv[2])
-    partition_id = int(sys.argv[3])
-    expected_count = int(sys.argv[4])
+    expected_count = int(sys.argv[3])
 
     config = ReaderConfig(
         url=url,
@@ -51,18 +50,17 @@ async def main():
     async with reader:
         max_attempts = 10
         for _ in range(max_attempts):
-            results = await reader.poll()
-            for result in results:
-                if result.partition_id == partition_id:
-                    for record in result.records:
-                        order = TestOrder.from_bytes(record.value)
-                        decoded_records.append({
-                            "key": record.key.decode('utf-8') if record.key else None,
-                            "name": order.name,
-                            "amount": order.amount,
-                            "active": order.active,
-                            "tags": order.tags,
-                        })
+            batch = await reader.poll()
+            for result in batch.results:
+                for record in result.records:
+                    order = TestOrder.from_bytes(record.value)
+                    decoded_records.append({
+                        "key": record.key.decode('utf-8') if record.key else None,
+                        "name": order.name,
+                        "amount": order.amount,
+                        "active": order.active,
+                        "tags": order.tags,
+                    })
 
             if len(decoded_records) >= expected_count:
                 break
@@ -71,7 +69,6 @@ async def main():
     result = {
         "reader": "python",
         "topic_id": topic_id,
-        "partition_id": partition_id,
         "record_count": len(decoded_records),
         "records": decoded_records,
     }

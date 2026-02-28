@@ -16,13 +16,9 @@ public enum HeartbeatStatus
    */
   HEARTBEAT_STATUS_OK(0),
   /**
-   * <code>HEARTBEAT_STATUS_REBALANCE_NEEDED = 1;</code>
+   * <code>HEARTBEAT_STATUS_UNKNOWN_MEMBER = 1;</code>
    */
-  HEARTBEAT_STATUS_REBALANCE_NEEDED(1),
-  /**
-   * <code>HEARTBEAT_STATUS_UNKNOWN_MEMBER = 2;</code>
-   */
-  HEARTBEAT_STATUS_UNKNOWN_MEMBER(2),
+  HEARTBEAT_STATUS_UNKNOWN_MEMBER(1),
   UNRECOGNIZED(-1),
   ;
 
@@ -40,13 +36,9 @@ public enum HeartbeatStatus
    */
   public static final int HEARTBEAT_STATUS_OK_VALUE = 0;
   /**
-   * <code>HEARTBEAT_STATUS_REBALANCE_NEEDED = 1;</code>
+   * <code>HEARTBEAT_STATUS_UNKNOWN_MEMBER = 1;</code>
    */
-  public static final int HEARTBEAT_STATUS_REBALANCE_NEEDED_VALUE = 1;
-  /**
-   * <code>HEARTBEAT_STATUS_UNKNOWN_MEMBER = 2;</code>
-   */
-  public static final int HEARTBEAT_STATUS_UNKNOWN_MEMBER_VALUE = 2;
+  public static final int HEARTBEAT_STATUS_UNKNOWN_MEMBER_VALUE = 1;
 
 
   public final int getNumber() {
@@ -74,8 +66,7 @@ public enum HeartbeatStatus
   public static HeartbeatStatus forNumber(int value) {
     switch (value) {
       case 0: return HEARTBEAT_STATUS_OK;
-      case 1: return HEARTBEAT_STATUS_REBALANCE_NEEDED;
-      case 2: return HEARTBEAT_STATUS_UNKNOWN_MEMBER;
+      case 1: return HEARTBEAT_STATUS_UNKNOWN_MEMBER;
       default: return null;
     }
   }

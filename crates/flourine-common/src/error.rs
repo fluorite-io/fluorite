@@ -1,6 +1,6 @@
 //! Error types for Flourine eventbus
 
-use crate::{Generation, PartitionId, WriterId, TopicId};
+use crate::{WriterId, TopicId};
 use thiserror::Error;
 
 /// Error codes matching wire protocol error messages
@@ -11,8 +11,6 @@ pub enum ErrorCode {
     Unknown = 0,
     /// Topic not found
     TopicNotFound = 1,
-    /// Partition not found
-    PartitionNotFound = 2,
     /// Schema not found
     SchemaNotFound = 3,
     /// Schema incompatible with existing schemas
@@ -23,9 +21,7 @@ pub enum ErrorCode {
     GroupNotFound = 6,
     /// Reader not a member of the group
     NotMember = 7,
-    /// Reader generation is stale (rebalance in progress)
-    StaleGeneration = 8,
-    /// Reader does not own the requested partition
+    /// Reader does not own the requested range
     NotOwner = 9,
     /// Request rate limit exceeded
     RateLimited = 10,
@@ -39,8 +35,6 @@ pub enum ErrorCode {
     DuplicateSequence = 14,
     /// Invalid sequence number (gap detected)
     InvalidSequence = 15,
-    /// Rebalance is in progress
-    RebalanceNeeded = 16,
 }
 
 impl ErrorCode {
@@ -48,10 +42,7 @@ impl ErrorCode {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            ErrorCode::RateLimited
-                | ErrorCode::InternalError
-                | ErrorCode::StaleGeneration
-                | ErrorCode::RebalanceNeeded
+            ErrorCode::RateLimited | ErrorCode::InternalError
         )
     }
 }
@@ -61,12 +52,6 @@ impl ErrorCode {
 pub enum FlourineError {
     #[error("topic not found: {topic_id}")]
     TopicNotFound { topic_id: TopicId },
-
-    #[error("partition not found: topic={topic_id}, partition={partition_id}")]
-    PartitionNotFound {
-        topic_id: TopicId,
-        partition_id: PartitionId,
-    },
 
     #[error("schema not found: {schema_id}")]
     SchemaNotFound { schema_id: u32 },
@@ -83,14 +68,8 @@ pub enum FlourineError {
     #[error("not a member of group: {group_id}")]
     NotMember { group_id: String },
 
-    #[error("stale generation: expected {expected}, got {actual}")]
-    StaleGeneration {
-        expected: Generation,
-        actual: Generation,
-    },
-
-    #[error("not owner of partition: {partition_id}")]
-    NotOwner { partition_id: PartitionId },
+    #[error("not owner of range")]
+    NotOwner,
 
     #[error("rate limited")]
     RateLimited,
@@ -113,9 +92,6 @@ pub enum FlourineError {
     #[error("invalid sequence: expected {expected}, got {actual}")]
     InvalidSequence { expected: u64, actual: u64 },
 
-    #[error("rebalance needed")]
-    RebalanceNeeded,
-
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -131,21 +107,18 @@ impl FlourineError {
     pub fn code(&self) -> ErrorCode {
         match self {
             FlourineError::TopicNotFound { .. } => ErrorCode::TopicNotFound,
-            FlourineError::PartitionNotFound { .. } => ErrorCode::PartitionNotFound,
             FlourineError::SchemaNotFound { .. } => ErrorCode::SchemaNotFound,
             FlourineError::IncompatibleSchema { .. } => ErrorCode::IncompatibleSchema,
             FlourineError::InvalidOffset { .. } => ErrorCode::InvalidOffset,
             FlourineError::GroupNotFound { .. } => ErrorCode::GroupNotFound,
             FlourineError::NotMember { .. } => ErrorCode::NotMember,
-            FlourineError::StaleGeneration { .. } => ErrorCode::StaleGeneration,
-            FlourineError::NotOwner { .. } => ErrorCode::NotOwner,
+            FlourineError::NotOwner => ErrorCode::NotOwner,
             FlourineError::RateLimited => ErrorCode::RateLimited,
             FlourineError::InternalError { .. } => ErrorCode::InternalError,
             FlourineError::Unauthenticated => ErrorCode::Unauthenticated,
             FlourineError::Unauthorized { .. } => ErrorCode::Unauthorized,
             FlourineError::DuplicateSequence { .. } => ErrorCode::DuplicateSequence,
             FlourineError::InvalidSequence { .. } => ErrorCode::InvalidSequence,
-            FlourineError::RebalanceNeeded => ErrorCode::RebalanceNeeded,
             FlourineError::Io(_) => ErrorCode::InternalError,
             FlourineError::Database { .. } => ErrorCode::InternalError,
             FlourineError::Encoding { .. } => ErrorCode::InternalError,
@@ -188,7 +161,6 @@ mod tests {
             .is_retryable()
         );
         assert!(FlourineError::RateLimited.is_retryable());
-        assert!(FlourineError::RebalanceNeeded.is_retryable());
     }
 
     #[test]

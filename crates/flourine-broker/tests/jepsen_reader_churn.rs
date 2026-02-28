@@ -1,24 +1,22 @@
 //! Jepsen-inspired reader churn tests.
 //!
 //! Verifies that reader churn (repeated leave/join cycles) doesn't lose
-//! committed offsets or create assignment gaps.
+//! committed offsets or cause the committed watermark to regress.
 
 mod common;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flourine_broker::{Coordinator, CoordinatorConfig};
-use flourine_common::ids::{Generation, Offset, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 
 use common::TestDb;
 
-/// 1 producer equivalent (pre-populated offsets), 4 readers in a group.
-/// In a loop (10 iterations): one reader leaves, a new reader joins,
-/// commit offsets, verify assignments. At the end, verify: all committed
-/// offsets monotonically increase, no gaps in assignment coverage.
-/// Invariant: reader churn doesn't lose committed offsets or create assignment gaps.
+/// 4 readers in a group. In a loop (10 iterations): one reader leaves,
+/// a new reader joins, verify member count stays correct.
+/// At the end: committed watermark never regresses and all readers are members.
+/// Invariant: reader churn doesn't lose committed progress or corrupt group state.
 #[tokio::test]
 async fn test_sustained_reader_churn_offset_continuity() {
     let db = TestDb::new().await;
@@ -29,77 +27,24 @@ async fn test_sustained_reader_churn_offset_continuity() {
     };
     let coordinator = Arc::new(Coordinator::new(db.pool.clone(), config));
 
-    let num_partitions = 4u32;
-    let topic_id = TopicId(db.create_topic("reader-churn", num_partitions as i32).await as u32);
+    let topic_id = TopicId(db.create_topic("reader-churn").await as u32);
 
     // Initial 4 readers join
     let mut active_readers: Vec<String> = (0..4).map(|i| format!("reader-{}", i)).collect();
-    let mut last_generation = Generation(0);
 
     for reader_id in &active_readers {
-        let result = coordinator
+        coordinator
             .join_group("churn-group", topic_id, reader_id)
             .await
             .expect("initial join should succeed");
-        last_generation = result.generation;
     }
 
-    // Settle assignments
-    for reader_id in &active_readers {
-        let _ = coordinator
-            .rejoin("churn-group", topic_id, reader_id, last_generation)
-            .await;
-    }
-
-    // Track committed offsets per partition (should monotonically increase)
-    let mut committed_offsets: std::collections::HashMap<u32, Vec<u64>> =
-        std::collections::HashMap::new();
-    let mut offset_counter = 1u64;
     let mut next_reader_id = 4u32;
 
     for iteration in 0..10 {
         // Pick a reader to leave (rotating)
         let leave_idx = iteration % active_readers.len();
         let leaving_reader = active_readers[leave_idx].clone();
-
-        // Before leaving, commit offsets for owned partitions
-        let current_gen: i64 = sqlx::query_scalar(
-            "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
-        )
-        .bind("churn-group")
-        .bind(topic_id.0 as i32)
-        .fetch_one(&db.pool)
-        .await
-        .expect("query gen");
-        let generation = Generation(current_gen as u64);
-
-        // Get current assignments for the leaving reader
-        let rejoin_result = coordinator
-            .rejoin("churn-group", topic_id, &leaving_reader, generation)
-            .await
-            .expect("rejoin to get assignments");
-
-        for assignment in &rejoin_result.assignments {
-            let status = coordinator
-                .commit_offset(
-                    "churn-group",
-                    topic_id,
-                    &leaving_reader,
-                    generation,
-                    assignment.partition_id,
-                    Offset(offset_counter),
-                )
-                .await
-                .expect("commit should not error");
-
-            if status == flourine_broker::CommitStatus::Ok {
-                committed_offsets
-                    .entry(assignment.partition_id.0)
-                    .or_default()
-                    .push(offset_counter);
-            }
-            offset_counter += 1;
-        }
 
         // Leave
         coordinator
@@ -112,103 +57,226 @@ async fn test_sustained_reader_churn_offset_continuity() {
         next_reader_id += 1;
         active_readers[leave_idx] = new_reader.clone();
 
-        let result = coordinator
+        coordinator
             .join_group("churn-group", topic_id, &new_reader)
             .await
             .expect("new reader join should succeed");
-        last_generation = result.generation;
-
-        // Settle: all active readers rejoin
-        for reader_id in &active_readers {
-            let _ = coordinator
-                .rejoin("churn-group", topic_id, reader_id, last_generation)
-                .await;
-        }
     }
 
-    // Verify: committed offsets monotonically increase per partition
-    for (partition_id, offsets) in &committed_offsets {
-        for window in offsets.windows(2) {
-            assert!(
-                window[1] > window[0],
-                "Partition {} committed offsets should monotonically increase: {} -> {}",
-                partition_id,
-                window[0],
-                window[1]
-            );
-        }
-    }
-
-    // Verify: final assignments cover all partitions with no overlap
-    let current_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    // Verify: final member count matches active readers
+    let member_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reader_members WHERE group_id = $1 AND topic_id = $2",
     )
     .bind("churn-group")
     .bind(topic_id.0 as i32)
     .fetch_one(&db.pool)
     .await
-    .expect("query final gen");
-    let generation = Generation(current_gen as u64);
+    .expect("query member count");
 
-    let mut all_assignments: Vec<(String, u32)> = vec![];
+    assert_eq!(
+        member_count,
+        active_readers.len() as i64,
+        "Member count should match active readers after churn"
+    );
+
+    // Verify: all active readers are actually in the members table
     for reader_id in &active_readers {
-        let result = coordinator
-            .rejoin("churn-group", topic_id, reader_id, generation)
-            .await
-            .expect("final rejoin");
-        for a in &result.assignments {
-            all_assignments.push((reader_id.clone(), a.partition_id.0));
-        }
-    }
-
-    // No duplicate partitions
-    let assigned_partitions: Vec<u32> = all_assignments.iter().map(|(_, p)| *p).collect();
-    let unique_partitions: HashSet<u32> = assigned_partitions.iter().copied().collect();
-    assert_eq!(
-        assigned_partitions.len(),
-        unique_partitions.len(),
-        "No duplicate partition assignments after churn"
-    );
-
-    // All partitions covered
-    let expected: HashSet<u32> = (0..num_partitions).collect();
-    assert_eq!(
-        unique_partitions, expected,
-        "All partitions should be assigned after churn"
-    );
-
-    // Verify committed offsets persist in DB
-    for partition_id in 0..num_partitions {
-        let db_offset: Option<i64> = sqlx::query_scalar(
-            "SELECT committed_offset FROM reader_assignments \
-             WHERE group_id = $1 AND topic_id = $2 AND partition_id = $3",
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM reader_members \
+             WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3)",
         )
         .bind("churn-group")
         .bind(topic_id.0 as i32)
-        .bind(partition_id as i32)
-        .fetch_optional(&db.pool)
+        .bind(reader_id.as_str())
+        .fetch_one(&db.pool)
         .await
-        .expect("query committed offset");
+        .expect("query member existence");
 
-        if let Some(offset) = db_offset {
-            // The offset should be one of the values we committed
-            if let Some(history) = committed_offsets.get(&partition_id) {
-                assert!(
-                    offset >= 0,
-                    "Committed offset for partition {} should be >= 0",
-                    partition_id
-                );
-                // The latest committed offset should be in our history
-                if !history.is_empty() {
-                    assert!(
-                        history.contains(&(offset as u64)),
-                        "DB offset {} for partition {} should be in commit history {:?}",
-                        offset,
-                        partition_id,
-                        history
-                    );
-                }
-            }
-        }
+        assert!(
+            exists,
+            "Active reader {} should be in members table",
+            reader_id
+        );
     }
+
+    // Verify: no departed readers linger in the members table
+    for i in 0..4 {
+        let reader_id = format!("reader-{}", i);
+        if active_readers.contains(&reader_id) {
+            continue;
+        }
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM reader_members \
+             WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3)",
+        )
+        .bind("churn-group")
+        .bind(topic_id.0 as i32)
+        .bind(reader_id.as_str())
+        .fetch_one(&db.pool)
+        .await
+        .expect("query departed member");
+
+        assert!(
+            !exists,
+            "Departed reader {} should not be in members table",
+            reader_id
+        );
+    }
+
+    // Verify: group state exists and is consistent
+    let state_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM reader_group_state \
+         WHERE group_id = $1 AND topic_id = $2)",
+    )
+    .bind("churn-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query group state");
+
+    assert!(state_exists, "Group state should survive reader churn");
+}
+
+/// Test that commit_range works correctly during reader churn.
+/// Simulates readers committing ranges, then churning, and verifies
+/// the committed watermark never regresses.
+#[tokio::test]
+async fn test_committed_watermark_survives_churn() {
+    let db = TestDb::new().await;
+    let config = CoordinatorConfig {
+        lease_duration: Duration::from_secs(45),
+        session_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let coordinator = Arc::new(Coordinator::new(db.pool.clone(), config));
+
+    let topic_id = TopicId(db.create_topic("watermark-churn").await as u32);
+
+    // Two readers join
+    coordinator
+        .join_group("wm-churn-group", topic_id, "reader-A")
+        .await
+        .expect("join should succeed");
+
+    coordinator
+        .join_group("wm-churn-group", topic_id, "reader-B")
+        .await
+        .expect("join should succeed");
+
+    // Simulate inflight ranges by inserting directly into reader_inflight
+    let lease_expires = chrono::Utc::now() + chrono::Duration::seconds(45);
+
+    sqlx::query(
+        "INSERT INTO reader_inflight (group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("wm-churn-group")
+    .bind(topic_id.0 as i32)
+    .bind(0i64)
+    .bind(10i64)
+    .bind("reader-A")
+    .bind(lease_expires)
+    .execute(&db.pool)
+    .await
+    .expect("insert inflight");
+
+    sqlx::query(
+        "INSERT INTO reader_inflight (group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("wm-churn-group")
+    .bind(topic_id.0 as i32)
+    .bind(10i64)
+    .bind(20i64)
+    .bind("reader-B")
+    .bind(lease_expires)
+    .execute(&db.pool)
+    .await
+    .expect("insert inflight");
+
+    // Update dispatch_cursor to reflect dispatched ranges
+    sqlx::query(
+        "UPDATE reader_group_state SET dispatch_cursor = 20 \
+         WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("wm-churn-group")
+    .bind(topic_id.0 as i32)
+    .execute(&db.pool)
+    .await
+    .expect("update dispatch cursor");
+
+    // Reader-A commits range [0, 10)
+    let status = coordinator
+        .commit_range(
+            "wm-churn-group",
+            topic_id,
+            "reader-A",
+            Offset(0),
+            Offset(10),
+        )
+        .await
+        .expect("commit should succeed");
+
+    assert_eq!(
+        status,
+        flourine_broker::CommitStatus::Ok,
+        "Commit should succeed"
+    );
+
+    // Check watermark after first commit
+    let watermark_after_first: i64 = sqlx::query_scalar(
+        "SELECT committed_watermark FROM reader_group_state \
+         WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("wm-churn-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query watermark");
+
+    // Reader-A leaves (churn)
+    coordinator
+        .leave_group("wm-churn-group", topic_id, "reader-A")
+        .await
+        .expect("leave should succeed");
+
+    // New reader joins
+    coordinator
+        .join_group("wm-churn-group", topic_id, "reader-C")
+        .await
+        .expect("join should succeed");
+
+    // Watermark should not have regressed after churn
+    let watermark_after_churn: i64 = sqlx::query_scalar(
+        "SELECT committed_watermark FROM reader_group_state \
+         WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("wm-churn-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query watermark after churn");
+
+    assert!(
+        watermark_after_churn >= watermark_after_first,
+        "Committed watermark should not regress after churn: {} -> {}",
+        watermark_after_first,
+        watermark_after_churn
+    );
+
+    // Group state should still exist
+    let state_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM reader_group_state \
+         WHERE group_id = $1 AND topic_id = $2)",
+    )
+    .bind("wm-churn-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query group state");
+
+    assert!(
+        state_exists,
+        "Group state should survive reader churn"
+    );
 }

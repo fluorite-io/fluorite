@@ -17,25 +17,19 @@ public interface BatchAckOrBuilder extends
   int getTopicId();
 
   /**
-   * <code>uint32 partition_id = 2;</code>
-   * @return The partitionId.
-   */
-  int getPartitionId();
-
-  /**
-   * <code>uint32 schema_id = 3;</code>
+   * <code>uint32 schema_id = 2;</code>
    * @return The schemaId.
    */
   int getSchemaId();
 
   /**
-   * <code>uint64 start_offset = 4;</code>
+   * <code>uint64 start_offset = 3;</code>
    * @return The startOffset.
    */
   long getStartOffset();
 
   /**
-   * <code>uint64 end_offset = 5;</code>
+   * <code>uint64 end_offset = 4;</code>
    * @return The endOffset.
    */
   long getEndOffset();

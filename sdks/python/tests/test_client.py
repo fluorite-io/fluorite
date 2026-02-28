@@ -1,6 +1,5 @@
 """Tests for FlourineClient with mocked admin and writer."""
 
-import hashlib
 from dataclasses import dataclass
 from typing import Annotated
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,8 +28,8 @@ class NoTopicEvent:
 
 
 MOCK_TOPICS = [
-    {"topic_id": 1, "name": "orders", "partition_count": 4},
-    {"topic_id": 2, "name": "events", "partition_count": 8},
+    {"topic_id": 1, "name": "orders"},
+    {"topic_id": 2, "name": "events"},
 ]
 
 
@@ -112,71 +111,6 @@ async def test_schema_cached_after_first_send():
     assert admin.register_schema.call_count == 1
 
 
-# ---- partitioning ----
-
-@pytest.mark.asyncio
-async def test_explicit_partition():
-    admin = AsyncMock()
-    admin.list_topics = AsyncMock(return_value=MOCK_TOPICS)
-    admin.register_schema = AsyncMock(return_value=42)
-    writer = AsyncMock()
-    writer.send = AsyncMock(return_value=pb.BatchAck())
-
-    client = make_client(writer=writer, admin=admin)
-    await client.send(OrderEvent(order_id="a", amount=1), partition=2)
-
-    call_args = writer.send.call_args
-    assert call_args[0][1] == 2  # partition_id
-
-
-@pytest.mark.asyncio
-async def test_explicit_partition_out_of_range():
-    admin = AsyncMock()
-    admin.list_topics = AsyncMock(return_value=MOCK_TOPICS)
-    admin.register_schema = AsyncMock(return_value=42)
-    writer = AsyncMock()
-
-    client = make_client(writer=writer, admin=admin)
-    with pytest.raises(FlourineException, match="out of range"):
-        await client.send(OrderEvent(order_id="a", amount=1), partition=10)
-
-
-@pytest.mark.asyncio
-async def test_key_based_partition():
-    admin = AsyncMock()
-    admin.list_topics = AsyncMock(return_value=MOCK_TOPICS)
-    admin.register_schema = AsyncMock(return_value=42)
-    writer = AsyncMock()
-    writer.send = AsyncMock(return_value=pb.BatchAck())
-
-    client = make_client(writer=writer, admin=admin)
-    key = b"abc"
-    await client.send(OrderEvent(order_id="a", amount=1), key=key)
-
-    expected = int.from_bytes(hashlib.md5(key).digest()[:4], "big") % 4
-    call_args = writer.send.call_args
-    assert call_args[0][1] == expected
-
-
-@pytest.mark.asyncio
-async def test_round_robin_partition():
-    admin = AsyncMock()
-    admin.list_topics = AsyncMock(return_value=MOCK_TOPICS)
-    admin.register_schema = AsyncMock(return_value=42)
-    writer = AsyncMock()
-    writer.send = AsyncMock(return_value=pb.BatchAck())
-
-    client = make_client(writer=writer, admin=admin)
-    partitions = []
-    for i in range(8):
-        await client.send(OrderEvent(order_id=str(i), amount=i))
-        call_args = writer.send.call_args
-        partitions.append(call_args[0][1])
-
-    # 4 partitions, round-robin => 0,1,2,3,0,1,2,3
-    assert partitions == [0, 1, 2, 3, 0, 1, 2, 3]
-
-
 # ---- serialization ----
 
 @pytest.mark.asyncio
@@ -192,7 +126,7 @@ async def test_send_serializes_with_to_bytes():
     await client.send(event)
 
     call_args = writer.send.call_args
-    records = call_args[0][3]
+    records = call_args[0][2]
     assert len(records) == 1
     # Verify the value is the serialized event
     assert records[0].value == event.to_bytes()
@@ -210,7 +144,7 @@ async def test_send_with_key_sets_record_key():
     await client.send(OrderEvent(order_id="abc", amount=100), key=b"mykey")
 
     call_args = writer.send.call_args
-    records = call_args[0][3]
+    records = call_args[0][2]
     assert records[0].key == b"mykey"
 
 

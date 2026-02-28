@@ -1,6 +1,5 @@
 """High-level typed client for Flourine."""
 
-import hashlib
 import logging
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
@@ -27,7 +26,7 @@ class ClientConfig:
 
 class FlourineClient:
     """High-level typed client. Handles schema registration, serialization,
-    topic resolution, and partitioning automatically.
+    and topic resolution automatically.
 
     Usage:
         async with FlourineClient.connect(ClientConfig(api_key="tb_...")) as client:
@@ -46,9 +45,8 @@ class FlourineClient:
         self._writer = writer
         self._admin = admin
         self._config = config
-        self._topic_cache: dict[str, tuple[int, int]] = {}  # name -> (topic_id, partition_count)
+        self._topic_cache: dict[str, int] = {}  # name -> topic_id
         self._schema_cache: dict[type, int] = {}  # cls -> schema_id
-        self._rr_counters: dict[str, int] = {}  # topic_name -> round-robin counter
 
     @classmethod
     async def connect(cls, config: ClientConfig) -> "FlourineClient":
@@ -67,13 +65,11 @@ class FlourineClient:
         obj,
         *,
         key: bytes | None = None,
-        partition: int | None = None,
         topic: str | None = None,
     ) -> pb.BatchAck:
         """Send a single typed object.
 
         Topic is resolved from the class's @schema(topic=...) unless overridden.
-        Partition is chosen by: explicit > key-hash > round-robin.
         """
         cls = type(obj)
         topic_name = topic or getattr(cls, "__flourine_topic__", None)
@@ -82,23 +78,21 @@ class FlourineClient:
                 f"{cls.__name__} has no topic. Use @schema(topic=...) or pass topic="
             )
 
-        topic_id, partition_count = await self._resolve_topic(topic_name)
+        topic_id = await self._resolve_topic(topic_name)
         schema_id = await self._resolve_schema(cls, topic_id)
-        partition_id = self._pick_partition(topic_name, partition_count, key, partition)
         value = obj.to_bytes()
 
         record = pb.Record(value=value)
         if key is not None:
             record.key = key
 
-        return await self._writer.send(topic_id, partition_id, schema_id, [record])
+        return await self._writer.send(topic_id, schema_id, [record])
 
     async def send_batch(
         self,
         objects: list,
         *,
         key: bytes | None = None,
-        partition: int | None = None,
         topic: str | None = None,
     ) -> list[pb.BatchAck]:
         """Send a batch of typed objects (all same type)."""
@@ -112,9 +106,8 @@ class FlourineClient:
                 f"{cls.__name__} has no topic. Use @schema(topic=...) or pass topic="
             )
 
-        topic_id, partition_count = await self._resolve_topic(topic_name)
+        topic_id = await self._resolve_topic(topic_name)
         schema_id = await self._resolve_schema(cls, topic_id)
-        partition_id = self._pick_partition(topic_name, partition_count, key, partition)
 
         records = []
         for obj in objects:
@@ -125,7 +118,6 @@ class FlourineClient:
 
         batch = pb.RecordBatch(
             topic_id=topic_id,
-            partition_id=partition_id,
             schema_id=schema_id,
             records=records,
         )
@@ -149,7 +141,7 @@ class FlourineClient:
                 f"{cls.__name__} has no topic. Use @schema(topic=...) or pass topic="
             )
 
-        topic_id, _ = await self._resolve_topic(topic_name)
+        topic_id = await self._resolve_topic(topic_name)
         reader_config = ReaderConfig(
             url=self._config.ws_url,
             api_key=self._config.api_key,
@@ -160,19 +152,20 @@ class FlourineClient:
 
         async with GroupReader.join(reader_config) as reader:
             reader.start_heartbeat()
-            async for results in reader.poll_loop(interval=poll_interval):
-                for partition_result in results:
-                    for record in partition_result.records:
+            async for batch in reader.poll_loop(interval=poll_interval):
+                for topic_result in batch.results:
+                    for record in topic_result.records:
                         yield cls.from_bytes(record.value)
+                await reader.commit(batch)
 
-    async def _resolve_topic(self, name: str) -> tuple[int, int]:
-        """Resolve topic name -> (topic_id, partition_count). Cached after first call."""
+    async def _resolve_topic(self, name: str) -> int:
+        """Resolve topic name -> topic_id. Cached after first call."""
         if name in self._topic_cache:
             return self._topic_cache[name]
 
         topics = await self._admin.list_topics()
         for t in topics:
-            self._topic_cache[t["name"]] = (t["topic_id"], t["partition_count"])
+            self._topic_cache[t["name"]] = t["topic_id"]
 
         if name not in self._topic_cache:
             raise FlourineException(f"Topic not found: {name}")
@@ -187,28 +180,6 @@ class FlourineClient:
         schema_id = await self._admin.register_schema(topic_id, cls.schema())
         self._schema_cache[cls] = schema_id
         return schema_id
-
-    def _pick_partition(
-        self,
-        topic_name: str,
-        partition_count: int,
-        key: bytes | None,
-        explicit: int | None,
-    ) -> int:
-        if explicit is not None:
-            if explicit < 0 or explicit >= partition_count:
-                raise FlourineException(
-                    f"Partition {explicit} out of range [0, {partition_count})"
-                )
-            return explicit
-
-        if key is not None:
-            h = int.from_bytes(hashlib.md5(key).digest()[:4], "big")
-            return h % partition_count
-
-        counter = self._rr_counters.get(topic_name, 0)
-        self._rr_counters[topic_name] = counter + 1
-        return counter % partition_count
 
     async def close(self) -> None:
         await self._writer.close()

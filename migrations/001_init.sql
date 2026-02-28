@@ -5,7 +5,6 @@
 CREATE TABLE topics (
     topic_id SERIAL PRIMARY KEY,
     name VARCHAR(255) UNIQUE NOT NULL,
-    partition_count INT NOT NULL DEFAULT 1,
     retention_hours INT NOT NULL DEFAULT 168,  -- 7 days default
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -14,36 +13,31 @@ CREATE TABLE topics (
 -- Index for name lookups
 CREATE INDEX idx_topics_name ON topics (name);
 
--- Partition offsets: tracks the next offset for each partition
-CREATE TABLE partition_offsets (
-    topic_id INT NOT NULL REFERENCES topics(topic_id) ON DELETE CASCADE,
-    partition_id INT NOT NULL,
-    next_offset BIGINT NOT NULL DEFAULT 0,
-    PRIMARY KEY (topic_id, partition_id)
+-- Topic offsets: tracks the next offset for each topic
+CREATE TABLE topic_offsets (
+    topic_id INT PRIMARY KEY REFERENCES topics(topic_id) ON DELETE CASCADE,
+    next_offset BIGINT NOT NULL DEFAULT 0
 );
 
--- Function to auto-create partitions when a topic is created
-CREATE OR REPLACE FUNCTION create_topic_partitions()
+-- Function to auto-create topic offset row when a topic is created
+CREATE OR REPLACE FUNCTION create_topic_offset()
 RETURNS TRIGGER AS $$
 BEGIN
-    FOR i IN 0..(NEW.partition_count - 1) LOOP
-        INSERT INTO partition_offsets (topic_id, partition_id, next_offset)
-        VALUES (NEW.topic_id, i, 0);
-    END LOOP;
+    INSERT INTO topic_offsets (topic_id, next_offset)
+    VALUES (NEW.topic_id, 0);
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_create_topic_partitions
+CREATE TRIGGER trigger_create_topic_offset
 AFTER INSERT ON topics
 FOR EACH ROW
-EXECUTE FUNCTION create_topic_partitions();
+EXECUTE FUNCTION create_topic_offset();
 
 -- Topic batches: segment index (partitioned by ingest_time for efficient retention)
 CREATE TABLE topic_batches (
     batch_id BIGSERIAL,
     topic_id INT NOT NULL,
-    partition_id INT NOT NULL,
     schema_id INT NOT NULL,
     start_offset BIGINT NOT NULL,
     end_offset BIGINT NOT NULL,
@@ -79,9 +73,9 @@ BEGIN
     END LOOP;
 END $$;
 
--- Index for read queries: find batches by topic/partition/offset
+-- Index for read queries: find batches by topic/offset
 CREATE INDEX idx_topic_batches_fetch
-ON topic_batches (topic_id, partition_id, end_offset, ingest_time);
+ON topic_batches (topic_id, end_offset, ingest_time);
 
 -- Index for S3 key lookups (used by GC)
 CREATE INDEX idx_topic_batches_s3_key
@@ -188,7 +182,6 @@ SELECT setval('schemas_schema_id_seq', 100, false);
 CREATE TABLE reader_groups (
     group_id VARCHAR(255) NOT NULL,
     topic_id INT NOT NULL REFERENCES topics(topic_id) ON DELETE CASCADE,
-    generation BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (group_id, topic_id)
 );
@@ -208,58 +201,37 @@ CREATE TABLE reader_members (
 CREATE INDEX idx_reader_members_heartbeat
 ON reader_members (last_heartbeat);
 
--- Reader assignments: which partitions are assigned to which readers
-CREATE TABLE reader_assignments (
+-- Reader group state: dispatch cursor and committed watermark per (group, topic)
+CREATE TABLE reader_group_state (
     group_id VARCHAR(255) NOT NULL,
     topic_id INT NOT NULL,
-    partition_id INT NOT NULL,
-    reader_id VARCHAR(255),  -- NULL if unassigned
-    generation BIGINT NOT NULL,
-    committed_offset BIGINT NOT NULL DEFAULT 0,
-    lease_expires_at TIMESTAMPTZ,
-    PRIMARY KEY (group_id, topic_id, partition_id),
+    dispatch_cursor BIGINT NOT NULL DEFAULT 0,
+    committed_watermark BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, topic_id),
     FOREIGN KEY (group_id, topic_id) REFERENCES reader_groups(group_id, topic_id) ON DELETE CASCADE
 );
 
--- Index for finding assignments by reader
-CREATE INDEX idx_reader_assignments_reader
-ON reader_assignments (group_id, topic_id, reader_id);
+-- Reader inflight: offset ranges currently being processed by readers
+CREATE TABLE reader_inflight (
+    group_id VARCHAR(255) NOT NULL,
+    topic_id INT NOT NULL,
+    start_offset BIGINT NOT NULL,
+    end_offset BIGINT NOT NULL,
+    reader_id VARCHAR(255) NOT NULL,
+    lease_expires_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (group_id, topic_id, start_offset),
+    FOREIGN KEY (group_id, topic_id) REFERENCES reader_groups(group_id, topic_id) ON DELETE CASCADE,
+    CHECK (end_offset > start_offset)
+);
 
 -- Index for finding expired leases
-CREATE INDEX idx_reader_assignments_lease
-ON reader_assignments (lease_expires_at)
+CREATE INDEX idx_reader_inflight_lease
+ON reader_inflight (lease_expires_at)
 WHERE lease_expires_at IS NOT NULL;
 
--- Function to initialize reader group for a topic
-CREATE OR REPLACE FUNCTION initialize_reader_group(
-    p_group_id VARCHAR(255),
-    p_topic_id INT
-) RETURNS VOID AS $$
-DECLARE
-    partition_count INT;
-BEGIN
-    -- Get partition count for the topic
-    SELECT t.partition_count INTO partition_count
-    FROM topics t
-    WHERE t.topic_id = p_topic_id;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Topic % not found', p_topic_id;
-    END IF;
-
-    -- Create group row if not exists
-    INSERT INTO reader_groups (group_id, topic_id, generation)
-    VALUES (p_group_id, p_topic_id, 1)
-    ON CONFLICT (group_id, topic_id) DO NOTHING;
-
-    -- Create assignment rows for each partition
-    FOR i IN 0..(partition_count - 1) LOOP
-        INSERT INTO reader_assignments (group_id, topic_id, partition_id, reader_id, generation, committed_offset)
-        VALUES (p_group_id, p_topic_id, i, NULL, 1, 0)
-        ON CONFLICT (group_id, topic_id, partition_id) DO NOTHING;
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
+-- Index for finding inflight by reader
+CREATE INDEX idx_reader_inflight_reader
+ON reader_inflight (group_id, topic_id, reader_id);
 
 -- Authentication and authorization tables
 

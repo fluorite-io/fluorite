@@ -134,17 +134,6 @@ private static final long serialVersionUID = 0L;
     }
   }
 
-  public static final int GENERATION_FIELD_NUMBER = 4;
-  private long generation_ = 0L;
-  /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
-   */
-  @java.lang.Override
-  public long getGeneration() {
-    return generation_;
-  }
-
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -168,9 +157,6 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(readerId_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 3, readerId_);
     }
-    if (generation_ != 0L) {
-      output.writeUInt64(4, generation_);
-    }
     getUnknownFields().writeTo(output);
   }
 
@@ -189,10 +175,6 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(readerId_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(3, readerId_);
-    }
-    if (generation_ != 0L) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(4, generation_);
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -215,8 +197,6 @@ private static final long serialVersionUID = 0L;
         != other.getTopicId()) return false;
     if (!getReaderId()
         .equals(other.getReaderId())) return false;
-    if (getGeneration()
-        != other.getGeneration()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -234,9 +214,6 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getTopicId();
     hash = (37 * hash) + READER_ID_FIELD_NUMBER;
     hash = (53 * hash) + getReaderId().hashCode();
-    hash = (37 * hash) + GENERATION_FIELD_NUMBER;
-    hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-        getGeneration());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -371,7 +348,6 @@ private static final long serialVersionUID = 0L;
       groupId_ = "";
       topicId_ = 0;
       readerId_ = "";
-      generation_ = 0L;
       return this;
     }
 
@@ -414,9 +390,6 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.readerId_ = readerId_;
       }
-      if (((from_bitField0_ & 0x00000008) != 0)) {
-        result.generation_ = generation_;
-      }
     }
 
     @java.lang.Override
@@ -443,9 +416,6 @@ private static final long serialVersionUID = 0L;
         readerId_ = other.readerId_;
         bitField0_ |= 0x00000004;
         onChanged();
-      }
-      if (other.getGeneration() != 0L) {
-        setGeneration(other.getGeneration());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -488,11 +458,6 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 26
-            case 32: {
-              generation_ = input.readUInt64();
-              bitField0_ |= 0x00000008;
-              break;
-            } // case 32
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -682,38 +647,6 @@ private static final long serialVersionUID = 0L;
       checkByteStringIsUtf8(value);
       readerId_ = value;
       bitField0_ |= 0x00000004;
-      onChanged();
-      return this;
-    }
-
-    private long generation_ ;
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @return The generation.
-     */
-    @java.lang.Override
-    public long getGeneration() {
-      return generation_;
-    }
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @param value The generation to set.
-     * @return This builder for chaining.
-     */
-    public Builder setGeneration(long value) {
-
-      generation_ = value;
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearGeneration() {
-      bitField0_ = (bitField0_ & ~0x00000008);
-      generation_ = 0L;
       onChanged();
       return this;
     }

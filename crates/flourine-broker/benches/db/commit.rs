@@ -97,8 +97,7 @@ async fn create_test_db() -> Option<BenchDb> {
         r#"
         CREATE TABLE topics (
             topic_id SERIAL PRIMARY KEY,
-            name VARCHAR(255) UNIQUE NOT NULL,
-            partition_count INT NOT NULL DEFAULT 1
+            name VARCHAR(255) UNIQUE NOT NULL
         )
         "#,
     )
@@ -108,11 +107,9 @@ async fn create_test_db() -> Option<BenchDb> {
 
     sqlx::query(
         r#"
-        CREATE TABLE partition_offsets (
-            topic_id INT NOT NULL,
-            partition_id INT NOT NULL,
-            next_offset BIGINT NOT NULL DEFAULT 0,
-            PRIMARY KEY (topic_id, partition_id)
+        CREATE TABLE topic_offsets (
+            topic_id INT NOT NULL PRIMARY KEY,
+            next_offset BIGINT NOT NULL DEFAULT 0
         )
         "#,
     )
@@ -125,7 +122,6 @@ async fn create_test_db() -> Option<BenchDb> {
         CREATE TABLE topic_batches (
             batch_id BIGSERIAL PRIMARY KEY,
             topic_id INT NOT NULL,
-            partition_id INT NOT NULL,
             schema_id INT NOT NULL,
             start_offset BIGINT NOT NULL,
             end_offset BIGINT NOT NULL,
@@ -139,23 +135,23 @@ async fn create_test_db() -> Option<BenchDb> {
     .await
     .ok()?;
 
-    sqlx::query("CREATE INDEX idx_batches ON topic_batches (topic_id, partition_id, end_offset)")
+    sqlx::query("CREATE INDEX idx_batches ON topic_batches (topic_id, end_offset)")
         .execute(&pool)
         .await
         .ok()?;
 
-    // Create test topic with partitions
-    let topic_id: i32 = sqlx::query_scalar(
-        "INSERT INTO topics (name, partition_count) VALUES ('bench', 32) RETURNING topic_id",
-    )
-    .fetch_one(&pool)
-    .await
-    .ok()?;
+    // Create test topics and their offsets
+    for t in 1..=32 {
+        let topic_id: i32 = sqlx::query_scalar(
+            "INSERT INTO topics (name) VALUES ($1) RETURNING topic_id",
+        )
+        .bind(format!("bench-{}", t))
+        .fetch_one(&pool)
+        .await
+        .ok()?;
 
-    for p in 0..32 {
-        sqlx::query("INSERT INTO partition_offsets (topic_id, partition_id, next_offset) VALUES ($1, $2, 0)")
+        sqlx::query("INSERT INTO topic_offsets (topic_id, next_offset) VALUES ($1, 0)")
             .bind(topic_id)
-            .bind(p)
             .execute(&pool)
             .await
             .ok()?;
@@ -188,7 +184,7 @@ pub fn bench_commit_batch(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("db_commit_batch");
 
-    // Single partition commit
+    // Single topic commit
     for record_count in &[10, 100, 1000] {
         group.bench_with_input(
             BenchmarkId::new("records", record_count),
@@ -201,7 +197,7 @@ pub fn bench_commit_batch(c: &mut Criterion) {
 
                         // Lock and update offset
                         let current: i64 = sqlx::query_scalar(
-                            "SELECT next_offset FROM partition_offsets WHERE topic_id = 1 AND partition_id = 0 FOR UPDATE",
+                            "SELECT next_offset FROM topic_offsets WHERE topic_id = 1 FOR UPDATE",
                         )
                         .fetch_one(&mut *tx)
                         .await
@@ -209,7 +205,7 @@ pub fn bench_commit_batch(c: &mut Criterion) {
 
                         let new_offset = current + count as i64;
 
-                        sqlx::query("UPDATE partition_offsets SET next_offset = $1 WHERE topic_id = 1 AND partition_id = 0")
+                        sqlx::query("UPDATE topic_offsets SET next_offset = $1 WHERE topic_id = 1")
                             .bind(new_offset)
                             .execute(&mut *tx)
                             .await
@@ -218,8 +214,8 @@ pub fn bench_commit_batch(c: &mut Criterion) {
                         // Insert batch record
                         sqlx::query(
                             r#"
-                            INSERT INTO topic_batches (topic_id, partition_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
-                            VALUES (1, 0, 100, $1, $2, $3, 'bench/test.fl', NOW())
+                            INSERT INTO topic_batches (topic_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
+                            VALUES (1, 100, $1, $2, $3, 'bench/test.fl', NOW())
                             "#,
                         )
                         .bind(current)
@@ -241,8 +237,8 @@ pub fn bench_commit_batch(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark multi-partition commit (multiple offsets in one transaction).
-pub fn bench_multi_partition_commit(c: &mut Criterion) {
+/// Benchmark multi-topic commit (multiple offsets in one transaction).
+pub fn bench_multi_topic_commit(c: &mut Criterion) {
     if !db_available() {
         return;
     }
@@ -255,43 +251,43 @@ pub fn bench_multi_partition_commit(c: &mut Criterion) {
     };
     let pool = bench_db.pool.clone();
 
-    let mut group = c.benchmark_group("db_multi_partition_commit");
+    let mut group = c.benchmark_group("db_multi_topic_commit");
 
-    for partition_count in &[1, 4, 8, 16] {
+    for topic_count in &[1, 4, 8, 16] {
         group.bench_with_input(
-            BenchmarkId::new("partitions", partition_count),
-            partition_count,
+            BenchmarkId::new("topics", topic_count),
+            topic_count,
             |b, &count| {
                 b.to_async(&rt).iter_batched(
                     || pool.clone(),
                     |pool| async move {
                         let mut tx = pool.begin().await.unwrap();
 
-                        for p in 0..count {
+                        for t in 1..=count {
                             let current: i64 = sqlx::query_scalar(
-                                "SELECT next_offset FROM partition_offsets WHERE topic_id = 1 AND partition_id = $1 FOR UPDATE",
+                                "SELECT next_offset FROM topic_offsets WHERE topic_id = $1 FOR UPDATE",
                             )
-                            .bind(p)
+                            .bind(t)
                             .fetch_one(&mut *tx)
                             .await
                             .unwrap();
 
                             let new_offset = current + 100;
 
-                            sqlx::query("UPDATE partition_offsets SET next_offset = $1 WHERE topic_id = 1 AND partition_id = $2")
+                            sqlx::query("UPDATE topic_offsets SET next_offset = $1 WHERE topic_id = $2")
                                 .bind(new_offset)
-                                .bind(p)
+                                .bind(t)
                                 .execute(&mut *tx)
                                 .await
                                 .unwrap();
 
                             sqlx::query(
                                 r#"
-                                INSERT INTO topic_batches (topic_id, partition_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
-                                VALUES (1, $1, 100, $2, $3, 100, 'bench/test.fl', NOW())
+                                INSERT INTO topic_batches (topic_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
+                                VALUES ($1, 100, $2, $3, 100, 'bench/test.fl', NOW())
                                 "#,
                             )
-                            .bind(p)
+                            .bind(t)
                             .bind(current)
                             .bind(new_offset)
                             .execute(&mut *tx)
@@ -332,8 +328,8 @@ pub fn bench_batch_lookup(c: &mut Criterion) {
             let end = start + 100;
             sqlx::query(
                 r#"
-                INSERT INTO topic_batches (topic_id, partition_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
-                VALUES (1, 0, 100, $1, $2, 100, 'bench/test.fl', NOW())
+                INSERT INTO topic_batches (topic_id, schema_id, start_offset, end_offset, record_count, s3_key, ingest_time)
+                VALUES (1, 100, $1, $2, 100, 'bench/test.fl', NOW())
                 "#,
             )
             .bind(start as i64)
@@ -353,7 +349,7 @@ pub fn bench_batch_lookup(c: &mut Criterion) {
                 r#"
                 SELECT start_offset, end_offset, s3_key
                 FROM topic_batches
-                WHERE topic_id = 1 AND partition_id = 0 AND end_offset > $1
+                WHERE topic_id = 1 AND end_offset > $1
                 ORDER BY start_offset
                 LIMIT 10
                 "#,
@@ -374,7 +370,7 @@ pub fn bench_batch_lookup(c: &mut Criterion) {
                 r#"
                 SELECT start_offset, end_offset, s3_key
                 FROM topic_batches
-                WHERE topic_id = 1 AND partition_id = 0 AND end_offset > $1 AND start_offset < $2
+                WHERE topic_id = 1 AND end_offset > $1 AND start_offset < $2
                 ORDER BY start_offset
                 "#,
             )

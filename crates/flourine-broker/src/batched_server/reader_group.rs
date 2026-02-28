@@ -1,15 +1,17 @@
-//! Reader group protocol handlers: join, heartbeat, rejoin, leave, commit.
+//! Reader group protocol handlers: join, heartbeat, poll, leave, commit.
 
 use tracing::{error, warn};
 
-use flourine_common::ids::{Generation, TopicId};
-use flourine_wire::{ERR_INTERNAL_ERROR, ERR_NOT_OWNER, STATUS_OK, ServerMessage, reader};
+use flourine_common::ids::{Offset, TopicId};
+use flourine_wire::{
+    ERR_INTERNAL_ERROR, ERR_MAX_INFLIGHT, ERR_NOT_OWNER, STATUS_OK, ServerMessage, reader,
+};
 
+use crate::BrokerError;
 use crate::object_store::ObjectStore;
 
-use super::encoding::{
-    encode_server_message_vec, RESPONSE_CAPACITY_LARGE, RESPONSE_CAPACITY_SMALL,
-};
+use super::encoding::{encode_server_message_vec, RESPONSE_CAPACITY_SMALL};
+use super::fetch::fetch_records;
 use super::BrokerState;
 
 /// Handle a JoinGroupRequest.
@@ -22,7 +24,6 @@ pub(crate) async fn handle_join_group<S: ObjectStore + Send + Sync>(
     req: reader::JoinGroupRequest,
     state: &BrokerState<S>,
 ) -> Vec<u8> {
-    // For now, we only support single topic joins
     let topic_id = req.topic_ids.first().copied().unwrap_or(TopicId(0));
 
     let result = state
@@ -31,20 +32,10 @@ pub(crate) async fn handle_join_group<S: ObjectStore + Send + Sync>(
         .await;
 
     let response = match result {
-        Ok(join_result) => reader::JoinGroupResponse {
+        Ok(()) => reader::JoinGroupResponse {
             success: true,
             error_code: STATUS_OK,
             error_message: String::new(),
-            generation: join_result.generation,
-            assignments: join_result
-                .assignments
-                .into_iter()
-                .map(|a| reader::PartitionAssignment {
-                    topic_id,
-                    partition_id: a.partition_id,
-                    committed_offset: a.committed_offset,
-                })
-                .collect(),
         },
         Err(e) => {
             error!("JoinGroup error: {}", e);
@@ -52,20 +43,18 @@ pub(crate) async fn handle_join_group<S: ObjectStore + Send + Sync>(
                 success: false,
                 error_code: ERR_INTERNAL_ERROR,
                 error_message: "join group failed".to_string(),
-                generation: Generation(0),
-                assignments: vec![],
             }
         }
     };
 
-    encode_server_message_vec(ServerMessage::JoinGroup(response), RESPONSE_CAPACITY_LARGE)
+    encode_server_message_vec(ServerMessage::JoinGroup(response), RESPONSE_CAPACITY_SMALL)
 }
 
 /// Handle a HeartbeatRequest.
 #[tracing::instrument(
     level = "debug",
     skip(state),
-    fields(group_id = %req.group_id, reader_id = %req.reader_id, topic_id = req.topic_id.0, generation = req.generation.0)
+    fields(group_id = %req.group_id, reader_id = %req.reader_id, topic_id = req.topic_id.0)
 )]
 pub(crate) async fn handle_heartbeat<S: ObjectStore + Send + Sync>(
     req: reader::HeartbeatRequest,
@@ -77,21 +66,16 @@ pub(crate) async fn handle_heartbeat<S: ObjectStore + Send + Sync>(
             &req.group_id,
             req.topic_id,
             &req.reader_id,
-            req.generation,
         )
         .await;
 
     let response = match result {
-        Ok(hb_result) => reader::HeartbeatResponseExt {
+        Ok(status) => reader::HeartbeatResponseExt {
             success: true,
             error_code: STATUS_OK,
             error_message: String::new(),
-            generation: hb_result.generation,
-            status: match hb_result.status {
+            status: match status {
                 crate::coordinator::HeartbeatStatus::Ok => reader::HeartbeatStatus::Ok,
-                crate::coordinator::HeartbeatStatus::RebalanceNeeded => {
-                    reader::HeartbeatStatus::RebalanceNeeded
-                }
                 crate::coordinator::HeartbeatStatus::UnknownMember => {
                     reader::HeartbeatStatus::UnknownMember
                 }
@@ -103,7 +87,6 @@ pub(crate) async fn handle_heartbeat<S: ObjectStore + Send + Sync>(
                 success: false,
                 error_code: ERR_INTERNAL_ERROR,
                 error_message: "heartbeat failed".to_string(),
-                generation: Generation(0),
                 status: reader::HeartbeatStatus::UnknownMember,
             }
         }
@@ -112,62 +95,102 @@ pub(crate) async fn handle_heartbeat<S: ObjectStore + Send + Sync>(
     encode_server_message_vec(ServerMessage::Heartbeat(response), RESPONSE_CAPACITY_SMALL)
 }
 
-/// Handle a RejoinRequest.
+/// Handle a PollRequest: dispatch offset range and fetch records.
 #[tracing::instrument(
     level = "debug",
     skip(state),
-    fields(group_id = %req.group_id, reader_id = %req.reader_id, topic_id = req.topic_id.0, generation = req.generation.0)
+    fields(group_id = %req.group_id, reader_id = %req.reader_id, topic_id = req.topic_id.0)
 )]
-pub(crate) async fn handle_rejoin<S: ObjectStore + Send + Sync>(
-    req: reader::RejoinRequest,
+pub(crate) async fn handle_poll<S: ObjectStore + Send + Sync>(
+    req: reader::PollRequest,
     state: &BrokerState<S>,
 ) -> Vec<u8> {
-    let result = state
-        .coordinator
-        .rejoin(
-            &req.group_id,
-            req.topic_id,
-            &req.reader_id,
-            req.generation,
-        )
-        .await;
+    let result = process_poll(&req, state).await;
 
     let response = match result {
-        Ok(rejoin_result) => reader::RejoinResponse {
+        Ok((results, start_offset, end_offset, lease_deadline_ms)) => reader::PollResponse {
             success: true,
             error_code: STATUS_OK,
             error_message: String::new(),
-            generation: rejoin_result.generation,
-            status: match rejoin_result.status {
-                crate::coordinator::RejoinStatus::Ok => reader::RejoinStatus::Ok,
-                crate::coordinator::RejoinStatus::RebalanceNeeded => {
-                    reader::RejoinStatus::RebalanceNeeded
-                }
-            },
-            assignments: rejoin_result
-                .assignments
-                .into_iter()
-                .map(|a| reader::PartitionAssignment {
-                    topic_id: req.topic_id,
-                    partition_id: a.partition_id,
-                    committed_offset: a.committed_offset,
-                })
-                .collect(),
+            results,
+            start_offset,
+            end_offset,
+            lease_deadline_ms,
         },
+        Err(BrokerError::MaxInflight) => {
+            warn!("Poll rejected: max inflight for reader {}", req.reader_id);
+            reader::PollResponse {
+                success: false,
+                error_code: ERR_MAX_INFLIGHT,
+                error_message: "max inflight ranges exceeded".to_string(),
+                results: vec![],
+                start_offset: Offset(0),
+                end_offset: Offset(0),
+                lease_deadline_ms: 0,
+            }
+        }
         Err(e) => {
-            error!("Rejoin error: {}", e);
-            reader::RejoinResponse {
+            error!("Poll error: {}", e);
+            reader::PollResponse {
                 success: false,
                 error_code: ERR_INTERNAL_ERROR,
-                error_message: "rejoin failed".to_string(),
-                generation: Generation(0),
-                status: reader::RejoinStatus::RebalanceNeeded,
-                assignments: vec![],
+                error_message: "poll failed".to_string(),
+                results: vec![],
+                start_offset: Offset(0),
+                end_offset: Offset(0),
+                lease_deadline_ms: 0,
             }
         }
     };
 
-    encode_server_message_vec(ServerMessage::Rejoin(response), RESPONSE_CAPACITY_LARGE)
+    let total_record_bytes: usize = response
+        .results
+        .iter()
+        .flat_map(|r| &r.records)
+        .map(|rec| rec.value.len() + rec.key.as_ref().map(|k| k.len()).unwrap_or(0) + 32)
+        .sum();
+    let buf_size = (total_record_bytes + 1024).max(64 * 1024);
+
+    encode_server_message_vec(ServerMessage::Poll(response), buf_size + 16)
+}
+
+/// Dispatch an offset range via the coordinator and fetch the records.
+async fn process_poll<S: ObjectStore + Send + Sync>(
+    req: &reader::PollRequest,
+    state: &BrokerState<S>,
+) -> Result<(Vec<reader::TopicResult>, Offset, Offset, u64), BrokerError> {
+    let poll_result = state
+        .coordinator
+        .poll(
+            &req.group_id,
+            req.topic_id,
+            &req.reader_id,
+            req.max_bytes,
+        )
+        .await?;
+
+    if poll_result.status == crate::coordinator::PollStatus::MaxInflight {
+        return Err(BrokerError::MaxInflight);
+    }
+
+    let start_offset = poll_result.start_offset;
+    let end_offset = poll_result.end_offset;
+    let lease_deadline_ms = poll_result.lease_deadline_ms;
+
+    if start_offset == end_offset {
+        return Ok((vec![], start_offset, end_offset, lease_deadline_ms));
+    }
+
+    let (results, _high_watermark) = fetch_records(
+        req.topic_id,
+        start_offset,
+        Some(end_offset),
+        req.max_bytes as usize,
+        state,
+    )
+    .await?;
+
+    Ok((results, start_offset, end_offset, lease_deadline_ms))
 }
 
 /// Handle a LeaveGroupRequest.
@@ -206,66 +229,58 @@ pub(crate) async fn handle_leave_group<S: ObjectStore + Send + Sync>(
     encode_server_message_vec(ServerMessage::LeaveGroup(response), RESPONSE_CAPACITY_SMALL)
 }
 
-/// Handle a CommitRequest.
+/// Handle a CommitRequest (single range commit).
 #[tracing::instrument(
     level = "debug",
     skip(state),
-    fields(group_id = %req.group_id, reader_id = %req.reader_id, generation = req.generation.0, commit_count = req.commits.len())
+    fields(
+        group_id = %req.group_id,
+        reader_id = %req.reader_id,
+        topic_id = req.topic_id.0,
+        start_offset = req.start_offset.0,
+        end_offset = req.end_offset.0,
+    )
 )]
 pub(crate) async fn handle_commit<S: ObjectStore + Send + Sync>(
     req: reader::CommitRequest,
     state: &BrokerState<S>,
 ) -> Vec<u8> {
-    let mut all_ok = true;
-    let mut error_code = STATUS_OK;
-    let mut error_message = String::new();
+    let result = state
+        .coordinator
+        .commit_range(
+            &req.group_id,
+            req.topic_id,
+            &req.reader_id,
+            req.start_offset,
+            req.end_offset,
+        )
+        .await;
 
-    for commit in &req.commits {
-        let result = state
-            .coordinator
-            .commit_offset(
-                &req.group_id,
-                commit.topic_id,
-                &req.reader_id,
-                req.generation,
-                commit.partition_id,
-                commit.offset,
-            )
-            .await;
-
-        match result {
-            Ok(crate::coordinator::CommitStatus::Ok) => {}
-            Ok(crate::coordinator::CommitStatus::StaleGeneration) => {
-                warn!(
-                    "Commit rejected: stale generation for reader {} on partition {}",
-                    req.reader_id, commit.partition_id.0
-                );
-                all_ok = false;
-                error_code = ERR_NOT_OWNER;
-                error_message = "commit rejected: stale generation".to_string();
-            }
-            Ok(crate::coordinator::CommitStatus::NotOwner) => {
-                warn!(
-                    "Commit rejected: reader {} doesn't own partition {}",
-                    req.reader_id, commit.partition_id.0
-                );
-                all_ok = false;
-                error_code = ERR_NOT_OWNER;
-                error_message = "commit rejected: not owner".to_string();
-            }
-            Err(e) => {
-                error!("Commit error: {}", e);
-                all_ok = false;
-                error_code = ERR_INTERNAL_ERROR;
-                error_message = "commit failed".to_string();
+    let response = match result {
+        Ok(crate::coordinator::CommitStatus::Ok) => reader::CommitResponse {
+            success: true,
+            error_code: STATUS_OK,
+            error_message: String::new(),
+        },
+        Ok(crate::coordinator::CommitStatus::NotOwner) => {
+            warn!(
+                "Commit rejected: reader {} doesn't own range [{}, {})",
+                req.reader_id, req.start_offset.0, req.end_offset.0
+            );
+            reader::CommitResponse {
+                success: false,
+                error_code: ERR_NOT_OWNER,
+                error_message: "commit rejected: not owner".to_string(),
             }
         }
-    }
-
-    let response = reader::CommitResponse {
-        success: all_ok,
-        error_code,
-        error_message,
+        Err(e) => {
+            error!("Commit error: {}", e);
+            reader::CommitResponse {
+                success: false,
+                error_code: ERR_INTERNAL_ERROR,
+                error_message: "commit failed".to_string(),
+            }
+        }
     };
 
     encode_server_message_vec(ServerMessage::Commit(response), RESPONSE_CAPACITY_SMALL)

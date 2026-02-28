@@ -3,7 +3,7 @@
 Cross-language schema E2E test: Python writer with Avro-encoded values.
 
 Usage:
-    python python_schema_writer.py <url> <topic_id> <partition_id>
+    python python_schema_writer.py <url> <topic_id>
 
 Serializes a TestOrder with to_bytes(), sends as record value, prints JSON result.
 """
@@ -30,13 +30,12 @@ class TestOrder:
 
 
 async def main():
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <url> <topic_id> <partition_id>", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <url> <topic_id>", file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
     topic_id = int(sys.argv[2])
-    partition_id = int(sys.argv[3])
 
     order = TestOrder(name="widget", amount=42, active=True, tags=["rush", "fragile"])
     value_bytes = order.to_bytes()
@@ -45,12 +44,11 @@ async def main():
     writer = await Writer.connect_with_config(config)
     async with writer:
         record = pb.Record(key=b"order-1", value=value_bytes)
-        ack = await writer.send(topic_id, partition_id, 100, [record])
+        ack = await writer.send(topic_id, 100, [record])
 
         result = {
             "writer": "python",
             "topic_id": topic_id,
-            "partition_id": partition_id,
             "start_offset": ack.start_offset,
             "end_offset": ack.end_offset,
             "record_count": 1,

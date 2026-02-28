@@ -4,7 +4,7 @@
 //!
 //! Usage:
 //!   flourine-bench writer --scenario baseline
-//!   flourine-bench writer --writers 10 --partitions 8 --record-size 1024 --duration 30
+//!   flourine-bench writer --writers 10 --record-size 1024 --duration 30
 //!   flourine-bench report --compare baseline.json --current latest.json
 
 use clap::{Parser, Subcommand};
@@ -31,10 +31,6 @@ enum Commands {
         /// Number of concurrent writers
         #[arg(short, long, default_value = "1")]
         writers: usize,
-
-        /// Number of partitions to write to
-        #[arg(long, default_value = "1")]
-        partitions: usize,
 
         /// Record payload size in bytes
         #[arg(long, default_value = "1024")]
@@ -84,7 +80,6 @@ struct BenchmarkMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BenchmarkConfig {
     writers: usize,
-    partitions: usize,
     record_size: usize,
     duration_secs: u64,
 }
@@ -166,7 +161,6 @@ fn get_git_commit() -> Option<String> {
 
 async fn run_producer_benchmark(
     writers: usize,
-    partitions: usize,
     record_size: usize,
     duration: Duration,
 ) -> BenchmarkMetrics {
@@ -202,9 +196,8 @@ async fn run_producer_benchmark(
     // Wait for duration
     let start = Instant::now();
     eprintln!(
-        "Running benchmark: {} writers, {} partitions, {}B records, {}s",
+        "Running benchmark: {} writers, {}B records, {}s",
         writers,
-        partitions,
         record_size,
         duration.as_secs()
     );
@@ -252,15 +245,11 @@ async fn run_producer_benchmark(
     };
 
     BenchmarkMetrics {
-        name: format!(
-            "producer_{}p_{}part_{}B",
-            writers, partitions, record_size
-        ),
+        name: format!("producer_{}w_{}B", writers, record_size),
         git_commit: get_git_commit(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         config: BenchmarkConfig {
             writers,
-            partitions,
             record_size,
             duration_secs: duration.as_secs(),
         },
@@ -412,13 +401,13 @@ fn compare_reports(
     Ok(())
 }
 
-fn get_scenario_config(name: &str) -> Option<(usize, usize, usize, u64)> {
+fn get_scenario_config(name: &str) -> Option<(usize, usize, u64)> {
     match name {
-        "baseline" => Some((1, 1, 1024, 10)),
-        "small_messages" => Some((10, 8, 100, 30)),
-        "large_messages" => Some((5, 4, 100_000, 30)),
-        "high_fanout" => Some((50, 32, 1024, 30)),
-        "batching_stress" => Some((100, 4, 1024, 30)),
+        "baseline" => Some((1, 1024, 10)),
+        "small_messages" => Some((10, 100, 30)),
+        "large_messages" => Some((5, 100_000, 30)),
+        "high_fanout" => Some((50, 1024, 30)),
+        "batching_stress" => Some((100, 1024, 30)),
         _ => None,
     }
 }
@@ -430,14 +419,13 @@ async fn main() {
     match cli.command {
         Commands::Writer {
             writers,
-            partitions,
             record_size,
             duration,
             scenario,
             output,
             save,
         } => {
-            let (p, part, size, dur) = if let Some(ref scenario_name) = scenario {
+            let (w, size, dur) = if let Some(ref scenario_name) = scenario {
                 match get_scenario_config(scenario_name) {
                     Some(config) => config,
                     None => {
@@ -449,10 +437,10 @@ async fn main() {
                     }
                 }
             } else {
-                (writers, partitions, record_size, duration)
+                (writers, record_size, duration)
             };
 
-            let metrics = run_producer_benchmark(p, part, size, Duration::from_secs(dur)).await;
+            let metrics = run_producer_benchmark(w, size, Duration::from_secs(dur)).await;
 
             match output.as_str() {
                 "json" => {

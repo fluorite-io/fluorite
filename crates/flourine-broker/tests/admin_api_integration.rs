@@ -98,8 +98,7 @@ async fn test_topic_crud() {
                 .header("Content-Type", "application/json")
                 .body(Body::from(
                     json!({
-                        "name": "test-topic",
-                        "partition_count": 4
+                        "name": "test-topic"
                     })
                     .to_string(),
                 ))
@@ -364,7 +363,7 @@ async fn test_consumer_group_management() {
     let admin_key = create_admin_key(&db).await;
 
     // Create a topic first
-    db.create_topic("test-topic", 4).await;
+    db.create_topic("test-topic").await;
 
     // Create a reader group via the coordinator
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
@@ -419,37 +418,29 @@ async fn test_consumer_group_management() {
 }
 
 #[tokio::test]
-async fn test_force_rebalance() {
+async fn test_force_reset() {
     let db = TestDb::new().await;
     let admin_key = create_admin_key(&db).await;
 
     // Create a topic and reader group
-    db.create_topic("rebalance-topic", 4).await;
+    db.create_topic("reset-topic").await;
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
     coordinator
         .join_group(
-            "rebalance-group",
+            "reset-group",
             flourine_common::ids::TopicId(1),
             "reader-1",
         )
         .await
         .expect("Failed to join group");
 
-    // Get initial generation
-    let initial_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = 'rebalance-group' AND topic_id = 1",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-
-    // Force rebalance
+    // Force reset
     let app = create_admin_api(&db).await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/groups/rebalance-group/topics/1/rebalance")
+                .uri("/groups/reset-group/topics/1/reset")
                 .header("Authorization", auth_header(&admin_key))
                 .body(Body::empty())
                 .unwrap(),
@@ -463,7 +454,5 @@ async fn test_force_rebalance() {
         .await
         .unwrap();
     let result: Value = serde_json::from_slice(&body).unwrap();
-    let new_gen = result["new_generation"].as_i64().unwrap();
-
-    assert!(new_gen > initial_gen);
+    assert_eq!(result["success"], true, "force reset should return success");
 }

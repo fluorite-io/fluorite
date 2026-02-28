@@ -6,9 +6,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use flourine_core::avro::value::bump::BatchDeserializer;
-//!
+//! ```text
 //! let mut batch_de = BatchDeserializer::new(&schema);
 //! for batch in batches {
 //!     for data in batch {
@@ -536,16 +534,11 @@ use crate::avro::de::{DeError, DeserializerState};
 ///
 /// # Example
 ///
-/// ```ignore
-/// use flourine_core::avro::value::bump::BatchDeserializer;
-///
-/// let schema: Schema = /* parse schema */;
+/// ```text
 /// let mut batch_de = BatchDeserializer::new(&schema);
-///
 /// for batch in data_batches {
 ///     for datum in batch {
 ///         let value = batch_de.deserialize(datum)?;
-///         // Process value...
 ///     }
 ///     batch_de.reset(); // O(1) - frees all allocations
 /// }

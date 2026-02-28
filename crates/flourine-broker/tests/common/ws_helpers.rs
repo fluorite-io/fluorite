@@ -130,6 +130,13 @@ pub fn decode_join_response(data: &[u8]) -> reader::JoinGroupResponse {
     }
 }
 
+pub fn decode_poll_response(data: &[u8]) -> reader::PollResponse {
+    match decode_server_frame(data) {
+        ServerMessage::Poll(resp) => resp,
+        _ => panic!("expected poll response"),
+    }
+}
+
 pub fn decode_commit_response(data: &[u8]) -> reader::CommitResponse {
     match decode_server_frame(data) {
         ServerMessage::Commit(resp) => resp,

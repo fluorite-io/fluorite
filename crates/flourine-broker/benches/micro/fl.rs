@@ -3,14 +3,13 @@
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box};
 use flourine_broker::{FlReader, FlWriter};
-use flourine_common::ids::{PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
 /// Create a batch with specified record count and value size.
 fn make_segment(record_count: usize, value_size: usize) -> RecordBatch {
     RecordBatch {
         topic_id: TopicId(1),
-        partition_id: PartitionId(0),
         schema_id: SchemaId(100),
         records: (0..record_count)
             .map(|i| Record {
@@ -84,10 +83,9 @@ pub fn bench_fl_footer(c: &mut Criterion) {
     // Create file with multiple batches
     for segment_count in &[1, 10, 50] {
         let mut writer = FlWriter::new();
-        for i in 0..*segment_count {
+        for _i in 0..*segment_count {
             let batch = RecordBatch {
                 topic_id: TopicId(1),
-                partition_id: PartitionId(i as u32),
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: None,
@@ -115,7 +113,6 @@ pub fn bench_compression_ratio(c: &mut Criterion) {
     // Repetitive data (compresses well)
     let repetitive_segment = RecordBatch {
         topic_id: TopicId(1),
-        partition_id: PartitionId(0),
         schema_id: SchemaId(100),
         records: (0..100)
             .map(|_| Record {
@@ -128,7 +125,6 @@ pub fn bench_compression_ratio(c: &mut Criterion) {
     // Random data (compresses poorly)
     let random_segment = RecordBatch {
         topic_id: TopicId(1),
-        partition_id: PartitionId(0),
         schema_id: SchemaId(100),
         records: (0..100)
             .map(|i| {

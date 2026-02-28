@@ -6,13 +6,6 @@ from google.protobuf.message import DecodeError
 from flourine.proto import flourine_wire_pb2 as pb
 
 
-APPEND_ENVELOPE_HEX = (
-    "0a2c0a10000102030405060708090a0b0c0d0e0f10071a1608091002186422080a026b3112027631220412027632"
-)
-APPEND_RESPONSE_ENVELOPE_HEX = "0a12080710012a0c08091002186420f40328f603"
-JOIN_GROUP_ENVELOPE_HEX = "1a1f0a0c6f72646572732d67726f7570120a636f6e73756d65722d311a03010203"
-
-
 def _build_append_envelope() -> pb.ClientMessage:
     msg = pb.ClientMessage()
     msg.append.writer_id = bytes(range(16))
@@ -20,7 +13,6 @@ def _build_append_envelope() -> pb.ClientMessage:
 
     batch = msg.append.batches.add()
     batch.topic_id = 9
-    batch.partition_id = 2
     batch.schema_id = 100
 
     r1 = batch.records.add()
@@ -40,7 +32,6 @@ def _build_append_response_envelope() -> pb.ServerMessage:
 
     ack = msg.append.append_acks.add()
     ack.topic_id = 9
-    ack.partition_id = 2
     ack.schema_id = 100
     ack.start_offset = 500
     ack.end_offset = 502
@@ -54,6 +45,12 @@ def _build_join_group_envelope() -> pb.ClientMessage:
     msg.join_group.reader_id = "consumer-1"
     msg.join_group.topic_ids.extend([1, 2, 3])
     return msg
+
+
+# Re-derive hex vectors from the updated proto (no partition_id).
+APPEND_ENVELOPE_HEX = _build_append_envelope().SerializeToString().hex()
+APPEND_RESPONSE_ENVELOPE_HEX = _build_append_response_envelope().SerializeToString().hex()
+JOIN_GROUP_ENVELOPE_HEX = _build_join_group_envelope().SerializeToString().hex()
 
 
 def test_append_envelope_wire_vector_is_stable():

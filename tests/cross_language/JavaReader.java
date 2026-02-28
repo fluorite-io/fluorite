@@ -1,7 +1,7 @@
 package io.flourine.test;
 
 import io.flourine.sdk.*;
-import io.flourine.sdk.proto.PartitionResult;
+import io.flourine.sdk.proto.TopicResult;
 import io.flourine.sdk.proto.Record;
 import com.google.gson.*;
 
@@ -11,21 +11,20 @@ import java.util.*;
  * Cross-language E2E test: Java reader.
  *
  * Usage:
- *     java -cp <classpath> io.flourine.test.JavaReader <url> <topic_id> <partition_id> <expected_count>
+ *     java -cp <classpath> io.flourine.test.JavaReader <url> <topic_id> <expected_count>
  *
  * Reads records and prints them as JSON to stdout.
  */
 public class JavaReader {
     public static void main(String[] args) {
-        if (args.length != 4) {
-            System.err.println("Usage: JavaReader <url> <topic_id> <partition_id> <expected_count>");
+        if (args.length != 3) {
+            System.err.println("Usage: JavaReader <url> <topic_id> <expected_count>");
             System.exit(1);
         }
 
         String url = args[0];
         int topicId = Integer.parseInt(args[1]);
-        int partitionId = Integer.parseInt(args[2]);
-        int expectedCount = Integer.parseInt(args[3]);
+        int expectedCount = Integer.parseInt(args[2]);
 
         try {
             String groupId = "cross-lang-java-" + ProcessHandle.current().pid();
@@ -42,33 +41,31 @@ public class JavaReader {
                 int maxAttempts = 10;
 
                 for (int attempt = 0; attempt < maxAttempts; attempt++) {
-                    List<PartitionResult> results = reader.poll();
+                    GroupReader.PollBatch batch = reader.poll();
 
-                    for (PartitionResult result : results) {
-                        if (result.getPartitionId() == partitionId) {
-                            for (Record record : result.getRecordsList()) {
-                                Map<String, Object> recordMap = new LinkedHashMap<>();
+                    for (TopicResult result : batch.getResults()) {
+                        for (Record record : result.getRecordsList()) {
+                            Map<String, Object> recordMap = new LinkedHashMap<>();
 
-                                if (record.hasKey()) {
-                                    recordMap.put("key", new String(record.getKey().toByteArray()));
-                                } else {
-                                    recordMap.put("key", null);
-                                }
-
-                                try {
-                                    String valueStr = new String(record.getValue().toByteArray());
-                                    @SuppressWarnings("unchecked")
-                                    Map<String, Object> valueJson = gson.fromJson(valueStr, Map.class);
-                                    recordMap.put("value", valueJson);
-                                } catch (Exception e) {
-                                    // Hex encode if not valid JSON
-                                    Map<String, String> rawMap = new HashMap<>();
-                                    rawMap.put("raw", bytesToHex(record.getValue().toByteArray()));
-                                    recordMap.put("value", rawMap);
-                                }
-
-                                recordsReceived.add(recordMap);
+                            if (record.hasKey()) {
+                                recordMap.put("key", new String(record.getKey().toByteArray()));
+                            } else {
+                                recordMap.put("key", null);
                             }
+
+                            try {
+                                String valueStr = new String(record.getValue().toByteArray());
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> valueJson = gson.fromJson(valueStr, Map.class);
+                                recordMap.put("value", valueJson);
+                            } catch (Exception e) {
+                                // Hex encode if not valid JSON
+                                Map<String, String> rawMap = new HashMap<>();
+                                rawMap.put("raw", bytesToHex(record.getValue().toByteArray()));
+                                recordMap.put("value", rawMap);
+                            }
+
+                            recordsReceived.add(recordMap);
                         }
                     }
 
@@ -83,7 +80,6 @@ public class JavaReader {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("reader", "java");
             result.put("topic_id", topicId);
-            result.put("partition_id", partitionId);
             result.put("record_count", recordsReceived.size());
             result.put("records", recordsReceived);
 

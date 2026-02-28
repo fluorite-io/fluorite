@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import AsyncIterator, Optional
 from uuid import uuid4
@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class PollBatch:
+    """A batch of results from a single poll, with offset range and lease deadline.
+
+    Pass this to ``commit(batch)`` to commit the specific range.
+    """
+
+    results: list
+    start_offset: int = 0
+    end_offset: int = 0
+    lease_deadline_ms: int = 0
+
+
+@dataclass
 class ReaderConfig:
     """Configuration for the Flourine reader."""
 
@@ -34,7 +47,6 @@ class ReaderConfig:
     max_bytes: int = 1024 * 1024  # 1 MB
     timeout: float = 30.0  # seconds
     heartbeat_interval: float = 10.0  # seconds
-    rebalance_delay: float = 5.0  # seconds
 
     def __post_init__(self):
         if self.reader_id is None:
@@ -46,12 +58,14 @@ class ReaderState(Enum):
 
     INIT = "init"
     ACTIVE = "active"
-    REBALANCING = "rebalancing"
     STOPPED = "stopped"
 
 
 class GroupReader:
-    """Reader client with reader group support."""
+    """Reader client with reader group support.
+
+    Uses a poll-based model where the broker dispatches work to readers.
+    """
 
     def __init__(
         self,
@@ -61,9 +75,7 @@ class GroupReader:
         self._ws = ws
         self._config = config
         self._state = ReaderState.INIT
-        self._generation = 0
-        self._assignments: list[pb.PartitionAssignment] = []
-        self._offsets: dict[int, int] = {}
+        self._inflight: list[tuple[int, int]] = []
         self._running = True
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
@@ -135,45 +147,19 @@ class GroupReader:
     def state(self) -> ReaderState:
         return self._state
 
-    @property
-    def generation(self) -> int:
-        return self._generation
-
-    @property
-    def assignments(self) -> list[pb.PartitionAssignment]:
-        return self._assignments.copy()
-
-    async def poll(self) -> list[pb.PartitionResult]:
+    async def poll(self) -> PollBatch:
         async with self._lock:
             if self._state != ReaderState.ACTIVE:
                 raise ProtocolException(f"Reader not active: {self._state}")
 
-            current_assignments = self._assignments.copy()
-            current_gen = self._generation
-
-        if not current_assignments:
-            return []
-
-        reads = []
-        for a in current_assignments:
-            offset = self._offsets.get(a.partition_id, a.committed_offset)
-            reads.append(
-                pb.PartitionRead(
-                    topic_id=self._config.topic_id,
-                    partition_id=a.partition_id,
-                    offset=offset,
-                    max_bytes=self._config.max_bytes,
-                )
-            )
-
-        req = pb.ReadRequest(
+        req = pb.PollRequest(
             group_id=self._config.group_id,
+            topic_id=self._config.topic_id,
             reader_id=self._config.reader_id,
-            generation=current_gen,
-            reads=reads,
+            max_bytes=self._config.max_bytes,
         )
         envelope = pb.ClientMessage()
-        envelope.read.CopyFrom(req)
+        envelope.poll.CopyFrom(req)
         await self._ws.send(envelope.SerializeToString())
 
         try:
@@ -182,37 +168,41 @@ class GroupReader:
                 timeout=self._config.timeout,
             )
         except asyncio.TimeoutError:
-            raise TimeoutException("Read timeout")
+            raise TimeoutException("Poll timeout")
 
         if not isinstance(response, bytes):
             raise ProtocolException("Expected binary response")
 
         server_msg = pb.ServerMessage()
         server_msg.ParseFromString(response)
-        if server_msg.WhichOneof("message") != "read":
+        if server_msg.WhichOneof("message") != "poll":
             raise ProtocolException("Unexpected response type or empty response")
 
-        resp = server_msg.read
+        resp = server_msg.poll
         if not resp.success:
             raise ProtocolException(
-                f"Read failed ({resp.error_code}): {resp.error_message}"
+                f"Poll failed ({resp.error_code}): {resp.error_message}"
             )
 
-        for pr in resp.results:
-            if pr.records:
-                current = self._offsets.get(pr.partition_id, 0)
-                self._offsets[pr.partition_id] = current + len(pr.records)
+        if resp.start_offset != resp.end_offset:
+            async with self._lock:
+                self._inflight.append((resp.start_offset, resp.end_offset))
 
-        return list(resp.results)
+        return PollBatch(
+            results=list(resp.results),
+            start_offset=resp.start_offset,
+            end_offset=resp.end_offset,
+            lease_deadline_ms=resp.lease_deadline_ms,
+        )
 
     async def poll_loop(
         self, interval: float = 0.1
-    ) -> AsyncIterator[list[pb.PartitionResult]]:
+    ) -> AsyncIterator[PollBatch]:
         while self._running:
             try:
-                results = await self.poll()
-                if results:
-                    yield results
+                batch = await self.poll()
+                if batch.results:
+                    yield batch
                 else:
                     await asyncio.sleep(interval)
             except TimeoutException as e:
@@ -221,28 +211,16 @@ class GroupReader:
             except asyncio.CancelledError:
                 break
 
-    async def commit(self) -> None:
-        async with self._lock:
-            gen = self._generation
-
-        if not self._offsets:
+    async def commit(self, batch: PollBatch) -> None:
+        if batch.start_offset == batch.end_offset:
             return
-
-        commits = []
-        for partition_id, offset in self._offsets.items():
-            commits.append(
-                pb.PartitionCommit(
-                    topic_id=self._config.topic_id,
-                    partition_id=partition_id,
-                    offset=offset,
-                )
-            )
 
         req = pb.CommitRequest(
             group_id=self._config.group_id,
             reader_id=self._config.reader_id,
-            generation=gen,
-            commits=commits,
+            topic_id=self._config.topic_id,
+            start_offset=batch.start_offset,
+            end_offset=batch.end_offset,
         )
         envelope = pb.ClientMessage()
         envelope.commit.CopyFrom(req)
@@ -269,6 +247,10 @@ class GroupReader:
             raise ProtocolException(
                 f"Commit failed ({resp.error_code}): {resp.error_message}"
             )
+
+        async with self._lock:
+            s, e = batch.start_offset, batch.end_offset
+            self._inflight = [(ss, ee) for ss, ee in self._inflight if ss != s or ee != e]
 
     async def _do_join(self) -> None:
         req = pb.JoinGroupRequest(
@@ -303,96 +285,20 @@ class GroupReader:
             )
 
         async with self._lock:
-            self._generation = resp.generation
-            self._assignments = list(resp.assignments)
-            self._offsets.clear()
-            for a in self._assignments:
-                self._offsets[a.partition_id] = a.committed_offset
+            self._inflight.clear()
             self._state = ReaderState.ACTIVE
 
-        logger.info(
-            "Joined group %s at generation %d",
-            self._config.group_id,
-            resp.generation,
-        )
-
-    async def _do_rejoin(self, new_generation: int, max_retries: int = 10) -> None:
-        async with self._lock:
-            self._state = ReaderState.REBALANCING
-
-        try:
-            await self.commit()
-        except Exception as e:
-            logger.warning("Failed to commit offsets during rebalance: %s", e)
-
-        await asyncio.sleep(self._config.rebalance_delay)
-
-        current_gen = new_generation
-        retries = 0
-        while retries < max_retries:
-            req = pb.RejoinRequest(
-                group_id=self._config.group_id,
-                topic_id=self._config.topic_id,
-                reader_id=self._config.reader_id,
-                generation=current_gen,
-            )
-            envelope = pb.ClientMessage()
-            envelope.rejoin.CopyFrom(req)
-            await self._ws.send(envelope.SerializeToString())
-
-            try:
-                response = await asyncio.wait_for(
-                    self._ws.recv(),
-                    timeout=self._config.timeout,
-                )
-            except asyncio.TimeoutError:
-                raise TimeoutException("Rejoin timeout")
-
-            if not isinstance(response, bytes):
-                raise ProtocolException("Expected binary response")
-
-            server_msg = pb.ServerMessage()
-            server_msg.ParseFromString(response)
-            if server_msg.WhichOneof("message") != "rejoin":
-                raise ProtocolException("Unexpected response type or empty response")
-
-            resp = server_msg.rejoin
-            if not resp.success:
-                raise ProtocolException(
-                    f"Rejoin failed ({resp.error_code}): {resp.error_message}"
-                )
-
-            if resp.status == pb.REJOIN_STATUS_REBALANCE_NEEDED:
-                current_gen = resp.generation
-                retries += 1
-                logger.debug(
-                    "Rebalance still in progress, retry %d/%d", retries, max_retries
-                )
-                await asyncio.sleep(self._config.rebalance_delay)
-                continue
-
-            async with self._lock:
-                self._generation = resp.generation
-                self._assignments = list(resp.assignments)
-                self._offsets.clear()
-                for a in self._assignments:
-                    self._offsets[a.partition_id] = a.committed_offset
-                self._state = ReaderState.ACTIVE
-
-            logger.info(
-                "Rejoined group %s at generation %d",
-                self._config.group_id,
-                resp.generation,
-            )
-            return
-
-        raise ProtocolException(f"Rejoin failed after {max_retries} retries")
+        logger.info("Joined group %s", self._config.group_id)
 
     async def _do_leave(self) -> None:
-        try:
-            await self.commit()
-        except Exception as e:
-            logger.warning("Failed to commit offsets during leave: %s", e)
+        async with self._lock:
+            ranges = list(self._inflight)
+        for start, end in ranges:
+            try:
+                batch = PollBatch(results=[], start_offset=start, end_offset=end)
+                await self.commit(batch)
+            except Exception as e:
+                logger.warning("Failed to commit range [%d, %d) during leave: %s", start, end, e)
 
         req = pb.LeaveGroupRequest(
             group_id=self._config.group_id,
@@ -412,14 +318,10 @@ class GroupReader:
                 break
 
             try:
-                async with self._lock:
-                    gen = self._generation
-
                 req = pb.HeartbeatRequest(
                     group_id=self._config.group_id,
                     topic_id=self._config.topic_id,
                     reader_id=self._config.reader_id,
-                    generation=gen,
                 )
                 envelope = pb.ClientMessage()
                 envelope.heartbeat.CopyFrom(req)
@@ -448,10 +350,7 @@ class GroupReader:
                     continue
 
                 if resp.status == pb.HEARTBEAT_STATUS_OK:
-                    logger.debug("Heartbeat OK at generation %d", resp.generation)
-                elif resp.status == pb.HEARTBEAT_STATUS_REBALANCE_NEEDED:
-                    logger.info("Rebalance needed, new generation %d", resp.generation)
-                    await self._do_rejoin(resp.generation)
+                    logger.debug("Heartbeat OK")
                 elif resp.status == pb.HEARTBEAT_STATUS_UNKNOWN_MEMBER:
                     logger.warning("Unknown member, rejoining group")
                     await self._do_join()

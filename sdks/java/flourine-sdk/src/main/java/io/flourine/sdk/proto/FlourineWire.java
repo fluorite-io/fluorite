@@ -52,20 +52,15 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_flourine_wire_AppendResponse_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_flourine_wire_PartitionRead_descriptor;
-  static final 
-    com.google.protobuf.GeneratedMessage.FieldAccessorTable
-      internal_static_flourine_wire_PartitionRead_fieldAccessorTable;
-  static final com.google.protobuf.Descriptors.Descriptor
     internal_static_flourine_wire_ReadRequest_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_flourine_wire_ReadRequest_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_flourine_wire_PartitionResult_descriptor;
+    internal_static_flourine_wire_TopicResult_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
-      internal_static_flourine_wire_PartitionResult_fieldAccessorTable;
+      internal_static_flourine_wire_TopicResult_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
     internal_static_flourine_wire_ReadResponse_descriptor;
   static final 
@@ -76,11 +71,6 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_flourine_wire_JoinGroupRequest_fieldAccessorTable;
-  static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_flourine_wire_PartitionAssignment_descriptor;
-  static final 
-    com.google.protobuf.GeneratedMessage.FieldAccessorTable
-      internal_static_flourine_wire_PartitionAssignment_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
     internal_static_flourine_wire_JoinGroupResponse_descriptor;
   static final 
@@ -97,15 +87,15 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_flourine_wire_HeartbeatResponse_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_flourine_wire_RejoinRequest_descriptor;
+    internal_static_flourine_wire_PollRequest_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
-      internal_static_flourine_wire_RejoinRequest_fieldAccessorTable;
+      internal_static_flourine_wire_PollRequest_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_flourine_wire_RejoinResponse_descriptor;
+    internal_static_flourine_wire_PollResponse_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
-      internal_static_flourine_wire_RejoinResponse_fieldAccessorTable;
+      internal_static_flourine_wire_PollResponse_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
     internal_static_flourine_wire_LeaveGroupRequest_descriptor;
   static final 
@@ -116,11 +106,6 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_flourine_wire_LeaveGroupResponse_fieldAccessorTable;
-  static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_flourine_wire_PartitionCommit_descriptor;
-  static final 
-    com.google.protobuf.GeneratedMessage.FieldAccessorTable
-      internal_static_flourine_wire_PartitionCommit_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
     internal_static_flourine_wire_CommitRequest_descriptor;
   static final 
@@ -162,93 +147,77 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
     java.lang.String[] descriptorData = {
       "\n\023flourine_wire.proto\022\rflourine.wire\"1\n\006" +
       "Record\022\020\n\003key\030\001 \001(\014H\000\210\001\001\022\r\n\005value\030\002 \001(\014B" +
-      "\006\n\004_key\"p\n\013RecordBatch\022\020\n\010topic_id\030\001 \001(\r" +
-      "\022\024\n\014partition_id\030\002 \001(\r\022\021\n\tschema_id\030\003 \001(" +
-      "\r\022&\n\007records\030\004 \003(\0132\025.flourine.wire.Recor" +
-      "d\"o\n\010BatchAck\022\020\n\010topic_id\030\001 \001(\r\022\024\n\014parti" +
-      "tion_id\030\002 \001(\r\022\021\n\tschema_id\030\003 \001(\r\022\024\n\014star" +
-      "t_offset\030\004 \001(\004\022\022\n\nend_offset\030\005 \001(\004\"c\n\rAp" +
-      "pendRequest\022\021\n\twriter_id\030\001 \001(\014\022\022\n\nappend" +
-      "_seq\030\002 \001(\004\022+\n\007batches\030\003 \003(\0132\032.flourine.w" +
-      "ire.RecordBatch\"\216\001\n\016AppendResponse\022\022\n\nap" +
-      "pend_seq\030\001 \001(\004\022\017\n\007success\030\002 \001(\010\022\022\n\nerror" +
-      "_code\030\003 \001(\r\022\025\n\rerror_message\030\004 \001(\t\022,\n\013ap" +
-      "pend_acks\030\005 \003(\0132\027.flourine.wire.BatchAck" +
-      "\"Z\n\rPartitionRead\022\020\n\010topic_id\030\001 \001(\r\022\024\n\014p" +
-      "artition_id\030\002 \001(\r\022\016\n\006offset\030\003 \001(\004\022\021\n\tmax" +
-      "_bytes\030\004 \001(\r\"s\n\013ReadRequest\022\020\n\010group_id\030" +
-      "\001 \001(\t\022\021\n\treader_id\030\002 \001(\t\022\022\n\ngeneration\030\003" +
-      " \001(\004\022+\n\005reads\030\004 \003(\0132\034.flourine.wire.Part" +
-      "itionRead\"\214\001\n\017PartitionResult\022\020\n\010topic_i" +
-      "d\030\001 \001(\r\022\024\n\014partition_id\030\002 \001(\r\022\021\n\tschema_" +
-      "id\030\003 \001(\r\022\026\n\016high_watermark\030\004 \001(\004\022&\n\007reco" +
-      "rds\030\005 \003(\0132\025.flourine.wire.Record\"{\n\014Read" +
-      "Response\022\017\n\007success\030\001 \001(\010\022\022\n\nerror_code\030" +
-      "\002 \001(\r\022\025\n\rerror_message\030\003 \001(\t\022/\n\007results\030" +
-      "\004 \003(\0132\036.flourine.wire.PartitionResult\"J\n" +
-      "\020JoinGroupRequest\022\020\n\010group_id\030\001 \001(\t\022\021\n\tr" +
-      "eader_id\030\002 \001(\t\022\021\n\ttopic_ids\030\003 \003(\r\"W\n\023Par" +
-      "titionAssignment\022\020\n\010topic_id\030\001 \001(\r\022\024\n\014pa" +
-      "rtition_id\030\002 \001(\r\022\030\n\020committed_offset\030\003 \001" +
-      "(\004\"\234\001\n\021JoinGroupResponse\022\017\n\007success\030\001 \001(" +
-      "\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rerror_message\030\003" +
-      " \001(\t\022\022\n\ngeneration\030\004 \001(\004\0227\n\013assignments\030" +
-      "\005 \003(\0132\".flourine.wire.PartitionAssignmen" +
-      "t\"]\n\020HeartbeatRequest\022\020\n\010group_id\030\001 \001(\t\022" +
-      "\020\n\010topic_id\030\002 \001(\r\022\021\n\treader_id\030\003 \001(\t\022\022\n\n" +
-      "generation\030\004 \001(\004\"\223\001\n\021HeartbeatResponse\022\017" +
+      "\006\n\004_key\"Z\n\013RecordBatch\022\020\n\010topic_id\030\001 \001(\r" +
+      "\022\021\n\tschema_id\030\002 \001(\r\022&\n\007records\030\003 \003(\0132\025.f" +
+      "lourine.wire.Record\"Y\n\010BatchAck\022\020\n\010topic" +
+      "_id\030\001 \001(\r\022\021\n\tschema_id\030\002 \001(\r\022\024\n\014start_of" +
+      "fset\030\003 \001(\004\022\022\n\nend_offset\030\004 \001(\004\"c\n\rAppend" +
+      "Request\022\021\n\twriter_id\030\001 \001(\014\022\022\n\nappend_seq" +
+      "\030\002 \001(\004\022+\n\007batches\030\003 \003(\0132\032.flourine.wire." +
+      "RecordBatch\"\216\001\n\016AppendResponse\022\022\n\nappend" +
+      "_seq\030\001 \001(\004\022\017\n\007success\030\002 \001(\010\022\022\n\nerror_cod" +
+      "e\030\003 \001(\r\022\025\n\rerror_message\030\004 \001(\t\022,\n\013append" +
+      "_acks\030\005 \003(\0132\027.flourine.wire.BatchAck\"B\n\013" +
+      "ReadRequest\022\020\n\010topic_id\030\001 \001(\r\022\016\n\006offset\030" +
+      "\002 \001(\004\022\021\n\tmax_bytes\030\003 \001(\r\"r\n\013TopicResult\022" +
+      "\020\n\010topic_id\030\001 \001(\r\022\021\n\tschema_id\030\002 \001(\r\022\026\n\016" +
+      "high_watermark\030\003 \001(\004\022&\n\007records\030\004 \003(\0132\025." +
+      "flourine.wire.Record\"w\n\014ReadResponse\022\017\n\007" +
+      "success\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rerr" +
+      "or_message\030\003 \001(\t\022+\n\007results\030\004 \003(\0132\032.flou" +
+      "rine.wire.TopicResult\"J\n\020JoinGroupReques" +
+      "t\022\020\n\010group_id\030\001 \001(\t\022\021\n\treader_id\030\002 \001(\t\022\021" +
+      "\n\ttopic_ids\030\003 \003(\r\"O\n\021JoinGroupResponse\022\017" +
       "\n\007success\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\re" +
-      "rror_message\030\003 \001(\t\022\022\n\ngeneration\030\004 \001(\004\022." +
-      "\n\006status\030\005 \001(\0162\036.flourine.wire.Heartbeat" +
-      "Status\"Z\n\rRejoinRequest\022\020\n\010group_id\030\001 \001(" +
-      "\t\022\020\n\010topic_id\030\002 \001(\r\022\021\n\treader_id\030\003 \001(\t\022\022" +
-      "\n\ngeneration\030\004 \001(\004\"\306\001\n\016RejoinResponse\022\017\n" +
-      "\007success\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rer" +
-      "ror_message\030\003 \001(\t\022\022\n\ngeneration\030\004 \001(\004\022+\n" +
-      "\006status\030\005 \001(\0162\033.flourine.wire.RejoinStat" +
-      "us\0227\n\013assignments\030\006 \003(\0132\".flourine.wire." +
-      "PartitionAssignment\"J\n\021LeaveGroupRequest" +
-      "\022\020\n\010group_id\030\001 \001(\t\022\020\n\010topic_id\030\002 \001(\r\022\021\n\t" +
-      "reader_id\030\003 \001(\t\"P\n\022LeaveGroupResponse\022\017\n" +
-      "\007success\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rer" +
-      "ror_message\030\003 \001(\t\"I\n\017PartitionCommit\022\020\n\010" +
-      "topic_id\030\001 \001(\r\022\024\n\014partition_id\030\002 \001(\r\022\016\n\006" +
-      "offset\030\003 \001(\004\"y\n\rCommitRequest\022\020\n\010group_i" +
-      "d\030\001 \001(\t\022\021\n\treader_id\030\002 \001(\t\022\022\n\ngeneration" +
-      "\030\003 \001(\004\022/\n\007commits\030\004 \003(\0132\036.flourine.wire." +
-      "PartitionCommit\"L\n\016CommitResponse\022\017\n\007suc" +
-      "cess\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rerror_" +
-      "message\030\003 \001(\t\"\036\n\013AuthRequest\022\017\n\007api_key\030" +
-      "\001 \001(\t\"J\n\014AuthResponse\022\017\n\007success\030\001 \001(\010\022\022" +
-      "\n\nerror_code\030\002 \001(\r\022\025\n\rerror_message\030\003 \001(" +
-      "\t\"\250\003\n\rClientMessage\022.\n\006append\030\001 \001(\0132\034.fl" +
-      "ourine.wire.AppendRequestH\000\022*\n\004read\030\002 \001(" +
-      "\0132\032.flourine.wire.ReadRequestH\000\0225\n\njoin_" +
-      "group\030\003 \001(\0132\037.flourine.wire.JoinGroupReq" +
-      "uestH\000\0224\n\theartbeat\030\004 \001(\0132\037.flourine.wir" +
-      "e.HeartbeatRequestH\000\022.\n\006rejoin\030\005 \001(\0132\034.f" +
-      "lourine.wire.RejoinRequestH\000\0227\n\013leave_gr" +
-      "oup\030\006 \001(\0132 .flourine.wire.LeaveGroupRequ" +
-      "estH\000\022.\n\006commit\030\007 \001(\0132\034.flourine.wire.Co" +
-      "mmitRequestH\000\022*\n\004auth\030\010 \001(\0132\032.flourine.w" +
-      "ire.AuthRequestH\000B\t\n\007message\"\260\003\n\rServerM" +
-      "essage\022/\n\006append\030\001 \001(\0132\035.flourine.wire.A" +
-      "ppendResponseH\000\022+\n\004read\030\002 \001(\0132\033.flourine" +
-      ".wire.ReadResponseH\000\0226\n\njoin_group\030\003 \001(\013" +
-      "2 .flourine.wire.JoinGroupResponseH\000\0225\n\t" +
-      "heartbeat\030\004 \001(\0132 .flourine.wire.Heartbea" +
-      "tResponseH\000\022/\n\006rejoin\030\005 \001(\0132\035.flourine.w" +
-      "ire.RejoinResponseH\000\0228\n\013leave_group\030\006 \001(" +
-      "\0132!.flourine.wire.LeaveGroupResponseH\000\022/" +
-      "\n\006commit\030\007 \001(\0132\035.flourine.wire.CommitRes" +
-      "ponseH\000\022+\n\004auth\030\010 \001(\0132\033.flourine.wire.Au" +
-      "thResponseH\000B\t\n\007message*v\n\017HeartbeatStat" +
-      "us\022\027\n\023HEARTBEAT_STATUS_OK\020\000\022%\n!HEARTBEAT" +
-      "_STATUS_REBALANCE_NEEDED\020\001\022#\n\037HEARTBEAT_" +
-      "STATUS_UNKNOWN_MEMBER\020\002*H\n\014RejoinStatus\022" +
-      "\024\n\020REJOIN_STATUS_OK\020\000\022\"\n\036REJOIN_STATUS_R" +
-      "EBALANCE_NEEDED\020\001B\031\n\025io.flourine.sdk.pro" +
-      "toP\001b\006proto3"
+      "rror_message\030\003 \001(\t\"I\n\020HeartbeatRequest\022\020" +
+      "\n\010group_id\030\001 \001(\t\022\020\n\010topic_id\030\002 \001(\r\022\021\n\tre" +
+      "ader_id\030\003 \001(\t\"\177\n\021HeartbeatResponse\022\017\n\007su" +
+      "ccess\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rerror" +
+      "_message\030\003 \001(\t\022.\n\006status\030\004 \001(\0162\036.flourin" +
+      "e.wire.HeartbeatStatus\"W\n\013PollRequest\022\020\n" +
+      "\010group_id\030\001 \001(\t\022\020\n\010topic_id\030\002 \001(\r\022\021\n\trea" +
+      "der_id\030\003 \001(\t\022\021\n\tmax_bytes\030\004 \001(\r\"\274\001\n\014Poll" +
+      "Response\022\017\n\007success\030\001 \001(\010\022\022\n\nerror_code\030" +
+      "\002 \001(\r\022\025\n\rerror_message\030\003 \001(\t\022+\n\007results\030" +
+      "\004 \003(\0132\032.flourine.wire.TopicResult\022\024\n\014sta" +
+      "rt_offset\030\005 \001(\004\022\022\n\nend_offset\030\006 \001(\004\022\031\n\021l" +
+      "ease_deadline_ms\030\007 \001(\004\"J\n\021LeaveGroupRequ" +
+      "est\022\020\n\010group_id\030\001 \001(\t\022\020\n\010topic_id\030\002 \001(\r\022" +
+      "\021\n\treader_id\030\003 \001(\t\"P\n\022LeaveGroupResponse" +
+      "\022\017\n\007success\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n" +
+      "\rerror_message\030\003 \001(\t\"p\n\rCommitRequest\022\020\n" +
+      "\010group_id\030\001 \001(\t\022\021\n\treader_id\030\002 \001(\t\022\020\n\010to" +
+      "pic_id\030\003 \001(\r\022\024\n\014start_offset\030\004 \001(\004\022\022\n\nen" +
+      "d_offset\030\005 \001(\004\"L\n\016CommitResponse\022\017\n\007succ" +
+      "ess\030\001 \001(\010\022\022\n\nerror_code\030\002 \001(\r\022\025\n\rerror_m" +
+      "essage\030\003 \001(\t\"\036\n\013AuthRequest\022\017\n\007api_key\030\001" +
+      " \001(\t\"J\n\014AuthResponse\022\017\n\007success\030\001 \001(\010\022\022\n" +
+      "\nerror_code\030\002 \001(\r\022\025\n\rerror_message\030\003 \001(\t" +
+      "\"\244\003\n\rClientMessage\022.\n\006append\030\001 \001(\0132\034.flo" +
+      "urine.wire.AppendRequestH\000\022*\n\004read\030\002 \001(\013" +
+      "2\032.flourine.wire.ReadRequestH\000\0225\n\njoin_g" +
+      "roup\030\003 \001(\0132\037.flourine.wire.JoinGroupRequ" +
+      "estH\000\0224\n\theartbeat\030\004 \001(\0132\037.flourine.wire" +
+      ".HeartbeatRequestH\000\022*\n\004poll\030\005 \001(\0132\032.flou" +
+      "rine.wire.PollRequestH\000\0227\n\013leave_group\030\006" +
+      " \001(\0132 .flourine.wire.LeaveGroupRequestH\000" +
+      "\022.\n\006commit\030\007 \001(\0132\034.flourine.wire.CommitR" +
+      "equestH\000\022*\n\004auth\030\010 \001(\0132\032.flourine.wire.A" +
+      "uthRequestH\000B\t\n\007message\"\254\003\n\rServerMessag" +
+      "e\022/\n\006append\030\001 \001(\0132\035.flourine.wire.Append" +
+      "ResponseH\000\022+\n\004read\030\002 \001(\0132\033.flourine.wire" +
+      ".ReadResponseH\000\0226\n\njoin_group\030\003 \001(\0132 .fl" +
+      "ourine.wire.JoinGroupResponseH\000\0225\n\theart" +
+      "beat\030\004 \001(\0132 .flourine.wire.HeartbeatResp" +
+      "onseH\000\022+\n\004poll\030\005 \001(\0132\033.flourine.wire.Pol" +
+      "lResponseH\000\0228\n\013leave_group\030\006 \001(\0132!.flour" +
+      "ine.wire.LeaveGroupResponseH\000\022/\n\006commit\030" +
+      "\007 \001(\0132\035.flourine.wire.CommitResponseH\000\022+" +
+      "\n\004auth\030\010 \001(\0132\033.flourine.wire.AuthRespons" +
+      "eH\000B\t\n\007message*O\n\017HeartbeatStatus\022\027\n\023HEA" +
+      "RTBEAT_STATUS_OK\020\000\022#\n\037HEARTBEAT_STATUS_U" +
+      "NKNOWN_MEMBER\020\001B\031\n\025io.flourine.sdk.proto" +
+      "P\001b\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -265,13 +234,13 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
     internal_static_flourine_wire_RecordBatch_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_RecordBatch_descriptor,
-        new java.lang.String[] { "TopicId", "PartitionId", "SchemaId", "Records", });
+        new java.lang.String[] { "TopicId", "SchemaId", "Records", });
     internal_static_flourine_wire_BatchAck_descriptor =
       getDescriptor().getMessageType(2);
     internal_static_flourine_wire_BatchAck_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_BatchAck_descriptor,
-        new java.lang.String[] { "TopicId", "PartitionId", "SchemaId", "StartOffset", "EndOffset", });
+        new java.lang.String[] { "TopicId", "SchemaId", "StartOffset", "EndOffset", });
     internal_static_flourine_wire_AppendRequest_descriptor =
       getDescriptor().getMessageType(3);
     internal_static_flourine_wire_AppendRequest_fieldAccessorTable = new
@@ -284,126 +253,108 @@ public final class FlourineWire extends com.google.protobuf.GeneratedFile {
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_AppendResponse_descriptor,
         new java.lang.String[] { "AppendSeq", "Success", "ErrorCode", "ErrorMessage", "AppendAcks", });
-    internal_static_flourine_wire_PartitionRead_descriptor =
-      getDescriptor().getMessageType(5);
-    internal_static_flourine_wire_PartitionRead_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_flourine_wire_PartitionRead_descriptor,
-        new java.lang.String[] { "TopicId", "PartitionId", "Offset", "MaxBytes", });
     internal_static_flourine_wire_ReadRequest_descriptor =
-      getDescriptor().getMessageType(6);
+      getDescriptor().getMessageType(5);
     internal_static_flourine_wire_ReadRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_ReadRequest_descriptor,
-        new java.lang.String[] { "GroupId", "ReaderId", "Generation", "Reads", });
-    internal_static_flourine_wire_PartitionResult_descriptor =
-      getDescriptor().getMessageType(7);
-    internal_static_flourine_wire_PartitionResult_fieldAccessorTable = new
+        new java.lang.String[] { "TopicId", "Offset", "MaxBytes", });
+    internal_static_flourine_wire_TopicResult_descriptor =
+      getDescriptor().getMessageType(6);
+    internal_static_flourine_wire_TopicResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_flourine_wire_PartitionResult_descriptor,
-        new java.lang.String[] { "TopicId", "PartitionId", "SchemaId", "HighWatermark", "Records", });
+        internal_static_flourine_wire_TopicResult_descriptor,
+        new java.lang.String[] { "TopicId", "SchemaId", "HighWatermark", "Records", });
     internal_static_flourine_wire_ReadResponse_descriptor =
-      getDescriptor().getMessageType(8);
+      getDescriptor().getMessageType(7);
     internal_static_flourine_wire_ReadResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_ReadResponse_descriptor,
         new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", "Results", });
     internal_static_flourine_wire_JoinGroupRequest_descriptor =
-      getDescriptor().getMessageType(9);
+      getDescriptor().getMessageType(8);
     internal_static_flourine_wire_JoinGroupRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_JoinGroupRequest_descriptor,
         new java.lang.String[] { "GroupId", "ReaderId", "TopicIds", });
-    internal_static_flourine_wire_PartitionAssignment_descriptor =
-      getDescriptor().getMessageType(10);
-    internal_static_flourine_wire_PartitionAssignment_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_flourine_wire_PartitionAssignment_descriptor,
-        new java.lang.String[] { "TopicId", "PartitionId", "CommittedOffset", });
     internal_static_flourine_wire_JoinGroupResponse_descriptor =
-      getDescriptor().getMessageType(11);
+      getDescriptor().getMessageType(9);
     internal_static_flourine_wire_JoinGroupResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_JoinGroupResponse_descriptor,
-        new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", "Generation", "Assignments", });
+        new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", });
     internal_static_flourine_wire_HeartbeatRequest_descriptor =
-      getDescriptor().getMessageType(12);
+      getDescriptor().getMessageType(10);
     internal_static_flourine_wire_HeartbeatRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_HeartbeatRequest_descriptor,
-        new java.lang.String[] { "GroupId", "TopicId", "ReaderId", "Generation", });
+        new java.lang.String[] { "GroupId", "TopicId", "ReaderId", });
     internal_static_flourine_wire_HeartbeatResponse_descriptor =
-      getDescriptor().getMessageType(13);
+      getDescriptor().getMessageType(11);
     internal_static_flourine_wire_HeartbeatResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_HeartbeatResponse_descriptor,
-        new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", "Generation", "Status", });
-    internal_static_flourine_wire_RejoinRequest_descriptor =
-      getDescriptor().getMessageType(14);
-    internal_static_flourine_wire_RejoinRequest_fieldAccessorTable = new
+        new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", "Status", });
+    internal_static_flourine_wire_PollRequest_descriptor =
+      getDescriptor().getMessageType(12);
+    internal_static_flourine_wire_PollRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_flourine_wire_RejoinRequest_descriptor,
-        new java.lang.String[] { "GroupId", "TopicId", "ReaderId", "Generation", });
-    internal_static_flourine_wire_RejoinResponse_descriptor =
-      getDescriptor().getMessageType(15);
-    internal_static_flourine_wire_RejoinResponse_fieldAccessorTable = new
+        internal_static_flourine_wire_PollRequest_descriptor,
+        new java.lang.String[] { "GroupId", "TopicId", "ReaderId", "MaxBytes", });
+    internal_static_flourine_wire_PollResponse_descriptor =
+      getDescriptor().getMessageType(13);
+    internal_static_flourine_wire_PollResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_flourine_wire_RejoinResponse_descriptor,
-        new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", "Generation", "Status", "Assignments", });
+        internal_static_flourine_wire_PollResponse_descriptor,
+        new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", "Results", "StartOffset", "EndOffset", "LeaseDeadlineMs", });
     internal_static_flourine_wire_LeaveGroupRequest_descriptor =
-      getDescriptor().getMessageType(16);
+      getDescriptor().getMessageType(14);
     internal_static_flourine_wire_LeaveGroupRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_LeaveGroupRequest_descriptor,
         new java.lang.String[] { "GroupId", "TopicId", "ReaderId", });
     internal_static_flourine_wire_LeaveGroupResponse_descriptor =
-      getDescriptor().getMessageType(17);
+      getDescriptor().getMessageType(15);
     internal_static_flourine_wire_LeaveGroupResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_LeaveGroupResponse_descriptor,
         new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", });
-    internal_static_flourine_wire_PartitionCommit_descriptor =
-      getDescriptor().getMessageType(18);
-    internal_static_flourine_wire_PartitionCommit_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_flourine_wire_PartitionCommit_descriptor,
-        new java.lang.String[] { "TopicId", "PartitionId", "Offset", });
     internal_static_flourine_wire_CommitRequest_descriptor =
-      getDescriptor().getMessageType(19);
+      getDescriptor().getMessageType(16);
     internal_static_flourine_wire_CommitRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_CommitRequest_descriptor,
-        new java.lang.String[] { "GroupId", "ReaderId", "Generation", "Commits", });
+        new java.lang.String[] { "GroupId", "ReaderId", "TopicId", "StartOffset", "EndOffset", });
     internal_static_flourine_wire_CommitResponse_descriptor =
-      getDescriptor().getMessageType(20);
+      getDescriptor().getMessageType(17);
     internal_static_flourine_wire_CommitResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_CommitResponse_descriptor,
         new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", });
     internal_static_flourine_wire_AuthRequest_descriptor =
-      getDescriptor().getMessageType(21);
+      getDescriptor().getMessageType(18);
     internal_static_flourine_wire_AuthRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_AuthRequest_descriptor,
         new java.lang.String[] { "ApiKey", });
     internal_static_flourine_wire_AuthResponse_descriptor =
-      getDescriptor().getMessageType(22);
+      getDescriptor().getMessageType(19);
     internal_static_flourine_wire_AuthResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_AuthResponse_descriptor,
         new java.lang.String[] { "Success", "ErrorCode", "ErrorMessage", });
     internal_static_flourine_wire_ClientMessage_descriptor =
-      getDescriptor().getMessageType(23);
+      getDescriptor().getMessageType(20);
     internal_static_flourine_wire_ClientMessage_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_ClientMessage_descriptor,
-        new java.lang.String[] { "Append", "Read", "JoinGroup", "Heartbeat", "Rejoin", "LeaveGroup", "Commit", "Auth", "Message", });
+        new java.lang.String[] { "Append", "Read", "JoinGroup", "Heartbeat", "Poll", "LeaveGroup", "Commit", "Auth", "Message", });
     internal_static_flourine_wire_ServerMessage_descriptor =
-      getDescriptor().getMessageType(24);
+      getDescriptor().getMessageType(21);
     internal_static_flourine_wire_ServerMessage_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_flourine_wire_ServerMessage_descriptor,
-        new java.lang.String[] { "Append", "Read", "JoinGroup", "Heartbeat", "Rejoin", "LeaveGroup", "Commit", "Auth", "Message", });
+        new java.lang.String[] { "Append", "Read", "JoinGroup", "Heartbeat", "Poll", "LeaveGroup", "Commit", "Auth", "Message", });
     descriptor.resolveAllFeaturesImmutable();
   }
 

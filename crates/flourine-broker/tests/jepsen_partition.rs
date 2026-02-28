@@ -1,9 +1,13 @@
-//! Jepsen-inspired partition tolerance tests.
+//! Jepsen-inspired fault tolerance tests.
 //!
 //! These tests verify:
-//! - DB timeout returns error, not false success
+//! - S3 failure does not result in false acknowledgment
 //! - Reader group state survives broker restart
-//! - Two brokers don't duplicate partition assignments
+//! - No partial write visibility
+//! - S3 latency does not cause false acks
+//!
+//! Note: partition assignment tests have been removed as the system
+//! no longer uses partitions. Topics have a single offset sequence.
 
 mod common;
 
@@ -11,7 +15,7 @@ use bytes::Bytes;
 use std::time::Duration;
 
 use flourine_broker::{Coordinator, CoordinatorConfig};
-use flourine_common::ids::{Offset, PartitionId, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 use flourine_common::types::Record;
 
 use common::{CrashableBroker, FaultyObjectStore, TestDb, produce_records};
@@ -24,8 +28,7 @@ async fn test_s3_failure_does_not_ack_writes() {
     let db = TestDb::new().await;
     let broker = CrashableBroker::new(db.pool.clone()).await;
 
-    let topic_id = TopicId(db.create_topic("s3-failure-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("s3-failure-test").await as u32);
 
     // Configure to fail on next put
     broker.faulty_store().fail_next_put();
@@ -36,7 +39,7 @@ async fn test_s3_failure_does_not_ack_writes() {
     }];
 
     // This should fail because S3 put fails
-    let result = produce_records(broker.state(), topic_id, partition_id, records).await;
+    let result = produce_records(broker.state(), topic_id, records).await;
 
     // Should return error, not success
     assert!(
@@ -46,10 +49,9 @@ async fn test_s3_failure_does_not_ack_writes() {
 
     // Verify no records were persisted in DB
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -58,10 +60,9 @@ async fn test_s3_failure_does_not_ack_writes() {
 
     // Watermark should still be 0
     let watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&db.pool)
     .await
     .unwrap()
@@ -93,30 +94,50 @@ async fn test_consumer_survives_broker_restart() {
         ..Default::default()
     };
 
-    let topic_id = TopicId(db.create_topic("survive-restart", 4).await as u32);
+    let topic_id = TopicId(db.create_topic("survive-restart").await as u32);
 
     // First coordinator session
-    let gen1;
     {
         let coordinator = Coordinator::new(db.pool.clone(), config.clone());
 
-        let result = coordinator
+        coordinator
             .join_group("survive-group", topic_id, "reader-1")
             .await
             .expect("Join should succeed");
 
-        gen1 = result.generation.0;
-        assert!(!result.assignments.is_empty());
+        // Simulate inflight range
+        sqlx::query(
+            r#"
+            INSERT INTO reader_inflight
+            (group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at)
+            VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '45 seconds')
+            "#,
+        )
+        .bind("survive-group")
+        .bind(topic_id.0 as i32)
+        .bind(0i64)
+        .bind(42i64)
+        .bind("reader-1")
+        .execute(&db.pool)
+        .await
+        .expect("Insert inflight");
 
-        // Commit offset 42 to first partition
-        let partition = result.assignments[0].partition_id;
+        sqlx::query(
+            "UPDATE reader_group_state SET dispatch_cursor = 42 WHERE group_id = $1 AND topic_id = $2",
+        )
+        .bind("survive-group")
+        .bind(topic_id.0 as i32)
+        .execute(&db.pool)
+        .await
+        .expect("Update dispatch cursor");
+
+        // Commit range [0, 42)
         coordinator
-            .commit_offset(
+            .commit_range(
                 "survive-group",
                 topic_id,
                 "reader-1",
-                result.generation,
-                partition,
+                Offset(0),
                 Offset(42),
             )
             .await
@@ -128,160 +149,37 @@ async fn test_consumer_survives_broker_restart() {
     {
         let coordinator = Coordinator::new(db.pool.clone(), config);
 
-        // Send heartbeat with old generation
+        // Send heartbeat -- reader should still be known
         let hb = coordinator
             .heartbeat(
                 "survive-group",
                 topic_id,
                 "reader-1",
-                flourine_common::ids::Generation(gen1),
             )
             .await
             .expect("Heartbeat should succeed");
 
-        // Heartbeat should work (reader still known)
-        assert!(
-            hb.status == flourine_broker::HeartbeatStatus::Ok
-                || hb.status == flourine_broker::HeartbeatStatus::RebalanceNeeded,
-            "Reader should survive restart: {:?}",
-            hb.status
+        assert_eq!(
+            hb,
+            flourine_broker::HeartbeatStatus::Ok,
+            "Reader should survive restart"
         );
 
-        // Verify committed offset is still in DB
-        let committed: Option<i64> = sqlx::query_scalar(
-            "SELECT committed_offset FROM reader_assignments WHERE group_id = $1 AND topic_id = $2 AND committed_offset = 42",
+        // Verify group state is still in DB
+        let state_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM reader_group_state WHERE group_id = $1 AND topic_id = $2)",
         )
         .bind("survive-group")
         .bind(topic_id.0 as i32)
-        .fetch_optional(&db.pool)
+        .fetch_one(&db.pool)
         .await
         .expect("Query should succeed");
 
         assert!(
-            committed.is_some(),
-            "Committed offset should survive restart"
+            state_exists,
+            "Group state should survive restart"
         );
     }
-}
-
-/// Test that two brokers cannot claim the same partition simultaneously.
-#[tokio::test]
-async fn test_two_brokers_no_duplicate_assignments() {
-    let db = TestDb::new().await;
-    let config = CoordinatorConfig {
-        lease_duration: Duration::from_secs(45),
-        session_timeout: Duration::from_secs(30),
-        ..Default::default()
-    };
-
-    let topic_id = TopicId(db.create_topic("no-dup-brokers", 4).await as u32);
-
-    // Two coordinators simulating two broker processes
-    let coordinator1 = Coordinator::new(db.pool.clone(), config.clone());
-    let coordinator2 = Coordinator::new(db.pool.clone(), config);
-
-    // Reader 1 joins first
-    let _result1 = coordinator1
-        .join_group("dup-test-group", topic_id, "reader-1")
-        .await
-        .expect("Join should succeed");
-
-    // Reader 2 joins
-    let result2 = coordinator2
-        .join_group("dup-test-group", topic_id, "reader-2")
-        .await
-        .expect("Join should succeed");
-
-    // Get fresh assignments for reader 1 (rejoin to get updated state)
-    let result1_updated = coordinator1
-        .rejoin("dup-test-group", topic_id, "reader-1", result2.generation)
-        .await
-        .expect("Rejoin should succeed");
-
-    // Collect all claimed partitions
-    let c1_partitions: std::collections::HashSet<u32> = result1_updated
-        .assignments
-        .iter()
-        .map(|a| a.partition_id.0)
-        .collect();
-
-    let c2_partitions: std::collections::HashSet<u32> = result2
-        .assignments
-        .iter()
-        .map(|a| a.partition_id.0)
-        .collect();
-
-    // No overlap allowed
-    let overlap: std::collections::HashSet<u32> = c1_partitions
-        .intersection(&c2_partitions)
-        .copied()
-        .collect();
-
-    assert!(
-        overlap.is_empty(),
-        "Two brokers should not claim the same partition: overlap {:?}",
-        overlap
-    );
-}
-
-/// Test that partition assignment eventually balances across brokers.
-///
-/// In an incremental rebalance system, the first reader gets all partitions,
-/// and subsequent consumers get their share after rebalance via rejoin.
-#[tokio::test]
-async fn test_partition_assignment_eventually_balanced() {
-    let db = TestDb::new().await;
-    let config = CoordinatorConfig {
-        lease_duration: Duration::from_secs(45),
-        session_timeout: Duration::from_secs(30),
-        ..Default::default()
-    };
-
-    let topic_id = TopicId(db.create_topic("balance-test", 8).await as u32);
-
-    let coordinator = Coordinator::new(db.pool.clone(), config);
-
-    // Four consumers join sequentially
-    let mut generations = Vec::new();
-    for i in 0..4 {
-        let reader_id = format!("reader-{}", i);
-        let result = coordinator
-            .join_group("balance-group", topic_id, &reader_id)
-            .await
-            .expect("Join should succeed");
-        generations.push((reader_id, result.generation));
-    }
-
-    // Get the latest generation
-    let latest_gen = generations.last().unwrap().1;
-
-    // Now have all consumers rejoin to get balanced assignments
-    let mut final_assignments = Vec::new();
-    for (reader_id, _) in &generations {
-        let result = coordinator
-            .rejoin("balance-group", topic_id, reader_id, latest_gen)
-            .await
-            .expect("Rejoin should succeed");
-        final_assignments.push((reader_id.clone(), result.assignments.len()));
-    }
-
-    // After rejoin, assignments should be more balanced
-    // 8 partitions / 4 consumers = 2 each
-    let total: usize = final_assignments.iter().map(|(_, c)| c).sum();
-
-    // Total claimed should be <= 8 (some partitions might still be in transition)
-    assert!(
-        total <= 8,
-        "Total assigned partitions {} should be <= 8",
-        total
-    );
-
-    // At least some consumers should have partitions after rejoin
-    let non_empty = final_assignments.iter().filter(|(_, c)| *c > 0).count();
-    assert!(
-        non_empty >= 1,
-        "At least one reader should have partitions"
-    );
 }
 
 /// Test that reads see consistent state during writes (no partial visibility).
@@ -290,8 +188,7 @@ async fn test_no_partial_write_visibility() {
     let db = TestDb::new().await;
     let broker = CrashableBroker::new(db.pool.clone()).await;
 
-    let topic_id = TopicId(db.create_topic("no-partial-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("no-partial-test").await as u32);
 
     // Append a batch of records
     let records: Vec<Record> = (0..10)
@@ -301,7 +198,7 @@ async fn test_no_partial_write_visibility() {
         })
         .collect();
 
-    produce_records(broker.state(), topic_id, partition_id, records)
+    produce_records(broker.state(), topic_id, records)
         .await
         .expect("Append should succeed");
 
@@ -310,11 +207,10 @@ async fn test_no_partial_write_visibility() {
         r#"
         SELECT start_offset, end_offset, record_count
         FROM topic_batches
-        WHERE topic_id = $1 AND partition_id = $2
+        WHERE topic_id = $1
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_all(&db.pool)
     .await
     .expect("Query should succeed");
@@ -331,10 +227,9 @@ async fn test_no_partial_write_visibility() {
 
     // Watermark should match end of last batch
     let watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&db.pool)
     .await
     .unwrap()
@@ -379,17 +274,16 @@ async fn test_s3_latency_does_not_cause_false_ack() {
         config,
     ));
 
-    let topic_id = TopicId(db.create_topic("s3-latency-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("s3-latency-test").await as u32);
 
-    // Write 5 records — each will be slow but should succeed.
+    // Write 5 records -- each will be slow but should succeed.
     let mut acked_offsets = vec![];
     for i in 0..5 {
         let records = vec![Record {
             key: Some(Bytes::from(format!("key-{}", i))),
             value: Bytes::from(format!("slow-value-{}", i)),
         }];
-        let (start, end) = produce_records(&state, topic_id, partition_id, records)
+        let (start, end) = produce_records(&state, topic_id, records)
             .await
             .expect("Write should succeed despite S3 latency");
         acked_offsets.push((start, end));
@@ -410,11 +304,10 @@ async fn test_s3_latency_does_not_cause_false_ack() {
 
     // Final watermark should equal the end of the last batch.
     let watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets \
-         WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets \
+         WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&db.pool)
     .await
     .unwrap()
@@ -428,10 +321,9 @@ async fn test_s3_latency_does_not_cause_false_ack() {
 
     // Read back records and verify all 5 are present.
     let batches: Vec<(String,)> = sqlx::query_as(
-        "SELECT s3_key FROM topic_batches WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT s3_key FROM topic_batches WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_all(&db.pool)
     .await
     .unwrap();
@@ -441,7 +333,7 @@ async fn test_s3_latency_does_not_cause_false_ack() {
         let data = store.get(&s3_key).await.unwrap();
         let metas = FlReader::read_footer(&data).unwrap();
         for meta in &metas {
-            if meta.topic_id == topic_id && meta.partition_id == partition_id {
+            if meta.topic_id == topic_id {
                 let recs = FlReader::read_segment(&data, meta, true).unwrap();
                 all_records.extend(recs);
             }

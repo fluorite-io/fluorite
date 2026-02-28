@@ -53,7 +53,7 @@ private static final long serialVersionUID = 0L;
     READ(2),
     JOIN_GROUP(3),
     HEARTBEAT(4),
-    REJOIN(5),
+    POLL(5),
     LEAVE_GROUP(6),
     COMMIT(7),
     AUTH(8),
@@ -78,7 +78,7 @@ private static final long serialVersionUID = 0L;
         case 2: return READ;
         case 3: return JOIN_GROUP;
         case 4: return HEARTBEAT;
-        case 5: return REJOIN;
+        case 5: return POLL;
         case 6: return LEAVE_GROUP;
         case 7: return COMMIT;
         case 8: return AUTH;
@@ -221,35 +221,35 @@ private static final long serialVersionUID = 0L;
     return io.flourine.sdk.proto.HeartbeatRequest.getDefaultInstance();
   }
 
-  public static final int REJOIN_FIELD_NUMBER = 5;
+  public static final int POLL_FIELD_NUMBER = 5;
   /**
-   * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
-   * @return Whether the rejoin field is set.
+   * <code>.flourine.wire.PollRequest poll = 5;</code>
+   * @return Whether the poll field is set.
    */
   @java.lang.Override
-  public boolean hasRejoin() {
+  public boolean hasPoll() {
     return messageCase_ == 5;
   }
   /**
-   * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
-   * @return The rejoin.
+   * <code>.flourine.wire.PollRequest poll = 5;</code>
+   * @return The poll.
    */
   @java.lang.Override
-  public io.flourine.sdk.proto.RejoinRequest getRejoin() {
+  public io.flourine.sdk.proto.PollRequest getPoll() {
     if (messageCase_ == 5) {
-       return (io.flourine.sdk.proto.RejoinRequest) message_;
+       return (io.flourine.sdk.proto.PollRequest) message_;
     }
-    return io.flourine.sdk.proto.RejoinRequest.getDefaultInstance();
+    return io.flourine.sdk.proto.PollRequest.getDefaultInstance();
   }
   /**
-   * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+   * <code>.flourine.wire.PollRequest poll = 5;</code>
    */
   @java.lang.Override
-  public io.flourine.sdk.proto.RejoinRequestOrBuilder getRejoinOrBuilder() {
+  public io.flourine.sdk.proto.PollRequestOrBuilder getPollOrBuilder() {
     if (messageCase_ == 5) {
-       return (io.flourine.sdk.proto.RejoinRequest) message_;
+       return (io.flourine.sdk.proto.PollRequest) message_;
     }
-    return io.flourine.sdk.proto.RejoinRequest.getDefaultInstance();
+    return io.flourine.sdk.proto.PollRequest.getDefaultInstance();
   }
 
   public static final int LEAVE_GROUP_FIELD_NUMBER = 6;
@@ -372,7 +372,7 @@ private static final long serialVersionUID = 0L;
       output.writeMessage(4, (io.flourine.sdk.proto.HeartbeatRequest) message_);
     }
     if (messageCase_ == 5) {
-      output.writeMessage(5, (io.flourine.sdk.proto.RejoinRequest) message_);
+      output.writeMessage(5, (io.flourine.sdk.proto.PollRequest) message_);
     }
     if (messageCase_ == 6) {
       output.writeMessage(6, (io.flourine.sdk.proto.LeaveGroupRequest) message_);
@@ -410,7 +410,7 @@ private static final long serialVersionUID = 0L;
     }
     if (messageCase_ == 5) {
       size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(5, (io.flourine.sdk.proto.RejoinRequest) message_);
+        .computeMessageSize(5, (io.flourine.sdk.proto.PollRequest) message_);
     }
     if (messageCase_ == 6) {
       size += com.google.protobuf.CodedOutputStream
@@ -458,8 +458,8 @@ private static final long serialVersionUID = 0L;
             .equals(other.getHeartbeat())) return false;
         break;
       case 5:
-        if (!getRejoin()
-            .equals(other.getRejoin())) return false;
+        if (!getPoll()
+            .equals(other.getPoll())) return false;
         break;
       case 6:
         if (!getLeaveGroup()
@@ -505,8 +505,8 @@ private static final long serialVersionUID = 0L;
         hash = (53 * hash) + getHeartbeat().hashCode();
         break;
       case 5:
-        hash = (37 * hash) + REJOIN_FIELD_NUMBER;
-        hash = (53 * hash) + getRejoin().hashCode();
+        hash = (37 * hash) + POLL_FIELD_NUMBER;
+        hash = (53 * hash) + getPoll().hashCode();
         break;
       case 6:
         hash = (37 * hash) + LEAVE_GROUP_FIELD_NUMBER;
@@ -666,8 +666,8 @@ private static final long serialVersionUID = 0L;
       if (heartbeatBuilder_ != null) {
         heartbeatBuilder_.clear();
       }
-      if (rejoinBuilder_ != null) {
-        rejoinBuilder_.clear();
+      if (pollBuilder_ != null) {
+        pollBuilder_.clear();
       }
       if (leaveGroupBuilder_ != null) {
         leaveGroupBuilder_.clear();
@@ -736,8 +736,8 @@ private static final long serialVersionUID = 0L;
         result.message_ = heartbeatBuilder_.build();
       }
       if (messageCase_ == 5 &&
-          rejoinBuilder_ != null) {
-        result.message_ = rejoinBuilder_.build();
+          pollBuilder_ != null) {
+        result.message_ = pollBuilder_.build();
       }
       if (messageCase_ == 6 &&
           leaveGroupBuilder_ != null) {
@@ -782,8 +782,8 @@ private static final long serialVersionUID = 0L;
           mergeHeartbeat(other.getHeartbeat());
           break;
         }
-        case REJOIN: {
-          mergeRejoin(other.getRejoin());
+        case POLL: {
+          mergePoll(other.getPoll());
           break;
         }
         case LEAVE_GROUP: {
@@ -858,7 +858,7 @@ private static final long serialVersionUID = 0L;
             } // case 34
             case 42: {
               input.readMessage(
-                  internalGetRejoinFieldBuilder().getBuilder(),
+                  internalGetPollFieldBuilder().getBuilder(),
                   extensionRegistry);
               messageCase_ = 5;
               break;
@@ -1485,71 +1485,71 @@ private static final long serialVersionUID = 0L;
     }
 
     private com.google.protobuf.SingleFieldBuilder<
-        io.flourine.sdk.proto.RejoinRequest, io.flourine.sdk.proto.RejoinRequest.Builder, io.flourine.sdk.proto.RejoinRequestOrBuilder> rejoinBuilder_;
+        io.flourine.sdk.proto.PollRequest, io.flourine.sdk.proto.PollRequest.Builder, io.flourine.sdk.proto.PollRequestOrBuilder> pollBuilder_;
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
-     * @return Whether the rejoin field is set.
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
+     * @return Whether the poll field is set.
      */
     @java.lang.Override
-    public boolean hasRejoin() {
+    public boolean hasPoll() {
       return messageCase_ == 5;
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
-     * @return The rejoin.
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
+     * @return The poll.
      */
     @java.lang.Override
-    public io.flourine.sdk.proto.RejoinRequest getRejoin() {
-      if (rejoinBuilder_ == null) {
+    public io.flourine.sdk.proto.PollRequest getPoll() {
+      if (pollBuilder_ == null) {
         if (messageCase_ == 5) {
-          return (io.flourine.sdk.proto.RejoinRequest) message_;
+          return (io.flourine.sdk.proto.PollRequest) message_;
         }
-        return io.flourine.sdk.proto.RejoinRequest.getDefaultInstance();
+        return io.flourine.sdk.proto.PollRequest.getDefaultInstance();
       } else {
         if (messageCase_ == 5) {
-          return rejoinBuilder_.getMessage();
+          return pollBuilder_.getMessage();
         }
-        return io.flourine.sdk.proto.RejoinRequest.getDefaultInstance();
+        return io.flourine.sdk.proto.PollRequest.getDefaultInstance();
       }
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
-    public Builder setRejoin(io.flourine.sdk.proto.RejoinRequest value) {
-      if (rejoinBuilder_ == null) {
+    public Builder setPoll(io.flourine.sdk.proto.PollRequest value) {
+      if (pollBuilder_ == null) {
         if (value == null) {
           throw new NullPointerException();
         }
         message_ = value;
         onChanged();
       } else {
-        rejoinBuilder_.setMessage(value);
+        pollBuilder_.setMessage(value);
       }
       messageCase_ = 5;
       return this;
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
-    public Builder setRejoin(
-        io.flourine.sdk.proto.RejoinRequest.Builder builderForValue) {
-      if (rejoinBuilder_ == null) {
+    public Builder setPoll(
+        io.flourine.sdk.proto.PollRequest.Builder builderForValue) {
+      if (pollBuilder_ == null) {
         message_ = builderForValue.build();
         onChanged();
       } else {
-        rejoinBuilder_.setMessage(builderForValue.build());
+        pollBuilder_.setMessage(builderForValue.build());
       }
       messageCase_ = 5;
       return this;
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
-    public Builder mergeRejoin(io.flourine.sdk.proto.RejoinRequest value) {
-      if (rejoinBuilder_ == null) {
+    public Builder mergePoll(io.flourine.sdk.proto.PollRequest value) {
+      if (pollBuilder_ == null) {
         if (messageCase_ == 5 &&
-            message_ != io.flourine.sdk.proto.RejoinRequest.getDefaultInstance()) {
-          message_ = io.flourine.sdk.proto.RejoinRequest.newBuilder((io.flourine.sdk.proto.RejoinRequest) message_)
+            message_ != io.flourine.sdk.proto.PollRequest.getDefaultInstance()) {
+          message_ = io.flourine.sdk.proto.PollRequest.newBuilder((io.flourine.sdk.proto.PollRequest) message_)
               .mergeFrom(value).buildPartial();
         } else {
           message_ = value;
@@ -1557,19 +1557,19 @@ private static final long serialVersionUID = 0L;
         onChanged();
       } else {
         if (messageCase_ == 5) {
-          rejoinBuilder_.mergeFrom(value);
+          pollBuilder_.mergeFrom(value);
         } else {
-          rejoinBuilder_.setMessage(value);
+          pollBuilder_.setMessage(value);
         }
       }
       messageCase_ = 5;
       return this;
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
-    public Builder clearRejoin() {
-      if (rejoinBuilder_ == null) {
+    public Builder clearPoll() {
+      if (pollBuilder_ == null) {
         if (messageCase_ == 5) {
           messageCase_ = 0;
           message_ = null;
@@ -1580,50 +1580,50 @@ private static final long serialVersionUID = 0L;
           messageCase_ = 0;
           message_ = null;
         }
-        rejoinBuilder_.clear();
+        pollBuilder_.clear();
       }
       return this;
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
-    public io.flourine.sdk.proto.RejoinRequest.Builder getRejoinBuilder() {
-      return internalGetRejoinFieldBuilder().getBuilder();
+    public io.flourine.sdk.proto.PollRequest.Builder getPollBuilder() {
+      return internalGetPollFieldBuilder().getBuilder();
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
     @java.lang.Override
-    public io.flourine.sdk.proto.RejoinRequestOrBuilder getRejoinOrBuilder() {
-      if ((messageCase_ == 5) && (rejoinBuilder_ != null)) {
-        return rejoinBuilder_.getMessageOrBuilder();
+    public io.flourine.sdk.proto.PollRequestOrBuilder getPollOrBuilder() {
+      if ((messageCase_ == 5) && (pollBuilder_ != null)) {
+        return pollBuilder_.getMessageOrBuilder();
       } else {
         if (messageCase_ == 5) {
-          return (io.flourine.sdk.proto.RejoinRequest) message_;
+          return (io.flourine.sdk.proto.PollRequest) message_;
         }
-        return io.flourine.sdk.proto.RejoinRequest.getDefaultInstance();
+        return io.flourine.sdk.proto.PollRequest.getDefaultInstance();
       }
     }
     /**
-     * <code>.flourine.wire.RejoinRequest rejoin = 5;</code>
+     * <code>.flourine.wire.PollRequest poll = 5;</code>
      */
     private com.google.protobuf.SingleFieldBuilder<
-        io.flourine.sdk.proto.RejoinRequest, io.flourine.sdk.proto.RejoinRequest.Builder, io.flourine.sdk.proto.RejoinRequestOrBuilder> 
-        internalGetRejoinFieldBuilder() {
-      if (rejoinBuilder_ == null) {
+        io.flourine.sdk.proto.PollRequest, io.flourine.sdk.proto.PollRequest.Builder, io.flourine.sdk.proto.PollRequestOrBuilder> 
+        internalGetPollFieldBuilder() {
+      if (pollBuilder_ == null) {
         if (!(messageCase_ == 5)) {
-          message_ = io.flourine.sdk.proto.RejoinRequest.getDefaultInstance();
+          message_ = io.flourine.sdk.proto.PollRequest.getDefaultInstance();
         }
-        rejoinBuilder_ = new com.google.protobuf.SingleFieldBuilder<
-            io.flourine.sdk.proto.RejoinRequest, io.flourine.sdk.proto.RejoinRequest.Builder, io.flourine.sdk.proto.RejoinRequestOrBuilder>(
-                (io.flourine.sdk.proto.RejoinRequest) message_,
+        pollBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            io.flourine.sdk.proto.PollRequest, io.flourine.sdk.proto.PollRequest.Builder, io.flourine.sdk.proto.PollRequestOrBuilder>(
+                (io.flourine.sdk.proto.PollRequest) message_,
                 getParentForChildren(),
                 isClean());
         message_ = null;
       }
       messageCase_ = 5;
       onChanged();
-      return rejoinBuilder_;
+      return pollBuilder_;
     }
 
     private com.google.protobuf.SingleFieldBuilder<

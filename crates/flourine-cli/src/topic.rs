@@ -12,8 +12,6 @@ pub enum TopicAction {
     /// Create a new topic
     Create {
         name: String,
-        #[arg(long, default_value = "1")]
-        partitions: i32,
         #[arg(long)]
         retention_hours: Option<i32>,
     },
@@ -38,16 +36,15 @@ pub async fn run(action: TopicAction, client: &FlourineClient) -> Result<()> {
                 return Ok(());
             }
             println!(
-                "{:<6} {:<30} {:<12} {:<16} Created",
-                "ID", "Name", "Partitions", "Retention (hrs)"
+                "{:<6} {:<30} {:<16} Created",
+                "ID", "Name", "Retention (hrs)"
             );
-            println!("{}", "-".repeat(80));
+            println!("{}", "-".repeat(70));
             for t in topics {
                 println!(
-                    "{:<6} {:<30} {:<12} {:<16} {}",
+                    "{:<6} {:<30} {:<16} {}",
                     t.topic_id,
                     t.name,
-                    t.partition_count,
                     t.retention_hours,
                     t.created_at.format("%Y-%m-%d %H:%M"),
                 );
@@ -55,17 +52,15 @@ pub async fn run(action: TopicAction, client: &FlourineClient) -> Result<()> {
         }
         TopicAction::Create {
             name,
-            partitions,
             retention_hours,
         } => {
-            let resp = client.create_topic(&name, partitions, retention_hours).await?;
+            let resp = client.create_topic(&name, retention_hours).await?;
             println!("Created topic {} (id={})", name, resp.topic_id);
         }
         TopicAction::Get { id } => {
             let t = client.get_topic(id).await?;
             println!("Topic ID:     {}", t.topic_id);
             println!("Name:         {}", t.name);
-            println!("Partitions:   {}", t.partition_count);
             println!("Retention:    {} hours", t.retention_hours);
             println!("Created:      {}", t.created_at.format("%Y-%m-%d %H:%M:%S"));
         }

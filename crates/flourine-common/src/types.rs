@@ -1,12 +1,12 @@
 //! Core data types for Flourine eventbus
 
-use crate::{Offset, PartitionId, SchemaId, TopicId};
+use crate::{Offset, SchemaId, TopicId};
 use bytes::Bytes;
 
 /// A single record (key-value pair)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
-    /// Optional key for partitioning
+    /// Optional key
     pub key: Option<Bytes>,
     /// Record value (Avro-encoded according to schema)
     pub value: Bytes,
@@ -35,13 +35,11 @@ impl Record {
     }
 }
 
-/// A batch of records for a specific topic/partition/schema
+/// A batch of records for a specific topic/schema
 #[derive(Debug, Clone)]
 pub struct RecordBatch {
     /// Topic this batch belongs to
     pub topic_id: TopicId,
-    /// Partition within the topic
-    pub partition_id: PartitionId,
     /// Schema ID for the record values
     pub schema_id: SchemaId,
     /// Records in this batch
@@ -50,10 +48,9 @@ pub struct RecordBatch {
 
 impl RecordBatch {
     /// Create a new empty batch
-    pub fn new(topic_id: TopicId, partition_id: PartitionId, schema_id: SchemaId) -> Self {
+    pub fn new(topic_id: TopicId, schema_id: SchemaId) -> Self {
         RecordBatch {
             topic_id,
-            partition_id,
             schema_id,
             records: Vec::new(),
         }
@@ -85,8 +82,6 @@ impl RecordBatch {
 pub struct BatchAck {
     /// Topic this batch belongs to
     pub topic_id: TopicId,
-    /// Partition within the topic
-    pub partition_id: PartitionId,
     /// Schema ID for the record values
     pub schema_id: SchemaId,
     /// First offset in this batch (inclusive)
@@ -129,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_segment_record_count() {
-        let mut batch = RecordBatch::new(TopicId(1), PartitionId(0), SchemaId(100));
+        let mut batch = RecordBatch::new(TopicId(1), SchemaId(100));
         batch.push(Record::new("a"));
         batch.push(Record::new("b"));
         assert_eq!(batch.len(), 2);
@@ -138,14 +133,14 @@ mod tests {
 
     #[test]
     fn test_segment_empty() {
-        let batch = RecordBatch::new(TopicId(1), PartitionId(0), SchemaId(100));
+        let batch = RecordBatch::new(TopicId(1), SchemaId(100));
         assert!(batch.is_empty());
         assert_eq!(batch.len(), 0);
     }
 
     #[test]
     fn test_segment_size() {
-        let mut batch = RecordBatch::new(TopicId(1), PartitionId(0), SchemaId(100));
+        let mut batch = RecordBatch::new(TopicId(1), SchemaId(100));
         batch.push(Record::new("hello")); // 5 bytes
         batch.push(Record::new("world")); // 5 bytes
         assert_eq!(batch.size(), 10);
@@ -155,7 +150,6 @@ mod tests {
     fn test_segment_ack_record_count() {
         let ack = BatchAck {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             start_offset: Offset(10),
             end_offset: Offset(19),

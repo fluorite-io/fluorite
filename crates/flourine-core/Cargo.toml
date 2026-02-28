@@ -21,8 +21,8 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "compression-gzip"] }
 
 # Arrow and Parquet
-arrow = { version = "53" }
-parquet = { version = "53", features = ["arrow", "snap", "zstd", "lz4"] }
+arrow = { version = "57" }
+parquet = { version = "57", features = ["arrow", "snap", "zstd", "lz4"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

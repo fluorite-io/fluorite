@@ -11,56 +11,20 @@ public interface ReadRequestOrBuilder extends
     com.google.protobuf.MessageOrBuilder {
 
   /**
-   * <code>string group_id = 1;</code>
-   * @return The groupId.
+   * <code>uint32 topic_id = 1;</code>
+   * @return The topicId.
    */
-  java.lang.String getGroupId();
-  /**
-   * <code>string group_id = 1;</code>
-   * @return The bytes for groupId.
-   */
-  com.google.protobuf.ByteString
-      getGroupIdBytes();
+  int getTopicId();
 
   /**
-   * <code>string reader_id = 2;</code>
-   * @return The readerId.
+   * <code>uint64 offset = 2;</code>
+   * @return The offset.
    */
-  java.lang.String getReaderId();
-  /**
-   * <code>string reader_id = 2;</code>
-   * @return The bytes for readerId.
-   */
-  com.google.protobuf.ByteString
-      getReaderIdBytes();
+  long getOffset();
 
   /**
-   * <code>uint64 generation = 3;</code>
-   * @return The generation.
+   * <code>uint32 max_bytes = 3;</code>
+   * @return The maxBytes.
    */
-  long getGeneration();
-
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  java.util.List<io.flourine.sdk.proto.PartitionRead> 
-      getReadsList();
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  io.flourine.sdk.proto.PartitionRead getReads(int index);
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  int getReadsCount();
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  java.util.List<? extends io.flourine.sdk.proto.PartitionReadOrBuilder> 
-      getReadsOrBuilderList();
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  io.flourine.sdk.proto.PartitionReadOrBuilder getReadsOrBuilder(
-      int index);
+  int getMaxBytes();
 }

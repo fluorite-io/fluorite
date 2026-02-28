@@ -13,9 +13,11 @@ pub const ERR_INVALID_MESSAGE_TYPE: u16 = 1003;
 pub const ERR_BACKPRESSURE: u16 = 1004;
 /// Internal server failure.
 pub const ERR_INTERNAL_ERROR: u16 = 1005;
-/// Commit rejected because reader does not own partition.
+/// Commit rejected because reader does not own the range.
 pub const ERR_NOT_OWNER: u16 = 1006;
 /// Sequence number is stale.
 pub const ERR_STALE_SEQUENCE: u16 = 1007;
 /// Another sequence for same writer is currently in flight.
 pub const ERR_SEQUENCE_IN_FLIGHT: u16 = 1008;
+/// Reader has too many outstanding (uncommitted) poll ranges.
+pub const ERR_MAX_INFLIGHT: u16 = 1009;

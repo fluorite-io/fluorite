@@ -12,17 +12,15 @@ message Record {
 
 message RecordBatch {
   uint32 topic_id = 1;
-  uint32 partition_id = 2;
-  uint32 schema_id = 3;
-  repeated Record records = 4;
+  uint32 schema_id = 2;
+  repeated Record records = 3;
 }
 
 message BatchAck {
   uint32 topic_id = 1;
-  uint32 partition_id = 2;
-  uint32 schema_id = 3;
-  uint64 start_offset = 4;
-  uint64 end_offset = 5;
+  uint32 schema_id = 2;
+  uint64 start_offset = 3;
+  uint64 end_offset = 4;
 }
 
 message AppendRequest {
@@ -39,33 +37,24 @@ message AppendResponse {
   repeated BatchAck append_acks = 5;
 }
 
-message PartitionRead {
-  uint32 topic_id = 1;
-  uint32 partition_id = 2;
-  uint64 offset = 3;
-  uint32 max_bytes = 4;
-}
-
 message ReadRequest {
-  string group_id = 1;
-  string reader_id = 2;
-  uint64 generation = 3;
-  repeated PartitionRead reads = 4;
+  uint32 topic_id = 1;
+  uint64 offset = 2;
+  uint32 max_bytes = 3;
 }
 
-message PartitionResult {
+message TopicResult {
   uint32 topic_id = 1;
-  uint32 partition_id = 2;
-  uint32 schema_id = 3;
-  uint64 high_watermark = 4;
-  repeated Record records = 5;
+  uint32 schema_id = 2;
+  uint64 high_watermark = 3;
+  repeated Record records = 4;
 }
 
 message ReadResponse {
   bool success = 1;
   uint32 error_code = 2;
   string error_message = 3;
-  repeated PartitionResult results = 4;
+  repeated TopicResult results = 4;
 }
 
 message JoinGroupRequest {
@@ -74,60 +63,45 @@ message JoinGroupRequest {
   repeated uint32 topic_ids = 3;
 }
 
-message PartitionAssignment {
-  uint32 topic_id = 1;
-  uint32 partition_id = 2;
-  uint64 committed_offset = 3;
-}
-
 message JoinGroupResponse {
   bool success = 1;
   uint32 error_code = 2;
   string error_message = 3;
-  uint64 generation = 4;
-  repeated PartitionAssignment assignments = 5;
 }
 
 message HeartbeatRequest {
   string group_id = 1;
   uint32 topic_id = 2;
   string reader_id = 3;
-  uint64 generation = 4;
 }
 
 enum HeartbeatStatus {
   HEARTBEAT_STATUS_OK = 0;
-  HEARTBEAT_STATUS_REBALANCE_NEEDED = 1;
-  HEARTBEAT_STATUS_UNKNOWN_MEMBER = 2;
+  HEARTBEAT_STATUS_UNKNOWN_MEMBER = 1;
 }
 
 message HeartbeatResponse {
   bool success = 1;
   uint32 error_code = 2;
   string error_message = 3;
-  uint64 generation = 4;
-  HeartbeatStatus status = 5;
+  HeartbeatStatus status = 4;
 }
 
-message RejoinRequest {
+message PollRequest {
   string group_id = 1;
   uint32 topic_id = 2;
   string reader_id = 3;
-  uint64 generation = 4;
+  uint32 max_bytes = 4;
 }
 
-enum RejoinStatus {
-  REJOIN_STATUS_OK = 0;
-  REJOIN_STATUS_REBALANCE_NEEDED = 1;
-}
-
-message RejoinResponse {
+message PollResponse {
   bool success = 1;
   uint32 error_code = 2;
   string error_message = 3;
-  uint64 generation = 4;
-  RejoinStatus status = 5;
-  repeated PartitionAssignment assignments = 6;
+  repeated TopicResult results = 4;
+  uint64 start_offset = 5;
+  uint64 end_offset = 6;
+  uint64 lease_deadline_ms = 7;
 }
 
 message LeaveGroupRequest {
@@ -142,17 +116,12 @@ message LeaveGroupResponse {
   string error_message = 3;
 }
 
-message PartitionCommit {
-  uint32 topic_id = 1;
-  uint32 partition_id = 2;
-  uint64 offset = 3;
-}
-
 message CommitRequest {
   string group_id = 1;
   string reader_id = 2;
-  uint64 generation = 3;
-  repeated PartitionCommit commits = 4;
+  uint32 topic_id = 3;
+  uint64 start_offset = 4;
+  uint64 end_offset = 5;
 }
 
 message CommitResponse {
@@ -177,7 +146,7 @@ message ClientMessage {
     ReadRequest read = 2;
     JoinGroupRequest join_group = 3;
     HeartbeatRequest heartbeat = 4;
-    RejoinRequest rejoin = 5;
+    PollRequest poll = 5;
     LeaveGroupRequest leave_group = 6;
     CommitRequest commit = 7;
     AuthRequest auth = 8;
@@ -190,7 +159,7 @@ message ServerMessage {
     ReadResponse read = 2;
     JoinGroupResponse join_group = 3;
     HeartbeatResponse heartbeat = 4;
-    RejoinResponse rejoin = 5;
+    PollResponse poll = 5;
     LeaveGroupResponse leave_group = 6;
     CommitResponse commit = 7;
     AuthResponse auth = 8;

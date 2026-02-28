@@ -7,15 +7,10 @@ import io.flourine.sdk.proto.HeartbeatRequest;
 import io.flourine.sdk.proto.HeartbeatStatus;
 import io.flourine.sdk.proto.JoinGroupRequest;
 import io.flourine.sdk.proto.LeaveGroupRequest;
-import io.flourine.sdk.proto.PartitionAssignment;
-import io.flourine.sdk.proto.PartitionCommit;
-import io.flourine.sdk.proto.PartitionRead;
-import io.flourine.sdk.proto.PartitionResult;
-import io.flourine.sdk.proto.ReadRequest;
-import io.flourine.sdk.proto.ReadResponse;
-import io.flourine.sdk.proto.RejoinRequest;
-import io.flourine.sdk.proto.RejoinStatus;
+import io.flourine.sdk.proto.PollRequest;
+import io.flourine.sdk.proto.PollResponse;
 import io.flourine.sdk.proto.ServerMessage;
+import io.flourine.sdk.proto.TopicResult;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.slf4j.Logger;
@@ -25,9 +20,7 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,17 +31,16 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * Reader client with reader group support.
  * <p>
+ * Uses a poll-based model where the broker dispatches work to readers.
  * Wire payloads use generated protobuf message classes directly.
  */
 public class GroupReader implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(GroupReader.class);
     private static final int RESPONSE_QUEUE_CAPACITY = 1000;
-    private static final int MAX_REJOIN_RETRIES = 10;
 
     public enum State {
         INIT,
         ACTIVE,
-        REBALANCING,
         STOPPED
     }
 
@@ -56,11 +48,32 @@ public class GroupReader implements AutoCloseable {
     private final FlourineWebSocketClient client;
     private final BlockingQueue<byte[]> responseQueue;
 
+    /**
+     * A batch of results from a single poll, with offset range and lease deadline.
+     * Pass this to {@link #commit(PollBatch)} to commit the specific range.
+     */
+    public static class PollBatch {
+        private final List<TopicResult> results;
+        private final long startOffset;
+        private final long endOffset;
+        private final long leaseDeadlineMs;
+
+        public PollBatch(List<TopicResult> results, long startOffset, long endOffset, long leaseDeadlineMs) {
+            this.results = results;
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.leaseDeadlineMs = leaseDeadlineMs;
+        }
+
+        public List<TopicResult> getResults() { return results; }
+        public long getStartOffset() { return startOffset; }
+        public long getEndOffset() { return endOffset; }
+        public long getLeaseDeadlineMs() { return leaseDeadlineMs; }
+    }
+
     private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
     private State state = State.INIT;
-    private long generation = 0;
-    private List<PartitionAssignment> assignments = new ArrayList<>();
-    private final Map<Integer, Long> offsets = new ConcurrentHashMap<>();
+    private final List<long[]> inflight = new ArrayList<>();
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private ScheduledExecutorService heartbeatExecutor;
@@ -148,19 +161,10 @@ public class GroupReader implements AutoCloseable {
         }
 
         try {
-            long gen;
-            stateLock.readLock().lock();
-            try {
-                gen = generation;
-            } finally {
-                stateLock.readLock().unlock();
-            }
-
             HeartbeatRequest req = HeartbeatRequest.newBuilder()
                     .setGroupId(config.getGroupId())
                     .setTopicId(config.getTopicId())
                     .setReaderId(config.getReaderId())
-                    .setGeneration(gen)
                     .build();
 
             client.send(ClientMessage.newBuilder().setHeartbeat(req).build().toByteArray());
@@ -184,10 +188,7 @@ public class GroupReader implements AutoCloseable {
             }
 
             if (resp.getStatus() == HeartbeatStatus.HEARTBEAT_STATUS_OK) {
-                log.debug("Heartbeat OK at generation {}", resp.getGeneration());
-            } else if (resp.getStatus() == HeartbeatStatus.HEARTBEAT_STATUS_REBALANCE_NEEDED) {
-                log.info("Rebalance needed, new generation {}", resp.getGeneration());
-                doRejoin(resp.getGeneration());
+                log.debug("Heartbeat OK");
             } else if (resp.getStatus() == HeartbeatStatus.HEARTBEAT_STATUS_UNKNOWN_MEMBER) {
                 log.warn("Unknown member, rejoining group");
                 doJoin();
@@ -223,90 +224,57 @@ public class GroupReader implements AutoCloseable {
         }
     }
 
-    public long getGeneration() {
+    public PollBatch poll() throws FlourineException {
         stateLock.readLock().lock();
         try {
-            return generation;
-        } finally {
-            stateLock.readLock().unlock();
-        }
-    }
-
-    public List<PartitionAssignment> getAssignments() {
-        stateLock.readLock().lock();
-        try {
-            return new ArrayList<>(assignments);
-        } finally {
-            stateLock.readLock().unlock();
-        }
-    }
-
-    public List<PartitionResult> poll() throws FlourineException {
-        stateLock.readLock().lock();
-        State currentState;
-        List<PartitionAssignment> currentAssignments;
-        long currentGen;
-        try {
-            currentState = state;
-            currentAssignments = new ArrayList<>(assignments);
-            currentGen = generation;
+            if (state != State.ACTIVE) {
+                throw new FlourineException.ProtocolException("Reader not active: " + state);
+            }
         } finally {
             stateLock.readLock().unlock();
         }
 
-        if (currentState != State.ACTIVE) {
-            throw new FlourineException.ProtocolException("Reader not active: " + currentState);
-        }
-
-        if (currentAssignments.isEmpty()) {
-            return List.of();
-        }
-
-        List<PartitionRead> reads = new ArrayList<>();
-        for (PartitionAssignment a : currentAssignments) {
-            long offset = offsets.getOrDefault(a.getPartitionId(), a.getCommittedOffset());
-            reads.add(PartitionRead.newBuilder()
-                    .setTopicId(config.getTopicId())
-                    .setPartitionId(a.getPartitionId())
-                    .setOffset(offset)
-                    .setMaxBytes(config.getMaxBytes())
-                    .build());
-        }
-
-        ReadRequest req = ReadRequest.newBuilder()
+        PollRequest req = PollRequest.newBuilder()
                 .setGroupId(config.getGroupId())
+                .setTopicId(config.getTopicId())
                 .setReaderId(config.getReaderId())
-                .setGeneration(currentGen)
-                .addAllReads(reads)
+                .setMaxBytes(config.getMaxBytes())
                 .build();
-        client.send(ClientMessage.newBuilder().setRead(req).build().toByteArray());
+        client.send(ClientMessage.newBuilder().setPoll(req).build().toByteArray());
 
         try {
             byte[] response = responseQueue.poll(config.getTimeout().toMillis(), TimeUnit.MILLISECONDS);
             if (response == null) {
-                throw new FlourineException.TimeoutException("Read timeout");
+                throw new FlourineException.TimeoutException("Poll timeout");
             }
 
             ServerMessage envelope = ServerMessage.parseFrom(response);
-            if (envelope.getMessageCase() != ServerMessage.MessageCase.READ) {
+            if (envelope.getMessageCase() != ServerMessage.MessageCase.POLL) {
                 throw new FlourineException.ProtocolException("Unexpected response type or empty response");
             }
 
-            ReadResponse resp = envelope.getRead();
+            PollResponse resp = envelope.getPoll();
             if (!resp.getSuccess()) {
                 throw new FlourineException.ProtocolException(
-                        "Read failed (" + resp.getErrorCode() + "): " + resp.getErrorMessage()
+                        "Poll failed (" + resp.getErrorCode() + "): " + resp.getErrorMessage()
                 );
             }
 
-            for (PartitionResult pr : resp.getResultsList()) {
-                if (pr.getRecordsCount() > 0) {
-                    long current = offsets.getOrDefault(pr.getPartitionId(), 0L);
-                    offsets.put(pr.getPartitionId(), current + pr.getRecordsCount());
+            if (resp.getStartOffset() != resp.getEndOffset()) {
+                stateLock.writeLock().lock();
+                try {
+                    inflight.add(new long[]{resp.getStartOffset(), resp.getEndOffset()});
+                } finally {
+                    stateLock.writeLock().unlock();
                 }
             }
 
-            return new ArrayList<>(resp.getResultsList());
+            return new PollBatch(
+                    new ArrayList<>(resp.getResultsList()),
+                    resp.getStartOffset(),
+                    resp.getEndOffset(),
+                    resp.getLeaseDeadlineMs()
+            );
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlourineException.ConnectionException("Interrupted", e);
@@ -315,33 +283,17 @@ public class GroupReader implements AutoCloseable {
         }
     }
 
-    public void commit() throws FlourineException {
-        long gen;
-        stateLock.readLock().lock();
-        try {
-            gen = generation;
-        } finally {
-            stateLock.readLock().unlock();
-        }
-
-        if (offsets.isEmpty()) {
+    public void commit(PollBatch batch) throws FlourineException {
+        if (batch.getStartOffset() == batch.getEndOffset()) {
             return;
-        }
-
-        List<PartitionCommit> commits = new ArrayList<>();
-        for (Map.Entry<Integer, Long> entry : offsets.entrySet()) {
-            commits.add(PartitionCommit.newBuilder()
-                    .setTopicId(config.getTopicId())
-                    .setPartitionId(entry.getKey())
-                    .setOffset(entry.getValue())
-                    .build());
         }
 
         CommitRequest req = CommitRequest.newBuilder()
                 .setGroupId(config.getGroupId())
                 .setReaderId(config.getReaderId())
-                .setGeneration(gen)
-                .addAllCommits(commits)
+                .setTopicId(config.getTopicId())
+                .setStartOffset(batch.getStartOffset())
+                .setEndOffset(batch.getEndOffset())
                 .build();
         client.send(ClientMessage.newBuilder().setCommit(req).build().toByteArray());
 
@@ -361,6 +313,14 @@ public class GroupReader implements AutoCloseable {
                 throw new FlourineException.ProtocolException(
                         "Commit failed (" + resp.getErrorCode() + "): " + resp.getErrorMessage()
                 );
+            }
+
+            stateLock.writeLock().lock();
+            try {
+                long s = batch.getStartOffset(), e = batch.getEndOffset();
+                inflight.removeIf(r -> r[0] == s && r[1] == e);
+            } finally {
+                stateLock.writeLock().unlock();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -398,18 +358,13 @@ public class GroupReader implements AutoCloseable {
 
             stateLock.writeLock().lock();
             try {
-                generation = resp.getGeneration();
-                assignments = new ArrayList<>(resp.getAssignmentsList());
-                offsets.clear();
-                for (PartitionAssignment a : assignments) {
-                    offsets.put(a.getPartitionId(), a.getCommittedOffset());
-                }
+                inflight.clear();
                 state = State.ACTIVE;
             } finally {
                 stateLock.writeLock().unlock();
             }
 
-            log.info("Joined group {} at generation {}", config.getGroupId(), resp.getGeneration());
+            log.info("Joined group {}", config.getGroupId());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlourineException.ConnectionException("Interrupted", e);
@@ -418,96 +373,20 @@ public class GroupReader implements AutoCloseable {
         }
     }
 
-    private void doRejoin(long newGeneration) throws FlourineException {
-        stateLock.writeLock().lock();
-        try {
-            state = State.REBALANCING;
-        } finally {
-            stateLock.writeLock().unlock();
-        }
-
-        try {
-            commit();
-        } catch (FlourineException e) {
-            log.warn("Failed to commit offsets during rebalance", e);
-        }
-
-        try {
-            Thread.sleep(config.getRebalanceDelay().toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new FlourineException.ConnectionException("Interrupted", e);
-        }
-
-        long currentGen = newGeneration;
-        int retries = 0;
-        while (retries < MAX_REJOIN_RETRIES) {
-            RejoinRequest req = RejoinRequest.newBuilder()
-                    .setGroupId(config.getGroupId())
-                    .setTopicId(config.getTopicId())
-                    .setReaderId(config.getReaderId())
-                    .setGeneration(currentGen)
-                    .build();
-
-            client.send(ClientMessage.newBuilder().setRejoin(req).build().toByteArray());
-
-            try {
-                byte[] response = responseQueue.poll(config.getTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (response == null) {
-                    throw new FlourineException.TimeoutException("Rejoin timeout");
-                }
-
-                ServerMessage envelope = ServerMessage.parseFrom(response);
-                if (envelope.getMessageCase() != ServerMessage.MessageCase.REJOIN) {
-                    throw new FlourineException.ProtocolException("Unexpected response type or empty response");
-                }
-
-                io.flourine.sdk.proto.RejoinResponse resp = envelope.getRejoin();
-                if (!resp.getSuccess()) {
-                    throw new FlourineException.ProtocolException(
-                            "Rejoin failed (" + resp.getErrorCode() + "): " + resp.getErrorMessage()
-                    );
-                }
-
-                if (resp.getStatus() == RejoinStatus.REJOIN_STATUS_REBALANCE_NEEDED) {
-                    currentGen = resp.getGeneration();
-                    retries++;
-                    log.debug("Rebalance still in progress, retry {}/{}", retries, MAX_REJOIN_RETRIES);
-                    Thread.sleep(config.getRebalanceDelay().toMillis());
-                    continue;
-                }
-
-                stateLock.writeLock().lock();
-                try {
-                    generation = resp.getGeneration();
-                    assignments = new ArrayList<>(resp.getAssignmentsList());
-                    offsets.clear();
-                    for (PartitionAssignment a : assignments) {
-                        offsets.put(a.getPartitionId(), a.getCommittedOffset());
-                    }
-                    state = State.ACTIVE;
-                } finally {
-                    stateLock.writeLock().unlock();
-                }
-
-                log.info("Rejoined group {} at generation {}", config.getGroupId(), resp.getGeneration());
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new FlourineException.ConnectionException("Interrupted", e);
-            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-                throw new FlourineException.ProtocolException("Failed to decode response", e);
-            }
-        }
-
-        throw new FlourineException.ProtocolException("Rejoin failed after " + MAX_REJOIN_RETRIES + " retries");
-    }
-
     private void doLeave() throws FlourineException {
+        List<long[]> ranges;
+        stateLock.readLock().lock();
         try {
-            commit();
-        } catch (FlourineException e) {
-            log.warn("Failed to commit offsets during leave", e);
+            ranges = new ArrayList<>(inflight);
+        } finally {
+            stateLock.readLock().unlock();
+        }
+        for (long[] range : ranges) {
+            try {
+                commit(new PollBatch(List.of(), range[0], range[1], 0));
+            } catch (FlourineException e) {
+                log.warn("Failed to commit range [{}, {}) during leave", range[0], range[1], e);
+            }
         }
 
         LeaveGroupRequest req = LeaveGroupRequest.newBuilder()

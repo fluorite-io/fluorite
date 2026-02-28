@@ -35,26 +35,26 @@ public interface ReadResponseOrBuilder extends
       getErrorMessageBytes();
 
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
-  java.util.List<io.flourine.sdk.proto.PartitionResult> 
+  java.util.List<io.flourine.sdk.proto.TopicResult> 
       getResultsList();
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
-  io.flourine.sdk.proto.PartitionResult getResults(int index);
+  io.flourine.sdk.proto.TopicResult getResults(int index);
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
   int getResultsCount();
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
-  java.util.List<? extends io.flourine.sdk.proto.PartitionResultOrBuilder> 
+  java.util.List<? extends io.flourine.sdk.proto.TopicResultOrBuilder> 
       getResultsOrBuilderList();
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
-  io.flourine.sdk.proto.PartitionResultOrBuilder getResultsOrBuilder(
+  io.flourine.sdk.proto.TopicResultOrBuilder getResultsOrBuilder(
       int index);
 }

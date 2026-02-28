@@ -28,9 +28,6 @@ private static final long serialVersionUID = 0L;
     super(builder);
   }
   private ReadRequest() {
-    groupId_ = "";
-    readerId_ = "";
-    reads_ = java.util.Collections.emptyList();
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -46,134 +43,37 @@ private static final long serialVersionUID = 0L;
             io.flourine.sdk.proto.ReadRequest.class, io.flourine.sdk.proto.ReadRequest.Builder.class);
   }
 
-  public static final int GROUP_ID_FIELD_NUMBER = 1;
-  @SuppressWarnings("serial")
-  private volatile java.lang.Object groupId_ = "";
+  public static final int TOPIC_ID_FIELD_NUMBER = 1;
+  private int topicId_ = 0;
   /**
-   * <code>string group_id = 1;</code>
-   * @return The groupId.
+   * <code>uint32 topic_id = 1;</code>
+   * @return The topicId.
    */
   @java.lang.Override
-  public java.lang.String getGroupId() {
-    java.lang.Object ref = groupId_;
-    if (ref instanceof java.lang.String) {
-      return (java.lang.String) ref;
-    } else {
-      com.google.protobuf.ByteString bs = 
-          (com.google.protobuf.ByteString) ref;
-      java.lang.String s = bs.toStringUtf8();
-      groupId_ = s;
-      return s;
-    }
-  }
-  /**
-   * <code>string group_id = 1;</code>
-   * @return The bytes for groupId.
-   */
-  @java.lang.Override
-  public com.google.protobuf.ByteString
-      getGroupIdBytes() {
-    java.lang.Object ref = groupId_;
-    if (ref instanceof java.lang.String) {
-      com.google.protobuf.ByteString b = 
-          com.google.protobuf.ByteString.copyFromUtf8(
-              (java.lang.String) ref);
-      groupId_ = b;
-      return b;
-    } else {
-      return (com.google.protobuf.ByteString) ref;
-    }
+  public int getTopicId() {
+    return topicId_;
   }
 
-  public static final int READER_ID_FIELD_NUMBER = 2;
-  @SuppressWarnings("serial")
-  private volatile java.lang.Object readerId_ = "";
+  public static final int OFFSET_FIELD_NUMBER = 2;
+  private long offset_ = 0L;
   /**
-   * <code>string reader_id = 2;</code>
-   * @return The readerId.
+   * <code>uint64 offset = 2;</code>
+   * @return The offset.
    */
   @java.lang.Override
-  public java.lang.String getReaderId() {
-    java.lang.Object ref = readerId_;
-    if (ref instanceof java.lang.String) {
-      return (java.lang.String) ref;
-    } else {
-      com.google.protobuf.ByteString bs = 
-          (com.google.protobuf.ByteString) ref;
-      java.lang.String s = bs.toStringUtf8();
-      readerId_ = s;
-      return s;
-    }
-  }
-  /**
-   * <code>string reader_id = 2;</code>
-   * @return The bytes for readerId.
-   */
-  @java.lang.Override
-  public com.google.protobuf.ByteString
-      getReaderIdBytes() {
-    java.lang.Object ref = readerId_;
-    if (ref instanceof java.lang.String) {
-      com.google.protobuf.ByteString b = 
-          com.google.protobuf.ByteString.copyFromUtf8(
-              (java.lang.String) ref);
-      readerId_ = b;
-      return b;
-    } else {
-      return (com.google.protobuf.ByteString) ref;
-    }
+  public long getOffset() {
+    return offset_;
   }
 
-  public static final int GENERATION_FIELD_NUMBER = 3;
-  private long generation_ = 0L;
+  public static final int MAX_BYTES_FIELD_NUMBER = 3;
+  private int maxBytes_ = 0;
   /**
-   * <code>uint64 generation = 3;</code>
-   * @return The generation.
+   * <code>uint32 max_bytes = 3;</code>
+   * @return The maxBytes.
    */
   @java.lang.Override
-  public long getGeneration() {
-    return generation_;
-  }
-
-  public static final int READS_FIELD_NUMBER = 4;
-  @SuppressWarnings("serial")
-  private java.util.List<io.flourine.sdk.proto.PartitionRead> reads_;
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  @java.lang.Override
-  public java.util.List<io.flourine.sdk.proto.PartitionRead> getReadsList() {
-    return reads_;
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  @java.lang.Override
-  public java.util.List<? extends io.flourine.sdk.proto.PartitionReadOrBuilder> 
-      getReadsOrBuilderList() {
-    return reads_;
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  @java.lang.Override
-  public int getReadsCount() {
-    return reads_.size();
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  @java.lang.Override
-  public io.flourine.sdk.proto.PartitionRead getReads(int index) {
-    return reads_.get(index);
-  }
-  /**
-   * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-   */
-  @java.lang.Override
-  public io.flourine.sdk.proto.PartitionReadOrBuilder getReadsOrBuilder(
-      int index) {
-    return reads_.get(index);
+  public int getMaxBytes() {
+    return maxBytes_;
   }
 
   private byte memoizedIsInitialized = -1;
@@ -190,17 +90,14 @@ private static final long serialVersionUID = 0L;
   @java.lang.Override
   public void writeTo(com.google.protobuf.CodedOutputStream output)
                       throws java.io.IOException {
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(groupId_)) {
-      com.google.protobuf.GeneratedMessage.writeString(output, 1, groupId_);
+    if (topicId_ != 0) {
+      output.writeUInt32(1, topicId_);
     }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(readerId_)) {
-      com.google.protobuf.GeneratedMessage.writeString(output, 2, readerId_);
+    if (offset_ != 0L) {
+      output.writeUInt64(2, offset_);
     }
-    if (generation_ != 0L) {
-      output.writeUInt64(3, generation_);
-    }
-    for (int i = 0; i < reads_.size(); i++) {
-      output.writeMessage(4, reads_.get(i));
+    if (maxBytes_ != 0) {
+      output.writeUInt32(3, maxBytes_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -211,19 +108,17 @@ private static final long serialVersionUID = 0L;
     if (size != -1) return size;
 
     size = 0;
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(groupId_)) {
-      size += com.google.protobuf.GeneratedMessage.computeStringSize(1, groupId_);
-    }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(readerId_)) {
-      size += com.google.protobuf.GeneratedMessage.computeStringSize(2, readerId_);
-    }
-    if (generation_ != 0L) {
+    if (topicId_ != 0) {
       size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(3, generation_);
+        .computeUInt32Size(1, topicId_);
     }
-    for (int i = 0; i < reads_.size(); i++) {
+    if (offset_ != 0L) {
       size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(4, reads_.get(i));
+        .computeUInt64Size(2, offset_);
+    }
+    if (maxBytes_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeUInt32Size(3, maxBytes_);
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -240,14 +135,12 @@ private static final long serialVersionUID = 0L;
     }
     io.flourine.sdk.proto.ReadRequest other = (io.flourine.sdk.proto.ReadRequest) obj;
 
-    if (!getGroupId()
-        .equals(other.getGroupId())) return false;
-    if (!getReaderId()
-        .equals(other.getReaderId())) return false;
-    if (getGeneration()
-        != other.getGeneration()) return false;
-    if (!getReadsList()
-        .equals(other.getReadsList())) return false;
+    if (getTopicId()
+        != other.getTopicId()) return false;
+    if (getOffset()
+        != other.getOffset()) return false;
+    if (getMaxBytes()
+        != other.getMaxBytes()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -259,17 +152,13 @@ private static final long serialVersionUID = 0L;
     }
     int hash = 41;
     hash = (19 * hash) + getDescriptor().hashCode();
-    hash = (37 * hash) + GROUP_ID_FIELD_NUMBER;
-    hash = (53 * hash) + getGroupId().hashCode();
-    hash = (37 * hash) + READER_ID_FIELD_NUMBER;
-    hash = (53 * hash) + getReaderId().hashCode();
-    hash = (37 * hash) + GENERATION_FIELD_NUMBER;
+    hash = (37 * hash) + TOPIC_ID_FIELD_NUMBER;
+    hash = (53 * hash) + getTopicId();
+    hash = (37 * hash) + OFFSET_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-        getGeneration());
-    if (getReadsCount() > 0) {
-      hash = (37 * hash) + READS_FIELD_NUMBER;
-      hash = (53 * hash) + getReadsList().hashCode();
-    }
+        getOffset());
+    hash = (37 * hash) + MAX_BYTES_FIELD_NUMBER;
+    hash = (53 * hash) + getMaxBytes();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -401,16 +290,9 @@ private static final long serialVersionUID = 0L;
     public Builder clear() {
       super.clear();
       bitField0_ = 0;
-      groupId_ = "";
-      readerId_ = "";
-      generation_ = 0L;
-      if (readsBuilder_ == null) {
-        reads_ = java.util.Collections.emptyList();
-      } else {
-        reads_ = null;
-        readsBuilder_.clear();
-      }
-      bitField0_ = (bitField0_ & ~0x00000008);
+      topicId_ = 0;
+      offset_ = 0L;
+      maxBytes_ = 0;
       return this;
     }
 
@@ -437,34 +319,21 @@ private static final long serialVersionUID = 0L;
     @java.lang.Override
     public io.flourine.sdk.proto.ReadRequest buildPartial() {
       io.flourine.sdk.proto.ReadRequest result = new io.flourine.sdk.proto.ReadRequest(this);
-      buildPartialRepeatedFields(result);
       if (bitField0_ != 0) { buildPartial0(result); }
       onBuilt();
       return result;
     }
 
-    private void buildPartialRepeatedFields(io.flourine.sdk.proto.ReadRequest result) {
-      if (readsBuilder_ == null) {
-        if (((bitField0_ & 0x00000008) != 0)) {
-          reads_ = java.util.Collections.unmodifiableList(reads_);
-          bitField0_ = (bitField0_ & ~0x00000008);
-        }
-        result.reads_ = reads_;
-      } else {
-        result.reads_ = readsBuilder_.build();
-      }
-    }
-
     private void buildPartial0(io.flourine.sdk.proto.ReadRequest result) {
       int from_bitField0_ = bitField0_;
       if (((from_bitField0_ & 0x00000001) != 0)) {
-        result.groupId_ = groupId_;
+        result.topicId_ = topicId_;
       }
       if (((from_bitField0_ & 0x00000002) != 0)) {
-        result.readerId_ = readerId_;
+        result.offset_ = offset_;
       }
       if (((from_bitField0_ & 0x00000004) != 0)) {
-        result.generation_ = generation_;
+        result.maxBytes_ = maxBytes_;
       }
     }
 
@@ -480,44 +349,14 @@ private static final long serialVersionUID = 0L;
 
     public Builder mergeFrom(io.flourine.sdk.proto.ReadRequest other) {
       if (other == io.flourine.sdk.proto.ReadRequest.getDefaultInstance()) return this;
-      if (!other.getGroupId().isEmpty()) {
-        groupId_ = other.groupId_;
-        bitField0_ |= 0x00000001;
-        onChanged();
+      if (other.getTopicId() != 0) {
+        setTopicId(other.getTopicId());
       }
-      if (!other.getReaderId().isEmpty()) {
-        readerId_ = other.readerId_;
-        bitField0_ |= 0x00000002;
-        onChanged();
+      if (other.getOffset() != 0L) {
+        setOffset(other.getOffset());
       }
-      if (other.getGeneration() != 0L) {
-        setGeneration(other.getGeneration());
-      }
-      if (readsBuilder_ == null) {
-        if (!other.reads_.isEmpty()) {
-          if (reads_.isEmpty()) {
-            reads_ = other.reads_;
-            bitField0_ = (bitField0_ & ~0x00000008);
-          } else {
-            ensureReadsIsMutable();
-            reads_.addAll(other.reads_);
-          }
-          onChanged();
-        }
-      } else {
-        if (!other.reads_.isEmpty()) {
-          if (readsBuilder_.isEmpty()) {
-            readsBuilder_.dispose();
-            readsBuilder_ = null;
-            reads_ = other.reads_;
-            bitField0_ = (bitField0_ & ~0x00000008);
-            readsBuilder_ = 
-              com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders ?
-                 internalGetReadsFieldBuilder() : null;
-          } else {
-            readsBuilder_.addAllMessages(other.reads_);
-          }
-        }
+      if (other.getMaxBytes() != 0) {
+        setMaxBytes(other.getMaxBytes());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -545,34 +384,21 @@ private static final long serialVersionUID = 0L;
             case 0:
               done = true;
               break;
-            case 10: {
-              groupId_ = input.readStringRequireUtf8();
+            case 8: {
+              topicId_ = input.readUInt32();
               bitField0_ |= 0x00000001;
               break;
-            } // case 10
-            case 18: {
-              readerId_ = input.readStringRequireUtf8();
+            } // case 8
+            case 16: {
+              offset_ = input.readUInt64();
               bitField0_ |= 0x00000002;
               break;
-            } // case 18
+            } // case 16
             case 24: {
-              generation_ = input.readUInt64();
+              maxBytes_ = input.readUInt32();
               bitField0_ |= 0x00000004;
               break;
             } // case 24
-            case 34: {
-              io.flourine.sdk.proto.PartitionRead m =
-                  input.readMessage(
-                      io.flourine.sdk.proto.PartitionRead.parser(),
-                      extensionRegistry);
-              if (readsBuilder_ == null) {
-                ensureReadsIsMutable();
-                reads_.add(m);
-              } else {
-                readsBuilder_.addMessage(m);
-              }
-              break;
-            } // case 34
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -590,420 +416,100 @@ private static final long serialVersionUID = 0L;
     }
     private int bitField0_;
 
-    private java.lang.Object groupId_ = "";
+    private int topicId_ ;
     /**
-     * <code>string group_id = 1;</code>
-     * @return The groupId.
-     */
-    public java.lang.String getGroupId() {
-      java.lang.Object ref = groupId_;
-      if (!(ref instanceof java.lang.String)) {
-        com.google.protobuf.ByteString bs =
-            (com.google.protobuf.ByteString) ref;
-        java.lang.String s = bs.toStringUtf8();
-        groupId_ = s;
-        return s;
-      } else {
-        return (java.lang.String) ref;
-      }
-    }
-    /**
-     * <code>string group_id = 1;</code>
-     * @return The bytes for groupId.
-     */
-    public com.google.protobuf.ByteString
-        getGroupIdBytes() {
-      java.lang.Object ref = groupId_;
-      if (ref instanceof String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
-        groupId_ = b;
-        return b;
-      } else {
-        return (com.google.protobuf.ByteString) ref;
-      }
-    }
-    /**
-     * <code>string group_id = 1;</code>
-     * @param value The groupId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setGroupId(
-        java.lang.String value) {
-      if (value == null) { throw new NullPointerException(); }
-      groupId_ = value;
-      bitField0_ |= 0x00000001;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>string group_id = 1;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearGroupId() {
-      groupId_ = getDefaultInstance().getGroupId();
-      bitField0_ = (bitField0_ & ~0x00000001);
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>string group_id = 1;</code>
-     * @param value The bytes for groupId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setGroupIdBytes(
-        com.google.protobuf.ByteString value) {
-      if (value == null) { throw new NullPointerException(); }
-      checkByteStringIsUtf8(value);
-      groupId_ = value;
-      bitField0_ |= 0x00000001;
-      onChanged();
-      return this;
-    }
-
-    private java.lang.Object readerId_ = "";
-    /**
-     * <code>string reader_id = 2;</code>
-     * @return The readerId.
-     */
-    public java.lang.String getReaderId() {
-      java.lang.Object ref = readerId_;
-      if (!(ref instanceof java.lang.String)) {
-        com.google.protobuf.ByteString bs =
-            (com.google.protobuf.ByteString) ref;
-        java.lang.String s = bs.toStringUtf8();
-        readerId_ = s;
-        return s;
-      } else {
-        return (java.lang.String) ref;
-      }
-    }
-    /**
-     * <code>string reader_id = 2;</code>
-     * @return The bytes for readerId.
-     */
-    public com.google.protobuf.ByteString
-        getReaderIdBytes() {
-      java.lang.Object ref = readerId_;
-      if (ref instanceof String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
-        readerId_ = b;
-        return b;
-      } else {
-        return (com.google.protobuf.ByteString) ref;
-      }
-    }
-    /**
-     * <code>string reader_id = 2;</code>
-     * @param value The readerId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setReaderId(
-        java.lang.String value) {
-      if (value == null) { throw new NullPointerException(); }
-      readerId_ = value;
-      bitField0_ |= 0x00000002;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>string reader_id = 2;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearReaderId() {
-      readerId_ = getDefaultInstance().getReaderId();
-      bitField0_ = (bitField0_ & ~0x00000002);
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>string reader_id = 2;</code>
-     * @param value The bytes for readerId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setReaderIdBytes(
-        com.google.protobuf.ByteString value) {
-      if (value == null) { throw new NullPointerException(); }
-      checkByteStringIsUtf8(value);
-      readerId_ = value;
-      bitField0_ |= 0x00000002;
-      onChanged();
-      return this;
-    }
-
-    private long generation_ ;
-    /**
-     * <code>uint64 generation = 3;</code>
-     * @return The generation.
+     * <code>uint32 topic_id = 1;</code>
+     * @return The topicId.
      */
     @java.lang.Override
-    public long getGeneration() {
-      return generation_;
+    public int getTopicId() {
+      return topicId_;
     }
     /**
-     * <code>uint64 generation = 3;</code>
-     * @param value The generation to set.
+     * <code>uint32 topic_id = 1;</code>
+     * @param value The topicId to set.
      * @return This builder for chaining.
      */
-    public Builder setGeneration(long value) {
+    public Builder setTopicId(int value) {
 
-      generation_ = value;
+      topicId_ = value;
+      bitField0_ |= 0x00000001;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>uint32 topic_id = 1;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearTopicId() {
+      bitField0_ = (bitField0_ & ~0x00000001);
+      topicId_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private long offset_ ;
+    /**
+     * <code>uint64 offset = 2;</code>
+     * @return The offset.
+     */
+    @java.lang.Override
+    public long getOffset() {
+      return offset_;
+    }
+    /**
+     * <code>uint64 offset = 2;</code>
+     * @param value The offset to set.
+     * @return This builder for chaining.
+     */
+    public Builder setOffset(long value) {
+
+      offset_ = value;
+      bitField0_ |= 0x00000002;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>uint64 offset = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearOffset() {
+      bitField0_ = (bitField0_ & ~0x00000002);
+      offset_ = 0L;
+      onChanged();
+      return this;
+    }
+
+    private int maxBytes_ ;
+    /**
+     * <code>uint32 max_bytes = 3;</code>
+     * @return The maxBytes.
+     */
+    @java.lang.Override
+    public int getMaxBytes() {
+      return maxBytes_;
+    }
+    /**
+     * <code>uint32 max_bytes = 3;</code>
+     * @param value The maxBytes to set.
+     * @return This builder for chaining.
+     */
+    public Builder setMaxBytes(int value) {
+
+      maxBytes_ = value;
       bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }
     /**
-     * <code>uint64 generation = 3;</code>
+     * <code>uint32 max_bytes = 3;</code>
      * @return This builder for chaining.
      */
-    public Builder clearGeneration() {
+    public Builder clearMaxBytes() {
       bitField0_ = (bitField0_ & ~0x00000004);
-      generation_ = 0L;
+      maxBytes_ = 0;
       onChanged();
       return this;
-    }
-
-    private java.util.List<io.flourine.sdk.proto.PartitionRead> reads_ =
-      java.util.Collections.emptyList();
-    private void ensureReadsIsMutable() {
-      if (!((bitField0_ & 0x00000008) != 0)) {
-        reads_ = new java.util.ArrayList<io.flourine.sdk.proto.PartitionRead>(reads_);
-        bitField0_ |= 0x00000008;
-       }
-    }
-
-    private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionRead, io.flourine.sdk.proto.PartitionRead.Builder, io.flourine.sdk.proto.PartitionReadOrBuilder> readsBuilder_;
-
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public java.util.List<io.flourine.sdk.proto.PartitionRead> getReadsList() {
-      if (readsBuilder_ == null) {
-        return java.util.Collections.unmodifiableList(reads_);
-      } else {
-        return readsBuilder_.getMessageList();
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public int getReadsCount() {
-      if (readsBuilder_ == null) {
-        return reads_.size();
-      } else {
-        return readsBuilder_.getCount();
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionRead getReads(int index) {
-      if (readsBuilder_ == null) {
-        return reads_.get(index);
-      } else {
-        return readsBuilder_.getMessage(index);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder setReads(
-        int index, io.flourine.sdk.proto.PartitionRead value) {
-      if (readsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureReadsIsMutable();
-        reads_.set(index, value);
-        onChanged();
-      } else {
-        readsBuilder_.setMessage(index, value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder setReads(
-        int index, io.flourine.sdk.proto.PartitionRead.Builder builderForValue) {
-      if (readsBuilder_ == null) {
-        ensureReadsIsMutable();
-        reads_.set(index, builderForValue.build());
-        onChanged();
-      } else {
-        readsBuilder_.setMessage(index, builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder addReads(io.flourine.sdk.proto.PartitionRead value) {
-      if (readsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureReadsIsMutable();
-        reads_.add(value);
-        onChanged();
-      } else {
-        readsBuilder_.addMessage(value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder addReads(
-        int index, io.flourine.sdk.proto.PartitionRead value) {
-      if (readsBuilder_ == null) {
-        if (value == null) {
-          throw new NullPointerException();
-        }
-        ensureReadsIsMutable();
-        reads_.add(index, value);
-        onChanged();
-      } else {
-        readsBuilder_.addMessage(index, value);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder addReads(
-        io.flourine.sdk.proto.PartitionRead.Builder builderForValue) {
-      if (readsBuilder_ == null) {
-        ensureReadsIsMutable();
-        reads_.add(builderForValue.build());
-        onChanged();
-      } else {
-        readsBuilder_.addMessage(builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder addReads(
-        int index, io.flourine.sdk.proto.PartitionRead.Builder builderForValue) {
-      if (readsBuilder_ == null) {
-        ensureReadsIsMutable();
-        reads_.add(index, builderForValue.build());
-        onChanged();
-      } else {
-        readsBuilder_.addMessage(index, builderForValue.build());
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder addAllReads(
-        java.lang.Iterable<? extends io.flourine.sdk.proto.PartitionRead> values) {
-      if (readsBuilder_ == null) {
-        ensureReadsIsMutable();
-        com.google.protobuf.AbstractMessageLite.Builder.addAll(
-            values, reads_);
-        onChanged();
-      } else {
-        readsBuilder_.addAllMessages(values);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder clearReads() {
-      if (readsBuilder_ == null) {
-        reads_ = java.util.Collections.emptyList();
-        bitField0_ = (bitField0_ & ~0x00000008);
-        onChanged();
-      } else {
-        readsBuilder_.clear();
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public Builder removeReads(int index) {
-      if (readsBuilder_ == null) {
-        ensureReadsIsMutable();
-        reads_.remove(index);
-        onChanged();
-      } else {
-        readsBuilder_.remove(index);
-      }
-      return this;
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionRead.Builder getReadsBuilder(
-        int index) {
-      return internalGetReadsFieldBuilder().getBuilder(index);
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionReadOrBuilder getReadsOrBuilder(
-        int index) {
-      if (readsBuilder_ == null) {
-        return reads_.get(index);  } else {
-        return readsBuilder_.getMessageOrBuilder(index);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public java.util.List<? extends io.flourine.sdk.proto.PartitionReadOrBuilder> 
-         getReadsOrBuilderList() {
-      if (readsBuilder_ != null) {
-        return readsBuilder_.getMessageOrBuilderList();
-      } else {
-        return java.util.Collections.unmodifiableList(reads_);
-      }
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionRead.Builder addReadsBuilder() {
-      return internalGetReadsFieldBuilder().addBuilder(
-          io.flourine.sdk.proto.PartitionRead.getDefaultInstance());
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public io.flourine.sdk.proto.PartitionRead.Builder addReadsBuilder(
-        int index) {
-      return internalGetReadsFieldBuilder().addBuilder(
-          index, io.flourine.sdk.proto.PartitionRead.getDefaultInstance());
-    }
-    /**
-     * <code>repeated .flourine.wire.PartitionRead reads = 4;</code>
-     */
-    public java.util.List<io.flourine.sdk.proto.PartitionRead.Builder> 
-         getReadsBuilderList() {
-      return internalGetReadsFieldBuilder().getBuilderList();
-    }
-    private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionRead, io.flourine.sdk.proto.PartitionRead.Builder, io.flourine.sdk.proto.PartitionReadOrBuilder> 
-        internalGetReadsFieldBuilder() {
-      if (readsBuilder_ == null) {
-        readsBuilder_ = new com.google.protobuf.RepeatedFieldBuilder<
-            io.flourine.sdk.proto.PartitionRead, io.flourine.sdk.proto.PartitionRead.Builder, io.flourine.sdk.proto.PartitionReadOrBuilder>(
-                reads_,
-                ((bitField0_ & 0x00000008) != 0),
-                getParentForChildren(),
-                isClean());
-        reads_ = null;
-      }
-      return readsBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:flourine.wire.ReadRequest)

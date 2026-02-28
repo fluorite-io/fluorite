@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use flourine_broker::{LocalFsStore, ObjectStore, FlReader};
-use flourine_common::ids::{Offset, PartitionId, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 use flourine_common::types::Record;
 
 use common::{TestBrokerConfig, TestBrokerState, TestDb, produce_records};
@@ -24,33 +24,28 @@ type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 async fn fetch_records<S: ObjectStore + Send + Sync>(
     state: &TestBrokerState<S>,
     topic_id: TopicId,
-    partition_id: PartitionId,
     from_offset: Offset,
 ) -> TestResult<(Vec<Record>, Offset)> {
     // Query all batches that contain records at or after the requested offset
-    // A batch is relevant if: end_offset > from_offset (batch has records >= from_offset)
     let batches: Vec<(i32, i64, i64, String)> = sqlx::query_as(
         r#"
         SELECT schema_id, start_offset, end_offset, s3_key
         FROM topic_batches
         WHERE topic_id = $1
-          AND partition_id = $2
-          AND end_offset > $3
+          AND end_offset > $2
         ORDER BY start_offset
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .bind(from_offset.0 as i64)
     .fetch_all(&state.pool)
     .await?;
 
     // Get high watermark
     let high_watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&state.pool)
     .await?
     .unwrap_or(0);
@@ -62,7 +57,7 @@ async fn fetch_records<S: ObjectStore + Send + Sync>(
         let segment_metas = FlReader::read_footer(&data)?;
 
         for seg_meta in &segment_metas {
-            if seg_meta.topic_id == topic_id && seg_meta.partition_id == partition_id {
+            if seg_meta.topic_id == topic_id {
                 let records = FlReader::read_segment(&data, seg_meta, true)?;
                 let skip = (from_offset.0 as i64 - start_offset).max(0) as usize;
                 all_records.extend(records.into_iter().skip(skip));
@@ -86,8 +81,7 @@ async fn test_watermark_never_regresses() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("watermark-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("watermark-test").await as u32);
 
     // Track watermarks across multiple operations
     let mut watermarks = Vec::new();
@@ -101,12 +95,12 @@ async fn test_watermark_never_regresses() {
             })
             .collect();
 
-        let (_, end_offset) = produce_records(&state, topic_id, partition_id, records)
+        let (_, end_offset) = produce_records(&state, topic_id, records)
             .await
             .expect("Append should succeed");
 
         // Read to get current watermark
-        let (_, watermark) = fetch_records(&state, topic_id, partition_id, Offset(0))
+        let (_, watermark) = fetch_records(&state, topic_id, Offset(0))
             .await
             .expect("Read should succeed");
 
@@ -146,8 +140,7 @@ async fn test_fetch_returns_contiguous_offsets() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("contiguous-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("contiguous-test").await as u32);
 
     // Append 100 records in 10 batches
     for batch_idx in 0..10 {
@@ -158,13 +151,13 @@ async fn test_fetch_returns_contiguous_offsets() {
             })
             .collect();
 
-        produce_records(&state, topic_id, partition_id, records)
+        produce_records(&state, topic_id, records)
             .await
             .expect("Append should succeed");
     }
 
     // Read all records from offset 0
-    let (records, watermark) = fetch_records(&state, topic_id, partition_id, Offset(0))
+    let (records, watermark) = fetch_records(&state, topic_id, Offset(0))
         .await
         .expect("Read should succeed");
 
@@ -200,8 +193,7 @@ async fn test_fetch_offset_beyond_available_returns_empty() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("beyond-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("beyond-test").await as u32);
 
     // Append 10 records (offsets 0-9)
     let records: Vec<Record> = (0..10)
@@ -211,12 +203,12 @@ async fn test_fetch_offset_beyond_available_returns_empty() {
         })
         .collect();
 
-    produce_records(&state, topic_id, partition_id, records)
+    produce_records(&state, topic_id, records)
         .await
         .expect("Append should succeed");
 
     // Read from offset 100 (way beyond available)
-    let (records, watermark) = fetch_records(&state, topic_id, partition_id, Offset(100))
+    let (records, watermark) = fetch_records(&state, topic_id, Offset(100))
         .await
         .expect("Read should succeed even with offset beyond available");
 
@@ -243,8 +235,7 @@ async fn test_fetch_at_watermark_returns_empty() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("at-watermark-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("at-watermark-test").await as u32);
 
     // Append 10 records (offsets 0-9, watermark at 10)
     let records: Vec<Record> = (0..10)
@@ -254,12 +245,12 @@ async fn test_fetch_at_watermark_returns_empty() {
         })
         .collect();
 
-    produce_records(&state, topic_id, partition_id, records)
+    produce_records(&state, topic_id, records)
         .await
         .expect("Append should succeed");
 
     // Read from offset 10 (exactly at watermark)
-    let (records, watermark) = fetch_records(&state, topic_id, partition_id, Offset(10))
+    let (records, watermark) = fetch_records(&state, topic_id, Offset(10))
         .await
         .expect("Read should succeed");
 
@@ -281,8 +272,7 @@ async fn test_fetch_from_middle_offset() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("middle-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("middle-test").await as u32);
 
     // Append 20 records
     let records: Vec<Record> = (0..20)
@@ -292,12 +282,12 @@ async fn test_fetch_from_middle_offset() {
         })
         .collect();
 
-    produce_records(&state, topic_id, partition_id, records)
+    produce_records(&state, topic_id, records)
         .await
         .expect("Append should succeed");
 
     // Read from offset 5
-    let (records, watermark) = fetch_records(&state, topic_id, partition_id, Offset(5))
+    let (records, watermark) = fetch_records(&state, topic_id, Offset(5))
         .await
         .expect("Read should succeed");
 
@@ -330,8 +320,7 @@ async fn test_watermark_consistency_within_batch() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("batch-consistency-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("batch-consistency-test").await as u32);
 
     // Append 50 records
     let records: Vec<Record> = (0..50)
@@ -341,7 +330,7 @@ async fn test_watermark_consistency_within_batch() {
         })
         .collect();
 
-    produce_records(&state, topic_id, partition_id, records)
+    produce_records(&state, topic_id, records)
         .await
         .expect("Append should succeed");
 
@@ -352,7 +341,7 @@ async fn test_watermark_consistency_within_batch() {
     // Use join_all for concurrent execution
     let results = futures::future::join_all(offsets.iter().map(|&offset| {
         let state_clone = state.clone();
-        async move { fetch_records(&state_clone, topic_id, partition_id, Offset(offset)).await }
+        async move { fetch_records(&state_clone, topic_id, Offset(offset)).await }
     }))
     .await;
 

@@ -106,28 +106,17 @@ private static final long serialVersionUID = 0L;
     }
   }
 
-  public static final int GENERATION_FIELD_NUMBER = 4;
-  private long generation_ = 0L;
-  /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
-   */
-  @java.lang.Override
-  public long getGeneration() {
-    return generation_;
-  }
-
-  public static final int STATUS_FIELD_NUMBER = 5;
+  public static final int STATUS_FIELD_NUMBER = 4;
   private int status_ = 0;
   /**
-   * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+   * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
    * @return The enum numeric value on the wire for status.
    */
   @java.lang.Override public int getStatusValue() {
     return status_;
   }
   /**
-   * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+   * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
    * @return The status.
    */
   @java.lang.Override public io.flourine.sdk.proto.HeartbeatStatus getStatus() {
@@ -158,11 +147,8 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(errorMessage_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 3, errorMessage_);
     }
-    if (generation_ != 0L) {
-      output.writeUInt64(4, generation_);
-    }
     if (status_ != io.flourine.sdk.proto.HeartbeatStatus.HEARTBEAT_STATUS_OK.getNumber()) {
-      output.writeEnum(5, status_);
+      output.writeEnum(4, status_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -184,13 +170,9 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(errorMessage_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(3, errorMessage_);
     }
-    if (generation_ != 0L) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(4, generation_);
-    }
     if (status_ != io.flourine.sdk.proto.HeartbeatStatus.HEARTBEAT_STATUS_OK.getNumber()) {
       size += com.google.protobuf.CodedOutputStream
-        .computeEnumSize(5, status_);
+        .computeEnumSize(4, status_);
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -213,8 +195,6 @@ private static final long serialVersionUID = 0L;
         != other.getErrorCode()) return false;
     if (!getErrorMessage()
         .equals(other.getErrorMessage())) return false;
-    if (getGeneration()
-        != other.getGeneration()) return false;
     if (status_ != other.status_) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
@@ -234,9 +214,6 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getErrorCode();
     hash = (37 * hash) + ERROR_MESSAGE_FIELD_NUMBER;
     hash = (53 * hash) + getErrorMessage().hashCode();
-    hash = (37 * hash) + GENERATION_FIELD_NUMBER;
-    hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-        getGeneration());
     hash = (37 * hash) + STATUS_FIELD_NUMBER;
     hash = (53 * hash) + status_;
     hash = (29 * hash) + getUnknownFields().hashCode();
@@ -373,7 +350,6 @@ private static final long serialVersionUID = 0L;
       success_ = false;
       errorCode_ = 0;
       errorMessage_ = "";
-      generation_ = 0L;
       status_ = 0;
       return this;
     }
@@ -418,9 +394,6 @@ private static final long serialVersionUID = 0L;
         result.errorMessage_ = errorMessage_;
       }
       if (((from_bitField0_ & 0x00000008) != 0)) {
-        result.generation_ = generation_;
-      }
-      if (((from_bitField0_ & 0x00000010) != 0)) {
         result.status_ = status_;
       }
     }
@@ -447,9 +420,6 @@ private static final long serialVersionUID = 0L;
         errorMessage_ = other.errorMessage_;
         bitField0_ |= 0x00000004;
         onChanged();
-      }
-      if (other.getGeneration() != 0L) {
-        setGeneration(other.getGeneration());
       }
       if (other.status_ != 0) {
         setStatusValue(other.getStatusValue());
@@ -496,15 +466,10 @@ private static final long serialVersionUID = 0L;
               break;
             } // case 26
             case 32: {
-              generation_ = input.readUInt64();
+              status_ = input.readEnum();
               bitField0_ |= 0x00000008;
               break;
             } // case 32
-            case 40: {
-              status_ = input.readEnum();
-              bitField0_ |= 0x00000010;
-              break;
-            } // case 40
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -658,59 +623,27 @@ private static final long serialVersionUID = 0L;
       return this;
     }
 
-    private long generation_ ;
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @return The generation.
-     */
-    @java.lang.Override
-    public long getGeneration() {
-      return generation_;
-    }
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @param value The generation to set.
-     * @return This builder for chaining.
-     */
-    public Builder setGeneration(long value) {
-
-      generation_ = value;
-      bitField0_ |= 0x00000008;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>uint64 generation = 4;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearGeneration() {
-      bitField0_ = (bitField0_ & ~0x00000008);
-      generation_ = 0L;
-      onChanged();
-      return this;
-    }
-
     private int status_ = 0;
     /**
-     * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+     * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
      * @return The enum numeric value on the wire for status.
      */
     @java.lang.Override public int getStatusValue() {
       return status_;
     }
     /**
-     * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+     * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
      * @param value The enum numeric value on the wire for status to set.
      * @return This builder for chaining.
      */
     public Builder setStatusValue(int value) {
       status_ = value;
-      bitField0_ |= 0x00000010;
+      bitField0_ |= 0x00000008;
       onChanged();
       return this;
     }
     /**
-     * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+     * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
      * @return The status.
      */
     @java.lang.Override
@@ -719,23 +652,23 @@ private static final long serialVersionUID = 0L;
       return result == null ? io.flourine.sdk.proto.HeartbeatStatus.UNRECOGNIZED : result;
     }
     /**
-     * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+     * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
      * @param value The status to set.
      * @return This builder for chaining.
      */
     public Builder setStatus(io.flourine.sdk.proto.HeartbeatStatus value) {
       if (value == null) { throw new NullPointerException(); }
-      bitField0_ |= 0x00000010;
+      bitField0_ |= 0x00000008;
       status_ = value.getNumber();
       onChanged();
       return this;
     }
     /**
-     * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+     * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
      * @return This builder for chaining.
      */
     public Builder clearStatus() {
-      bitField0_ = (bitField0_ & ~0x00000010);
+      bitField0_ = (bitField0_ & ~0x00000008);
       status_ = 0;
       onChanged();
       return this;

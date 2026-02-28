@@ -15,7 +15,6 @@ public class ReaderConfig {
     private int maxBytes = 1024 * 1024; // 1 MB
     private Duration timeout = Duration.ofSeconds(30);
     private Duration heartbeatInterval = Duration.ofSeconds(10);
-    private Duration rebalanceDelay = Duration.ofSeconds(5);
 
     public ReaderConfig() {}
 
@@ -59,11 +58,6 @@ public class ReaderConfig {
         return this;
     }
 
-    public ReaderConfig rebalanceDelay(Duration rebalanceDelay) {
-        this.rebalanceDelay = rebalanceDelay;
-        return this;
-    }
-
     public String getUrl() {
         return url;
     }
@@ -96,7 +90,4 @@ public class ReaderConfig {
         return heartbeatInterval;
     }
 
-    public Duration getRebalanceDelay() {
-        return rebalanceDelay;
-    }
 }

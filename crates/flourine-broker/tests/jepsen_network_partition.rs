@@ -36,10 +36,9 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, partition_id, value, Duration::from_secs(10))
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
         .await
 }
 
@@ -48,7 +47,6 @@ async fn ws_produce_timeout(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
     timeout: Duration,
 ) -> Result<writer::AppendResponse, String> {
@@ -57,7 +55,6 @@ async fn ws_produce_timeout(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -89,19 +86,12 @@ async fn ws_produce_timeout(
 async fn ws_read(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
     offset: Offset,
 ) -> Result<reader::ReadResponse, String> {
     let req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id,
-            partition_id,
-            offset,
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id,
+        offset,
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
     ws.send(Message::Binary(buf))
@@ -127,14 +117,13 @@ async fn ws_read(
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
 
     loop {
-        let resp = ws_read(ws, topic_id, partition_id, next_offset).await?;
+        let resp = ws_read(ws, topic_id, next_offset).await?;
         if !resp.success {
             return Err(format!("read failed: {}", resp.error_message));
         }
@@ -156,12 +145,11 @@ async fn ws_read_all(
     Ok((all_values, hwm))
 }
 
-/// Partition S3 puts. Produce doesn't ack within 2s. Heal → ack arrives.
+/// Partition S3 puts. Produce doesn't ack within 2s. Heal -> ack arrives.
 #[tokio::test]
 async fn test_s3_partition_hangs_put_no_ack() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("partition-hang", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("partition-hang").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -178,7 +166,6 @@ async fn test_s3_partition_hangs_put_no_ack() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -209,7 +196,7 @@ async fn test_s3_partition_hangs_put_no_ack() {
     assert!(resp.success, "Write should succeed after partition heals");
 
     // Verify record visible
-    let (values, _) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, _) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(values.contains(&Bytes::from("partition-test")));
@@ -220,7 +207,7 @@ async fn test_s3_partition_hangs_put_no_ack() {
 #[tokio::test]
 async fn test_s3_partition_concurrent_writes() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("partition-concurrent", 2).await as u32);
+    let topic_id = TopicId(db.create_topic("partition-concurrent").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -235,7 +222,6 @@ async fn test_s3_partition_concurrent_writes() {
         let history = history.clone();
         let mut stop_rx = stop_tx.subscribe();
         handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((p % 2) as u32);
             let writer_id = WriterId::new();
             let mut seq = 0u64;
             let mut ws: Option<Ws> = None;
@@ -260,7 +246,7 @@ async fn test_s3_partition_concurrent_writes() {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                    h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
                 };
 
                 match ws_produce_timeout(
@@ -268,7 +254,6 @@ async fn test_s3_partition_concurrent_writes() {
                     writer_id,
                     seq,
                     topic_id,
-                    partition_id,
                     &val,
                     Duration::from_secs(5),
                 )
@@ -317,16 +302,13 @@ async fn test_s3_partition_concurrent_writes() {
     store.reset();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mut ws = ws_connect(addr).await;
-    for p in 0..2u32 {
-        let (values, hwm) = ws_read_all(&mut ws, topic_id, PartitionId(p))
-            .await
-            .expect("final read should succeed");
-        let mut h = history.lock().await;
-        let idx = h.record_read(p, "final".to_string(), Offset(0));
-        h.record_read_complete(idx, values, hwm, true);
-    }
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
+        .await
+        .expect("final read should succeed");
+    let mut h = history.lock().await;
+    let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
+    h.record_read_complete(idx, values, hwm, true);
 
-    let h = history.lock().await;
     h.verify_acknowledged_writes_visible()
         .expect("INVARIANT: all acked writes visible after partition");
     h.verify_unique_offsets()
@@ -342,8 +324,7 @@ async fn test_s3_partition_concurrent_writes() {
 #[tokio::test]
 async fn test_asymmetric_partition_reads_ok() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("asymmetric", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("asymmetric").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -352,7 +333,7 @@ async fn test_asymmetric_partition_reads_ok() {
     let mut ws = ws_connect(addr).await;
     let writer_id = WriterId::new();
     for i in 0..5 {
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &format!("pre-{}", i))
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("pre-{}", i))
             .await
             .expect("pre-partition write");
         assert!(resp.success);
@@ -362,14 +343,14 @@ async fn test_asymmetric_partition_reads_ok() {
     broker.faulty_store().partition_puts();
 
     // Reads should still work
-    let (values, _) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, _) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("reads should work during put partition");
     assert_eq!(values.len(), 5, "all pre-partition data should be readable");
 
     // Verify reads work on a fresh connection too (consumers truly unaffected)
     let mut ws_reader = ws_connect(addr).await;
-    let (reader_values, _) = ws_read_all(&mut ws_reader, topic_id, partition_id)
+    let (reader_values, _) = ws_read_all(&mut ws_reader, topic_id)
         .await
         .expect("consumer reads should work during put partition");
     assert_eq!(
@@ -385,7 +366,6 @@ async fn test_asymmetric_partition_reads_ok() {
         w2,
         1,
         topic_id,
-        partition_id,
         "during-partition",
         Duration::from_secs(2),
     )
@@ -396,12 +376,11 @@ async fn test_asymmetric_partition_reads_ok() {
     broker.faulty_store().heal_partition();
 }
 
-/// Write data → partition S3 → attempt writes (timeout) → heal → retry → verify.
+/// Write data -> partition S3 -> attempt writes (timeout) -> heal -> retry -> verify.
 #[tokio::test]
 async fn test_partition_heal_and_recovery() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("heal-recover", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("heal-recover").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -409,7 +388,7 @@ async fn test_partition_heal_and_recovery() {
     // Write initial data
     let mut ws = ws_connect(addr).await;
     let writer_id = WriterId::new();
-    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "before-partition")
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "before-partition")
         .await
         .expect("initial write");
     assert!(resp.success);
@@ -424,7 +403,6 @@ async fn test_partition_heal_and_recovery() {
         w2,
         1,
         topic_id,
-        partition_id,
         "during-partition",
         Duration::from_secs(2),
     )
@@ -438,7 +416,7 @@ async fn test_partition_heal_and_recovery() {
     drop(ws);
     let mut ws = ws_connect(addr).await;
     let w3 = WriterId::new();
-    let resp = ws_produce(&mut ws, w3, 1, topic_id, partition_id, "after-heal")
+    let resp = ws_produce(&mut ws, w3, 1, topic_id, "after-heal")
         .await
         .expect("write after heal");
     assert!(resp.success, "write should succeed after healing");
@@ -448,7 +426,7 @@ async fn test_partition_heal_and_recovery() {
     let mut watermarks = Vec::new();
     let mut next_offset = Offset(0);
     loop {
-        let resp = ws_read(&mut ws, topic_id, partition_id, next_offset).await.expect("read");
+        let resp = ws_read(&mut ws, topic_id, next_offset).await.expect("read");
         assert!(resp.success, "read should succeed");
         let mut got = false;
         for r in &resp.results {
@@ -474,7 +452,7 @@ async fn test_partition_heal_and_recovery() {
     }
 
     // Re-read all values to verify content
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(
@@ -498,8 +476,7 @@ async fn test_partition_heal_and_recovery() {
 #[tokio::test]
 async fn test_pause_resume_correct_state() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("pause-resume", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("pause-resume").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -510,7 +487,7 @@ async fn test_pause_resume_correct_state() {
     let writer_id = WriterId::new();
     for i in 0..10 {
         let val = format!("pre-pause-{}", i);
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &val)
             .await
             .expect("pre-pause write");
         assert!(resp.success);
@@ -530,7 +507,7 @@ async fn test_pause_resume_correct_state() {
     let w2 = WriterId::new();
     for i in 0..5 {
         let val = format!("post-pause-{}", i);
-        let resp = ws_produce(&mut ws, w2, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws, w2, i + 1, topic_id, &val)
             .await
             .expect("post-pause write");
         assert!(resp.success);
@@ -538,7 +515,7 @@ async fn test_pause_resume_correct_state() {
     }
 
     // Verify all data visible
-    let (values, _) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, _) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
 
@@ -554,8 +531,7 @@ async fn test_pause_resume_correct_state() {
 #[tokio::test]
 async fn test_pause_during_flush_no_duplicate_offsets() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("pause-flush", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("pause-flush").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -578,7 +554,6 @@ async fn test_pause_during_flush_no_duplicate_offsets() {
                 writer_id,
                 i + 1,
                 topic_id,
-                partition_id,
                 &val,
                 Duration::from_secs(30),
             )

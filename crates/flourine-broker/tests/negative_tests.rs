@@ -14,7 +14,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use flourine_broker::buffer::BufferConfig;
 use flourine_broker::{BrokerConfig, BrokerState, LocalFsStore};
-use flourine_common::ids::{Offset, PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 use flourine_wire::{
     ClientMessage, ServerMessage, reader, decode_server_message, encode_client_message, writer,
@@ -153,7 +153,6 @@ async fn test_produce_to_nonexistent_topic() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(99999),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("key")),
@@ -188,57 +187,6 @@ async fn test_produce_to_nonexistent_topic() {
     ws.close(None).await.ok();
 }
 
-/// Test that producing to a non-existent partition returns an error response.
-#[tokio::test]
-async fn test_produce_to_nonexistent_partition() {
-    let db = TestDb::new().await;
-    let topic_id = db.create_topic("negative-test", 2).await; // Only 2 partitions (0, 1)
-    let temp_dir = TempDir::new().unwrap();
-
-    let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
-
-    let url = format!("ws://{}", addr);
-    let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
-
-    // Try to append to partition 99 which doesn't exist for this topic
-    let req = writer::AppendRequest {
-        writer_id: WriterId::new(),
-        append_seq: AppendSeq(1),
-        batches: vec![RecordBatch {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(99), // Non-existent partition
-            schema_id: SchemaId(100),
-            records: vec![Record {
-                key: Some(Bytes::from("key")),
-                value: Bytes::from("value"),
-            }],
-        }],
-    };
-
-    let buf = encode_client_frame(ClientMessage::Append(req.clone()), 8192);
-
-    ws.send(Message::Binary(buf)).await.unwrap();
-
-    // Should get a response
-    let response = tokio::time::timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("Timeout waiting for response")
-        .expect("No response")
-        .expect("WebSocket error");
-
-    match response {
-        Message::Binary(data) => {
-            assert!(!data.is_empty(), "Should get response data");
-        }
-        Message::Close(_) => {
-            // Acceptable for error
-        }
-        _ => panic!("Unexpected message type"),
-    }
-
-    ws.close(None).await.ok();
-}
-
 /// Test that fetching from a non-existent topic returns appropriate response.
 #[tokio::test]
 async fn test_fetch_from_nonexistent_topic() {
@@ -252,15 +200,9 @@ async fn test_fetch_from_nonexistent_topic() {
 
     // Try to read from topic 99999 which doesn't exist
     let fetch_req = reader::ReadRequest {
-        group_id: "test-group".to_string(),
-        reader_id: "test-reader".to_string(),
-        generation: flourine_common::ids::Generation(1),
-        reads: vec![reader::PartitionRead {
-            topic_id: TopicId(99999),
-            partition_id: PartitionId(0),
-            offset: Offset(0),
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id: TopicId(99999),
+        offset: Offset(0),
+        max_bytes: 1024 * 1024,
     };
 
     let buf = encode_client_frame(ClientMessage::Read(fetch_req.clone()), 8192);
@@ -284,9 +226,9 @@ async fn test_fetch_from_nonexistent_topic() {
             match result {
                 Ok((resp, _)) => {
                     // Either empty results or results with empty records
-                    for partition_result in &resp.results {
+                    for topic_result in &resp.results {
                         assert!(
-                            partition_result.records.is_empty(),
+                            topic_result.records.is_empty(),
                             "Should have empty records for non-existent topic"
                         );
                     }
@@ -309,7 +251,7 @@ async fn test_fetch_from_nonexistent_topic() {
 #[tokio::test]
 async fn test_connection_close_during_produce() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("close-test", 1).await;
+    let topic_id = db.create_topic("close-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -324,7 +266,6 @@ async fn test_connection_close_during_produce() {
             append_seq: AppendSeq(1),
             batches: vec![RecordBatch {
                 topic_id: TopicId(topic_id as u32),
-                partition_id: PartitionId(0),
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: Some(Bytes::from("baseline")),
@@ -351,7 +292,6 @@ async fn test_connection_close_during_produce() {
             append_seq: AppendSeq(1),
             batches: vec![RecordBatch {
                 topic_id: TopicId(topic_id as u32),
-                partition_id: PartitionId(0),
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: Some(Bytes::from("interrupted")),
@@ -381,15 +321,9 @@ async fn test_connection_close_during_produce() {
         .expect("Failed to connect after stress test");
 
     let fetch_req = reader::ReadRequest {
-        group_id: "test".to_string(),
-        reader_id: "test".to_string(),
-        generation: flourine_common::ids::Generation(1),
-        reads: vec![reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
-            offset: Offset(0),
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: Offset(0),
+        max_bytes: 1024 * 1024,
     };
 
     let buf = encode_client_frame(ClientMessage::Read(fetch_req.clone()), 8192);
@@ -415,7 +349,7 @@ async fn test_connection_close_during_produce() {
     // Verify we have at least the baseline record
     assert!(
         !fetch_resp.results.is_empty(),
-        "Should have partition results"
+        "Should have topic results"
     );
     assert!(
         !fetch_resp.results[0].records.is_empty(),
@@ -452,8 +386,7 @@ async fn test_connection_close_during_produce() {
 #[tokio::test]
 async fn test_connection_drop_mid_append_broker_stays_healthy() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("drop-mid-append", 1).await;
-    let partition_id = PartitionId(0);
+    let topic_id = db.create_topic("drop-mid-append").await;
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
 
@@ -470,7 +403,6 @@ async fn test_connection_drop_mid_append_broker_stays_healthy() {
             append_seq: AppendSeq(1),
             batches: vec![RecordBatch {
                 topic_id: TopicId(topic_id as u32),
-                partition_id,
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: None,
@@ -497,7 +429,6 @@ async fn test_connection_drop_mid_append_broker_stays_healthy() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -523,17 +454,11 @@ async fn test_connection_drop_mid_append_broker_stays_healthy() {
     };
     assert!(append_resp.success, "fresh write should succeed after connection drop");
 
-    // Read all records — verify consistency
+    // Read all records -- verify consistency
     let fetch_req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: flourine_common::ids::Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id,
-            offset: Offset(0),
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: Offset(0),
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = encode_client_frame(ClientMessage::Read(fetch_req), 8192);
     ws.send(Message::Binary(buf)).await.unwrap();
@@ -573,12 +498,11 @@ async fn test_connection_drop_mid_append_broker_stays_healthy() {
     );
 }
 
-/// Rapid connect/disconnect stress test — catches memory leaks, state accumulation.
+/// Rapid connect/disconnect stress test -- catches memory leaks, state accumulation.
 #[tokio::test]
 async fn test_rapid_connect_disconnect_no_state_corruption() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("rapid-churn", 1).await;
-    let partition_id = PartitionId(0);
+    let topic_id = db.create_topic("rapid-churn").await;
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let url = format!("ws://{}", broker.addr());
@@ -591,7 +515,6 @@ async fn test_rapid_connect_disconnect_no_state_corruption() {
             append_seq: AppendSeq(1),
             batches: vec![RecordBatch {
                 topic_id: TopicId(topic_id as u32),
-                partition_id,
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: None,
@@ -614,7 +537,6 @@ async fn test_rapid_connect_disconnect_no_state_corruption() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -641,15 +563,9 @@ async fn test_rapid_connect_disconnect_no_state_corruption() {
 
     // Read all records
     let fetch_req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: flourine_common::ids::Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id,
-            offset: Offset(0),
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: Offset(0),
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = encode_client_frame(ClientMessage::Read(fetch_req), 8192);
     ws.send(Message::Binary(buf)).await.unwrap();

@@ -44,10 +44,9 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, partition_id, value, Duration::from_secs(10))
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
         .await
 }
 
@@ -56,7 +55,6 @@ async fn ws_produce_timeout(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
     timeout: Duration,
 ) -> Result<writer::AppendResponse, String> {
@@ -65,7 +63,6 @@ async fn ws_produce_timeout(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -98,19 +95,12 @@ async fn ws_produce_timeout(
 async fn ws_read_at(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
     offset: Offset,
 ) -> Result<reader::ReadResponse, String> {
     let req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id,
-            partition_id,
-            offset,
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id,
+        offset,
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
     ws.send(Message::Binary(buf))
@@ -133,19 +123,18 @@ async fn ws_read_at(
     }
 }
 
-/// Read ALL records from offset 0 for a partition by paginating.
+/// Read ALL records from offset 0 for a topic by paginating.
 /// The broker returns at most 10 batches per read, so we must paginate.
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<reader::ReadResponse, String> {
     let mut all_records = vec![];
     let mut high_watermark = Offset(0);
     let mut next_offset = Offset(0);
 
     loop {
-        let resp = ws_read_at(ws, topic_id, partition_id, next_offset).await?;
+        let resp = ws_read_at(ws, topic_id, next_offset).await?;
         if !resp.success {
             return Err(format!("read failed: {}", resp.error_message));
         }
@@ -173,9 +162,8 @@ async fn ws_read_all(
         success: true,
         error_code: 0,
         error_message: String::new(),
-        results: vec![reader::PartitionResult {
+        results: vec![reader::TopicResult {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             high_watermark,
             records: all_records,
@@ -191,8 +179,7 @@ async fn ws_read_all(
 #[tokio::test]
 async fn test_s3_failure_drops_inflight_acks_not_buffered() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("s3-fail-ack", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("s3-fail-ack").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let mut ws = ws_connect(broker.addr()).await;
@@ -202,7 +189,7 @@ async fn test_s3_failure_drops_inflight_acks_not_buffered() {
     broker.faulty_store().fail_next_put();
 
     // Produce a record. Flush will fail, so ack should not indicate success.
-    let result = ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "fail-me").await;
+    let result = ws_produce(&mut ws, writer_id, 1, topic_id, "fail-me").await;
     let failed = result.is_err() || !result.as_ref().unwrap().success;
     assert!(failed, "Write during S3 failure should not succeed");
 
@@ -212,13 +199,13 @@ async fn test_s3_failure_drops_inflight_acks_not_buffered() {
     let writer_id2 = WriterId::new();
 
     // S3 fault consumed — next write should succeed.
-    let resp = ws_produce(&mut ws, writer_id2, 1, topic_id, partition_id, "should-work")
+    let resp = ws_produce(&mut ws, writer_id2, 1, topic_id, "should-work")
         .await
         .expect("Write after recovery should succeed");
     assert!(resp.success, "second write should be acked");
 
     // Verify the successful write is visible.
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(read.success);
@@ -238,8 +225,7 @@ async fn test_s3_failure_drops_inflight_acks_not_buffered() {
 #[tokio::test]
 async fn test_concurrent_produce_consume_under_s3_faults() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("concurrent-s3", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("concurrent-s3").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let store = broker.faulty_store().clone();
@@ -264,7 +250,7 @@ async fn test_concurrent_produce_consume_under_s3_faults() {
         for i in 0..20 {
             let val = format!("v-{}", i);
             let result =
-                ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &val).await;
+                ws_produce(&mut ws, writer_id, i + 1, topic_id, &val).await;
             if let Ok(resp) = &result {
                 if resp.success {
                     acked.lock().await.push(Bytes::from(val));
@@ -280,7 +266,7 @@ async fn test_concurrent_produce_consume_under_s3_faults() {
     // Final paginated read — verify all acked values are visible.
     let acked = acked_values.lock().await;
     let mut ws = ws_connect(addr).await;
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("final read should succeed");
 
@@ -301,7 +287,7 @@ async fn test_concurrent_produce_consume_under_s3_faults() {
     // Watermark should be at least as high as the number of acked writes.
     // Use a fresh read for the watermark check.
     let mut ws = ws_connect(addr).await;
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("watermark read should succeed");
     if let Some(result) = read.results.first() {
@@ -318,8 +304,7 @@ async fn test_concurrent_produce_consume_under_s3_faults() {
 #[tokio::test]
 async fn test_slow_s3_does_not_lose_buffered_writes() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("slow-s3", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("slow-s3").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     broker.faulty_store().set_put_delay_ms(500);
@@ -342,7 +327,6 @@ async fn test_slow_s3_does_not_lose_buffered_writes() {
                     writer_id,
                     i + 1,
                     topic_id,
-                    partition_id,
                     &val,
                     Duration::from_secs(30),
                 )
@@ -369,7 +353,7 @@ async fn test_slow_s3_does_not_lose_buffered_writes() {
 
     // Final read: contiguous offsets, all records present.
     let mut ws = ws_connect(addr).await;
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(read.success);
@@ -382,15 +366,14 @@ async fn test_slow_s3_does_not_lose_buffered_writes() {
 #[tokio::test]
 async fn test_crash_after_s3_put_before_db_commit() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("crash-mid-flush", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("crash-mid-flush").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
 
     // First write: should succeed fully (flush 1 OK).
     let mut ws = ws_connect(broker.addr()).await;
     let w1 = WriterId::new();
-    let resp = ws_produce(&mut ws, w1, 1, topic_id, partition_id, "first-ok")
+    let resp = ws_produce(&mut ws, w1, 1, topic_id, "first-ok")
         .await
         .expect("first write should succeed");
     assert!(resp.success);
@@ -399,7 +382,7 @@ async fn test_crash_after_s3_put_before_db_commit() {
     broker.faulty_store().fail_on_put_n(1);
 
     let w2 = WriterId::new();
-    let result = ws_produce(&mut ws, w2, 1, topic_id, partition_id, "second-fail").await;
+    let result = ws_produce(&mut ws, w2, 1, topic_id, "second-fail").await;
     let failed = result.is_err() || !result.as_ref().unwrap().success;
     assert!(failed, "Second write should fail (S3 put fails)");
 
@@ -409,7 +392,7 @@ async fn test_crash_after_s3_put_before_db_commit() {
 
     // After restart, only the first batch should be visible.
     let mut ws = ws_connect(broker.addr()).await;
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read after restart should succeed");
     assert!(read.success);
@@ -442,16 +425,15 @@ async fn test_crash_after_s3_put_before_db_commit() {
 #[tokio::test]
 async fn test_db_blocked_flush_no_false_acks() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("db-block", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("db-block").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
 
-    // Block the partition in the DB.
+    // Block the topic in the DB.
     let mut blocker = DbBlocker::new(db.pool.clone());
     blocker
-        .block_partition(topic_id.0 as i32, partition_id.0 as i32)
+        .block_topic(topic_id.0 as i32)
         .await;
 
     // Send a produce. The flush will stall on the DB lock, so we should
@@ -464,7 +446,6 @@ async fn test_db_blocked_flush_no_false_acks() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -499,7 +480,7 @@ async fn test_db_blocked_flush_no_false_acks() {
     assert!(resp.success, "Write should succeed after DB unblock");
 
     // Verify data is correct.
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(read.success);
@@ -515,8 +496,7 @@ async fn test_db_blocked_flush_no_false_acks() {
 #[tokio::test]
 async fn test_transient_s3_failure_recovery() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("transient-s3", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("transient-s3").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -537,7 +517,7 @@ async fn test_transient_s3_failure_recovery() {
             loop {
                 seq += 1;
                 let writer_id = WriterId::new();
-                match ws_produce(&mut ws, writer_id, seq, topic_id, partition_id, &val).await {
+                match ws_produce(&mut ws, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
                         acked_clone.lock().await.push(Bytes::from(val));
                         break;
@@ -559,7 +539,7 @@ async fn test_transient_s3_failure_recovery() {
 
     // Final read — verify no duplicates.
     let mut ws = ws_connect(addr).await;
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     let values: Vec<Bytes> = read
@@ -585,8 +565,7 @@ async fn test_transient_s3_failure_recovery() {
 #[tokio::test]
 async fn test_orphan_s3_file_after_db_commit_failure() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("orphan-s3", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("orphan-s3").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -594,7 +573,7 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
     // First write: commits normally
     let mut ws = ws_connect(addr).await;
     let w1 = WriterId::new();
-    let resp = ws_produce(&mut ws, w1, 1, topic_id, partition_id, "committed-ok")
+    let resp = ws_produce(&mut ws, w1, 1, topic_id, "committed-ok")
         .await
         .expect("first write should succeed");
     assert!(resp.success);
@@ -607,7 +586,7 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
     let produce_handle = tokio::spawn(async move {
         let mut ws2 = ws_connect(addr2).await;
         let w2 = WriterId::new();
-        ws_produce(&mut ws2, w2, 1, topic_id, partition_id, "orphan-val").await
+        ws_produce(&mut ws2, w2, 1, topic_id, "orphan-val").await
     });
 
     // Wait for S3 put to start but not finish (put delay is 3s)
@@ -620,10 +599,9 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
 
     // Verify only the first batch is in topic_batches
     let batch_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_one(&db.pool)
     .await
     .expect("query batch count");
@@ -631,10 +609,9 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
 
     // Watermark should reflect only the first batch
     let watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&db.pool)
     .await
     .expect("query watermark")
@@ -645,13 +622,13 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
     broker.restart().await;
     let mut ws = ws_connect(broker.addr()).await;
     let w3 = WriterId::new();
-    let resp = ws_produce(&mut ws, w3, 1, topic_id, partition_id, "after-orphan")
+    let resp = ws_produce(&mut ws, w3, 1, topic_id, "after-orphan")
         .await
         .expect("write after restart should succeed");
     assert!(resp.success, "new write should succeed after restart with orphan");
 
     // Verify data: first write + after-orphan visible, orphan-val NOT visible
-    let read = ws_read_all(&mut ws, topic_id, partition_id)
+    let read = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
     assert!(read.success);
@@ -679,8 +656,7 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
 #[tokio::test]
 async fn test_backpressure_under_sustained_s3_failure() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("backpressure", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("backpressure").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -694,7 +670,7 @@ async fn test_backpressure_under_sustained_s3_failure() {
     for i in 0..5 {
         let writer_id = WriterId::new();
         let result =
-            ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, &format!("bp-{}", i)).await;
+            ws_produce(&mut ws, writer_id, 1, topic_id, &format!("bp-{}", i)).await;
         if result.is_err() || !result.as_ref().map(|r| r.success).unwrap_or(false) {
             failure_count += 1;
         }
@@ -720,7 +696,6 @@ async fn test_backpressure_under_sustained_s3_failure() {
         writer_id,
         1,
         topic_id,
-        partition_id,
         "after-recovery",
     )
     .await

@@ -32,7 +32,6 @@ fn make_append(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     payload_bytes: usize,
 ) -> Vec<u8> {
     let value = Bytes::from(vec![b'x'; payload_bytes]);
@@ -41,7 +40,6 @@ fn make_append(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record { key: None, value }],
         }],
@@ -66,8 +64,7 @@ async fn recv_append_response(ws: &mut Ws) -> writer::AppendResponse {
 #[tokio::test]
 async fn test_backpressure_returns_err_backpressure_code() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("bp-test-1", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("bp-test-1").await as u32);
 
     let buffer_config = BufferConfig {
         max_size_bytes: 1024,
@@ -85,7 +82,7 @@ async fn test_backpressure_returns_err_backpressure_code() {
     let writer_id = WriterId::new();
 
     // Send a large append that will exceed the high water mark (512 bytes)
-    let buf = make_append(writer_id, 1, topic_id, partition_id, 600);
+    let buf = make_append(writer_id, 1, topic_id, 600);
     ws.send(Message::Binary(buf)).await.unwrap();
 
     // Wait for flush loop to process and set backpressure
@@ -93,7 +90,7 @@ async fn test_backpressure_returns_err_backpressure_code() {
 
     // Second append should get backpressure error
     let w2 = WriterId::new();
-    let buf = make_append(w2, 1, topic_id, partition_id, 100);
+    let buf = make_append(w2, 1, topic_id, 100);
     ws.send(Message::Binary(buf)).await.unwrap();
 
     let resp = recv_append_response(&mut ws).await;
@@ -108,8 +105,7 @@ async fn test_backpressure_returns_err_backpressure_code() {
 #[tokio::test]
 async fn test_backpressure_clears_after_flush_drains() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("bp-test-2", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("bp-test-2").await as u32);
 
     let buffer_config = BufferConfig {
         max_size_bytes: 1024,
@@ -127,13 +123,13 @@ async fn test_backpressure_clears_after_flush_drains() {
     let writer_id = WriterId::new();
 
     // Trigger backpressure: send large payload
-    let buf = make_append(writer_id, 1, topic_id, partition_id, 600);
+    let buf = make_append(writer_id, 1, topic_id, 600);
     ws.send(Message::Binary(buf)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Verify backpressure is active
     let w2 = WriterId::new();
-    let buf = make_append(w2, 1, topic_id, partition_id, 100);
+    let buf = make_append(w2, 1, topic_id, 100);
     ws.send(Message::Binary(buf)).await.unwrap();
     let resp = recv_append_response(&mut ws).await;
     assert!(!resp.success, "should be under backpressure");
@@ -147,7 +143,7 @@ async fn test_backpressure_clears_after_flush_drains() {
 
     // Third append should succeed now
     let w3 = WriterId::new();
-    let buf = make_append(w3, 1, topic_id, partition_id, 100);
+    let buf = make_append(w3, 1, topic_id, 100);
     ws.send(Message::Binary(buf)).await.unwrap();
 
     let resp = recv_append_response(&mut ws).await;

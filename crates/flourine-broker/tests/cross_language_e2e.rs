@@ -96,7 +96,6 @@ struct WriteResult {
     writer: String,
     writer_id: String,
     topic_id: i32,
-    partition_id: i32,
     start_offset: i64,
     end_offset: i64,
     record_count: i32,
@@ -106,7 +105,6 @@ struct WriteResult {
 struct SchemaWriteResult {
     writer: String,
     topic_id: i32,
-    partition_id: i32,
     start_offset: i64,
     end_offset: i64,
     record_count: i32,
@@ -118,7 +116,6 @@ struct SchemaWriteResult {
 struct SchemaReadResult {
     reader: String,
     topic_id: i32,
-    partition_id: i32,
     record_count: i32,
     records: Vec<SchemaRecordData>,
 }
@@ -136,7 +133,6 @@ struct SchemaRecordData {
 struct ReadResult {
     reader: String,
     topic_id: i32,
-    partition_id: i32,
     record_count: i32,
     records: Vec<RecordData>,
 }
@@ -151,7 +147,6 @@ struct RecordData {
 async fn run_python_writer(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
     num_records: i32,
 ) -> Result<WriteResult, String> {
     let root = project_root();
@@ -161,7 +156,6 @@ async fn run_python_writer(
         .arg(&script)
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .arg(num_records.to_string())
         .env("PYTHONPATH", root.join("sdks/python"))
         .stdout(Stdio::piped())
@@ -177,7 +171,6 @@ async fn run_python_writer(
 async fn run_python_reader(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
     expected_count: i32,
 ) -> Result<ReadResult, String> {
     let root = project_root();
@@ -187,7 +180,6 @@ async fn run_python_reader(
         .arg(&script)
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .arg(expected_count.to_string())
         .env("PYTHONPATH", root.join("sdks/python"))
         .stdout(Stdio::piped())
@@ -203,7 +195,6 @@ async fn run_python_reader(
 async fn run_java_writer(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
     num_records: i32,
 ) -> Result<WriteResult, String> {
     let root = project_root();
@@ -246,7 +237,6 @@ async fn run_java_writer(
         .arg("io.flourine.test.JavaWriter")
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .arg(num_records.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -261,7 +251,6 @@ async fn run_java_writer(
 async fn run_java_reader(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
     expected_count: i32,
 ) -> Result<ReadResult, String> {
     let root = project_root();
@@ -304,7 +293,6 @@ async fn run_java_reader(
         .arg("io.flourine.test.JavaReader")
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .arg(expected_count.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -464,14 +452,14 @@ async fn test_python_to_python() {
     assert_cross_language_prerequisites(true, false).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("py-to-py-test", 1).await;
+    let topic_id = db.create_topic("py-to-py-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
     // Python produces 5 records
-    let produce_result = run_python_writer(&url, topic_id, 0, 5)
+    let produce_result = run_python_writer(&url, topic_id, 5)
         .await
         .expect("Python writer should succeed");
 
@@ -481,7 +469,7 @@ async fn test_python_to_python() {
     assert_eq!(produce_result.end_offset, 5);
 
     // Python consumes the records
-    let consume_result = run_python_reader(&url, topic_id, 0, 5)
+    let consume_result = run_python_reader(&url, topic_id, 5)
         .await
         .expect("Python reader should succeed");
 
@@ -503,14 +491,14 @@ async fn test_java_to_java() {
     assert_cross_language_prerequisites(false, true).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("java-to-java-test", 1).await;
+    let topic_id = db.create_topic("java-to-java-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
     // Java produces 5 records
-    let produce_result = run_java_writer(&url, topic_id, 0, 5)
+    let produce_result = run_java_writer(&url, topic_id, 5)
         .await
         .expect("Java writer should succeed");
 
@@ -520,7 +508,7 @@ async fn test_java_to_java() {
     assert_eq!(produce_result.end_offset, 5);
 
     // Java consumes the records
-    let consume_result = run_java_reader(&url, topic_id, 0, 5)
+    let consume_result = run_java_reader(&url, topic_id, 5)
         .await
         .expect("Java reader should succeed");
 
@@ -541,14 +529,14 @@ async fn test_java_to_python() {
     assert_cross_language_prerequisites(true, true).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("java-to-python-test", 1).await;
+    let topic_id = db.create_topic("java-to-python-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
     // Java produces 10 records
-    let produce_result = run_java_writer(&url, topic_id, 0, 10)
+    let produce_result = run_java_writer(&url, topic_id, 10)
         .await
         .expect("Java writer should succeed");
 
@@ -556,7 +544,7 @@ async fn test_java_to_python() {
     assert_eq!(produce_result.record_count, 10);
 
     // Python consumes the Java-produced records
-    let consume_result = run_python_reader(&url, topic_id, 0, 10)
+    let consume_result = run_python_reader(&url, topic_id, 10)
         .await
         .expect("Python reader should succeed");
 
@@ -571,7 +559,7 @@ async fn test_java_to_python() {
     }
 
     println!(
-        "✓ Java writer -> Python reader: {} records transferred",
+        "Java writer -> Python reader: {} records transferred",
         consume_result.record_count
     );
 }
@@ -583,14 +571,14 @@ async fn test_python_to_java() {
     assert_cross_language_prerequisites(true, true).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("python-to-java-test", 1).await;
+    let topic_id = db.create_topic("python-to-java-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
     // Python produces 10 records
-    let produce_result = run_python_writer(&url, topic_id, 0, 10)
+    let produce_result = run_python_writer(&url, topic_id, 10)
         .await
         .expect("Python writer should succeed");
 
@@ -598,7 +586,7 @@ async fn test_python_to_java() {
     assert_eq!(produce_result.record_count, 10);
 
     // Java consumes the Python-produced records
-    let consume_result = run_java_reader(&url, topic_id, 0, 10)
+    let consume_result = run_java_reader(&url, topic_id, 10)
         .await
         .expect("Java reader should succeed");
 
@@ -612,7 +600,7 @@ async fn test_python_to_java() {
     }
 
     println!(
-        "✓ Python writer -> Java reader: {} records transferred",
+        "Python writer -> Java reader: {} records transferred",
         consume_result.record_count
     );
 }
@@ -623,7 +611,6 @@ async fn test_python_to_java() {
 async fn run_python_schema_writer(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
 ) -> Result<SchemaWriteResult, String> {
     let root = project_root();
     let script = root.join("tests/cross_language/python_schema_writer.py");
@@ -632,7 +619,6 @@ async fn run_python_schema_writer(
         .arg(&script)
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .env("PYTHONPATH", root.join("sdks/python"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -647,7 +633,6 @@ async fn run_python_schema_writer(
 async fn run_python_schema_reader(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
     expected_count: i32,
 ) -> Result<SchemaReadResult, String> {
     let root = project_root();
@@ -657,7 +642,6 @@ async fn run_python_schema_reader(
         .arg(&script)
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .arg(expected_count.to_string())
         .env("PYTHONPATH", root.join("sdks/python"))
         .stdout(Stdio::piped())
@@ -673,7 +657,6 @@ async fn run_python_schema_reader(
 async fn run_java_schema_writer(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
 ) -> Result<SchemaWriteResult, String> {
     let root = project_root();
     let jar_path = root.join("sdks/java/flourine-sdk/target/flourine-sdk-0.1.0.jar");
@@ -712,7 +695,6 @@ async fn run_java_schema_writer(
         .arg("io.flourine.test.JavaSchemaWriter")
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -726,7 +708,6 @@ async fn run_java_schema_writer(
 async fn run_java_schema_reader(
     url: &str,
     topic_id: i32,
-    partition_id: i32,
     expected_count: i32,
 ) -> Result<SchemaReadResult, String> {
     let root = project_root();
@@ -766,7 +747,6 @@ async fn run_java_schema_reader(
         .arg("io.flourine.test.JavaSchemaReader")
         .arg(url)
         .arg(topic_id.to_string())
-        .arg(partition_id.to_string())
         .arg(expected_count.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -792,20 +772,20 @@ async fn test_python_schema_to_java() {
     assert_cross_language_prerequisites(true, true).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("py-schema-to-java-test", 1).await;
+    let topic_id = db.create_topic("py-schema-to-java-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
-    let write_result = run_python_schema_writer(&url, topic_id, 0)
+    let write_result = run_python_schema_writer(&url, topic_id)
         .await
         .expect("Python schema writer should succeed");
 
     assert_eq!(write_result.writer, "python");
     assert_eq!(write_result.record_count, 1);
 
-    let read_result = run_java_schema_reader(&url, topic_id, 0, 1)
+    let read_result = run_java_schema_reader(&url, topic_id, 1)
         .await
         .expect("Java schema reader should succeed");
 
@@ -821,20 +801,20 @@ async fn test_java_schema_to_python() {
     assert_cross_language_prerequisites(true, true).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("java-schema-to-py-test", 1).await;
+    let topic_id = db.create_topic("java-schema-to-py-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
-    let write_result = run_java_schema_writer(&url, topic_id, 0)
+    let write_result = run_java_schema_writer(&url, topic_id)
         .await
         .expect("Java schema writer should succeed");
 
     assert_eq!(write_result.writer, "java");
     assert_eq!(write_result.record_count, 1);
 
-    let read_result = run_python_schema_reader(&url, topic_id, 0, 1)
+    let read_result = run_python_schema_reader(&url, topic_id, 1)
         .await
         .expect("Python schema reader should succeed");
 
@@ -850,26 +830,26 @@ async fn test_mixed_writers() {
     assert_cross_language_prerequisites(true, true).await;
 
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("mixed-writer-test", 1).await;
+    let topic_id = db.create_topic("mixed-writer-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
     let url = format!("ws://{}", addr);
 
     // Python produces 5 records
-    let py_result = run_python_writer(&url, topic_id, 0, 5)
+    let py_result = run_python_writer(&url, topic_id, 5)
         .await
         .expect("Python writer should succeed");
     assert_eq!(py_result.record_count, 5);
 
     // Java produces 5 more records
-    let java_result = run_java_writer(&url, topic_id, 0, 5)
+    let java_result = run_java_writer(&url, topic_id, 5)
         .await
         .expect("Java writer should succeed");
     assert_eq!(java_result.record_count, 5);
 
     // Python reader reads all 10
-    let py_consume = run_python_reader(&url, topic_id, 0, 10)
+    let py_consume = run_python_reader(&url, topic_id, 10)
         .await
         .expect("Python reader should succeed");
     assert_eq!(py_consume.record_count, 10);
@@ -890,7 +870,7 @@ async fn test_mixed_writers() {
     assert_eq!(java_records.len(), 5, "Should have 5 Java records");
 
     println!(
-        "✓ Mixed writers: {} Python + {} Java records in single topic",
+        "Mixed writers: {} Python + {} Java records in single topic",
         python_records.len(),
         java_records.len()
     );

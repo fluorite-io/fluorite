@@ -56,7 +56,7 @@ What this replaces:
 
 **Pipelined flush.** Buffer records from multiple writers, merge by (topic, partition, schema), compress into FL (ZSTD + CRC32), write to S3, commit offsets + index + dedup in one Postgres transaction. One flush runs while the next batch fills.
 
-**Reader groups.** Lease-based partition assignment via Postgres. Deterministic range assignment (pure function, no leader election). Incremental rebalance; dead readers detected via heartbeat expiry.
+**Reader groups.** Broker-driven offset-range dispatch via Postgres. Readers poll for work, broker hands out leased offset ranges. Dead readers detected via heartbeat expiry; expired ranges are re-dispatched.
 
 **Schema registry.** Avro backward compatibility validation at registration time. Built-in Avro deserializer (5-9x faster than apache-avro, 1.5 GiB/s) with zero-copy and bump allocation.
 

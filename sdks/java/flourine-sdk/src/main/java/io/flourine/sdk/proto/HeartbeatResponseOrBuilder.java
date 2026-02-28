@@ -35,18 +35,12 @@ public interface HeartbeatResponseOrBuilder extends
       getErrorMessageBytes();
 
   /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
-   */
-  long getGeneration();
-
-  /**
-   * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+   * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
    * @return The enum numeric value on the wire for status.
    */
   int getStatusValue();
   /**
-   * <code>.flourine.wire.HeartbeatStatus status = 5;</code>
+   * <code>.flourine.wire.HeartbeatStatus status = 4;</code>
    * @return The status.
    */
   io.flourine.sdk.proto.HeartbeatStatus getStatus();

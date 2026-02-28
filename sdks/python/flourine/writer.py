@@ -116,13 +116,11 @@ class Writer:
     async def send(
         self,
         topic_id: int,
-        partition_id: int,
         schema_id: int,
         records: list[pb.Record],
     ) -> pb.BatchAck:
         batch = pb.RecordBatch(
             topic_id=topic_id,
-            partition_id=partition_id,
             schema_id=schema_id,
             records=records,
         )
@@ -134,7 +132,6 @@ class Writer:
     async def send_one(
         self,
         topic_id: int,
-        partition_id: int,
         schema_id: int,
         key: Optional[bytes],
         value: bytes,
@@ -142,7 +139,7 @@ class Writer:
         record = pb.Record(value=value)
         if key is not None:
             record.key = key
-        return await self.send(topic_id, partition_id, schema_id, [record])
+        return await self.send(topic_id, schema_id, [record])
 
     async def send_batch(self, batches: list[pb.RecordBatch]) -> list[pb.BatchAck]:
         async with self._lock:
@@ -186,12 +183,11 @@ class Writer:
     def send_async(
         self,
         topic_id: int,
-        partition_id: int,
         schema_id: int,
         records: list[pb.Record],
     ) -> asyncio.Task:
         return asyncio.create_task(
-            self.send(topic_id, partition_id, schema_id, records)
+            self.send(topic_id, schema_id, records)
         )
 
     async def _send_request(

@@ -6,7 +6,6 @@
 
 mod common;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,7 +36,6 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
     let req = writer::AppendRequest {
@@ -45,7 +43,6 @@ async fn ws_produce(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -77,19 +74,12 @@ async fn ws_produce(
 async fn ws_read(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
     offset: Offset,
 ) -> Result<reader::ReadResponse, String> {
     let req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id,
-            partition_id,
-            offset,
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id,
+        offset,
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
     ws.send(Message::Binary(buf))
@@ -115,14 +105,13 @@ async fn ws_read(
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
 
     loop {
-        let resp = ws_read(ws, topic_id, partition_id, next_offset).await?;
+        let resp = ws_read(ws, topic_id, next_offset).await?;
         if !resp.success {
             return Err(format!("read failed: {}", resp.error_message));
         }
@@ -145,12 +134,12 @@ async fn ws_read_all(
 }
 
 /// Pause broker 0 (S3 partition + DB close). Reader A's heartbeats fail.
-/// Expire A via SQL. B detects A expired, gets all partitions.
-/// Resume broker 0. A reconnects, gets UnknownMember.
+/// Expire A via SQL. B detects A expired, stale member removed.
+/// Resume broker 0.
 #[tokio::test]
 async fn test_pause_broker_members_expire() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("pause-expire", 4).await as u32);
+    let topic_id = TopicId(db.create_topic("pause-expire").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -194,44 +183,6 @@ async fn test_pause_broker_members_expire() {
     });
     assert!(resp_b.success, "Reader B join should succeed");
 
-    let current_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
-    )
-    .bind("pause-group")
-    .bind(topic_id.0 as i32)
-    .fetch_one(&db.pool)
-    .await
-    .expect("query gen");
-
-    // Rejoin both to settle assignments
-    let rejoin_a = reader::RejoinRequest {
-        group_id: "pause-group".to_string(),
-        topic_id,
-        reader_id: "reader-a".to_string(),
-        generation: Generation(current_gen as u64),
-    };
-    let buf = ws_helpers::encode_client_frame(ClientMessage::Rejoin(rejoin_a), 8192);
-    ws_a.send(Message::Binary(buf)).await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_secs(5), ws_a.next())
-        .await
-        .expect("timeout")
-        .expect("closed")
-        .expect("error");
-
-    let rejoin_b = reader::RejoinRequest {
-        group_id: "pause-group".to_string(),
-        topic_id,
-        reader_id: "reader-b".to_string(),
-        generation: Generation(current_gen as u64),
-    };
-    let buf = ws_helpers::encode_client_frame(ClientMessage::Rejoin(rejoin_b), 8192);
-    ws_b.send(Message::Binary(buf)).await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_secs(5), ws_b.next())
-        .await
-        .expect("timeout")
-        .expect("closed")
-        .expect("error");
-
     // "Pause" broker 0: S3 partition + DB close
     drop(ws_a);
     cluster.broker_store(0).partition_puts();
@@ -254,7 +205,6 @@ async fn test_pause_broker_members_expire() {
         group_id: "pause-group".to_string(),
         topic_id,
         reader_id: "reader-b".to_string(),
-        generation: Generation(current_gen as u64),
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Heartbeat(hb_req), 8192);
     ws_b.send(Message::Binary(buf)).await.unwrap();
@@ -272,50 +222,16 @@ async fn test_pause_broker_members_expire() {
     };
     assert!(hb_resp.success, "B heartbeat should succeed");
 
-    // New generation after A expired
-    let new_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    // Verify reader-a was expired from members
+    let member_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reader_members WHERE group_id = $1 AND topic_id = $2",
     )
     .bind("pause-group")
     .bind(topic_id.0 as i32)
     .fetch_one(&db.pool)
     .await
-    .expect("query new gen");
-    assert!(new_gen > current_gen, "generation should bump");
-
-    // B rejoins → should get all 4 partitions
-    let rejoin_b2 = reader::RejoinRequest {
-        group_id: "pause-group".to_string(),
-        topic_id,
-        reader_id: "reader-b".to_string(),
-        generation: Generation(new_gen as u64),
-    };
-    let buf = ws_helpers::encode_client_frame(ClientMessage::Rejoin(rejoin_b2), 8192);
-    ws_b.send(Message::Binary(buf)).await.unwrap();
-    let msg = tokio::time::timeout(Duration::from_secs(5), ws_b.next())
-        .await
-        .expect("timeout")
-        .expect("closed")
-        .expect("error");
-    let rejoin_resp = match ws_helpers::decode_server_frame(match &msg {
-        Message::Binary(d) => d,
-        _ => panic!("expected binary"),
-    }) {
-        flourine_wire::ServerMessage::Rejoin(r) => r,
-        other => panic!("expected rejoin response, got {:?}", other),
-    };
-
-    let b_parts: HashSet<u32> = rejoin_resp
-        .assignments
-        .iter()
-        .map(|a| a.partition_id.0)
-        .collect();
-    assert_eq!(
-        b_parts.len(),
-        4,
-        "Reader B should own all 4 partitions after A expired, got {:?}",
-        b_parts
-    );
+    .expect("query members");
+    assert_eq!(member_count, 1, "only reader-b should remain after expiry");
 
     // Resume broker 0
     cluster.broker_store(0).heal_partition();
@@ -327,15 +243,14 @@ async fn test_pause_broker_members_expire() {
 #[tokio::test]
 async fn test_pause_broker_writes_stall() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("pause-stall", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("pause-stall").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
     // Write baseline
     let mut ws0 = ws_connect(cluster.broker(0).addr()).await;
     let w0 = WriterId::new();
-    let resp = ws_produce(&mut ws0, w0, 1, topic_id, partition_id, "pre-pause")
+    let resp = ws_produce(&mut ws0, w0, 1, topic_id, "pre-pause")
         .await
         .expect("baseline write");
     assert!(resp.success);
@@ -348,7 +263,7 @@ async fn test_pause_broker_writes_stall() {
     // Write via broker 0 should hang
     let hung = tokio::time::timeout(
         Duration::from_secs(2),
-        ws_produce(&mut ws0, WriterId::new(), 1, topic_id, partition_id, "hung"),
+        ws_produce(&mut ws0, WriterId::new(), 1, topic_id, "hung"),
     )
     .await;
     assert!(hung.is_err(), "broker 0 write should hang while paused");
@@ -359,7 +274,7 @@ async fn test_pause_broker_writes_stall() {
     let mut acked = vec![Bytes::from("pre-pause")];
     for i in 0..5 {
         let val = format!("b1-{}", i);
-        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, &val)
             .await
             .expect("broker 1 write");
         assert!(resp.success);
@@ -373,7 +288,7 @@ async fn test_pause_broker_writes_stall() {
 
     // Verify all acked writes visible
     let mut ws = ws_connect(cluster.broker(1).addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("final read");
     for v in &acked {
@@ -387,8 +302,7 @@ async fn test_pause_broker_writes_stall() {
 #[tokio::test]
 async fn test_pause_resume_no_data_loss() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("pause-nodataloss", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("pause-nodataloss").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
     let acked = Arc::new(Mutex::new(Vec::<Bytes>::new()));
@@ -398,7 +312,7 @@ async fn test_pause_resume_no_data_loss() {
     let w0 = WriterId::new();
     for i in 0..10 {
         let val = format!("b0-pre-{}", i);
-        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, &val)
             .await
             .expect("pre-pause write");
         assert!(resp.success);
@@ -416,7 +330,7 @@ async fn test_pause_resume_no_data_loss() {
     let w1 = WriterId::new();
     for i in 0..10 {
         let val = format!("b1-during-{}", i);
-        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, &val)
             .await
             .expect("during-pause write");
         assert!(resp.success);
@@ -433,7 +347,7 @@ async fn test_pause_resume_no_data_loss() {
     let w0b = WriterId::new();
     for i in 0..5 {
         let val = format!("b0-post-{}", i);
-        let resp = ws_produce(&mut ws0, w0b, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws0, w0b, i + 1, topic_id, &val)
             .await
             .expect("post-pause write");
         assert!(resp.success);
@@ -441,7 +355,7 @@ async fn test_pause_resume_no_data_loss() {
     }
 
     // Verify all 25 acked records visible
-    let (values, hwm) = ws_read_all(&mut ws0, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws0, topic_id)
         .await
         .expect("final read");
 

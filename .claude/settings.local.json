@@ -76,7 +76,22 @@
       "Bash(git push:*)",
       "Bash(pg_isready:*)",
       "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433/flourine cargo test:*)",
-      "WebFetch(domain:rust.iceberg.apache.org)"
+      "WebFetch(domain:rust.iceberg.apache.org)",
+      "Bash(tail:*)",
+      "Bash(jar tf:*)",
+      "Bash(git diff:*)",
+      "WebFetch(domain:crates.io)",
+      "Bash(docker ps:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433 cargo bench:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433 FLOURINE_LOAD_PRODUCERS=30 FLOURINE_LOAD_BATCHES_PER_PRODUCER=10000 FLOURINE_LOAD_RECORDS_PER_BATCH=128 FLOURINE_LOAD_PAYLOAD_BYTES=32 FLOURINE_LOAD_MAX_IN_FLIGHT=64 FLOURINE_LOAD_FETCH_TIMEOUT_SECS=600 FLOURINE_LOAD_ENABLE_OTEL=0 cargo test:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433 FLOURINE_LOAD_PRODUCERS=20 FLOURINE_LOAD_BATCHES_PER_PRODUCER=4000 FLOURINE_LOAD_RECORDS_PER_BATCH=1 FLOURINE_LOAD_PAYLOAD_BYTES=32 FLOURINE_LOAD_MAX_IN_FLIGHT=64 FLOURINE_LOAD_FETCH_TIMEOUT_SECS=600 FLOURINE_LOAD_ENABLE_OTEL=0 cargo test:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433 FLOURINE_LOAD_PRODUCERS=20 FLOURINE_LOAD_BATCHES_PER_PRODUCER=4000 FLOURINE_LOAD_RECORDS_PER_BATCH=100 FLOURINE_LOAD_PAYLOAD_BYTES=32 FLOURINE_LOAD_MAX_IN_FLIGHT=64 FLOURINE_LOAD_FETCH_TIMEOUT_SECS=600 FLOURINE_LOAD_ENABLE_OTEL=0 cargo test:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433 FLOURINE_LOAD_PRODUCERS=20 FLOURINE_LOAD_BATCHES_PER_PRODUCER=1500 FLOURINE_LOAD_RECORDS_PER_BATCH=250 FLOURINE_LOAD_PAYLOAD_BYTES=32 FLOURINE_LOAD_MAX_IN_FLIGHT=64 FLOURINE_LOAD_FETCH_TIMEOUT_SECS=600 FLOURINE_LOAD_ENABLE_OTEL=0 cargo test:*)",
+      "Bash(DATABASE_URL=postgres://postgres:postgres@localhost:5433 FLOURINE_LOAD_PRODUCERS=20 FLOURINE_LOAD_BATCHES_PER_PRODUCER=1000 FLOURINE_LOAD_RECORDS_PER_BATCH=500 FLOURINE_LOAD_PAYLOAD_BYTES=32 FLOURINE_LOAD_MAX_IN_FLIGHT=64 FLOURINE_LOAD_FETCH_TIMEOUT_SECS=600 FLOURINE_LOAD_ENABLE_OTEL=0 cargo test:*)",
+      "Bash(echo === Run $i ===:*)",
+      "Bash(git:*)",
+      "Bash(head:*)",
+      "WebFetch(domain:www.elastic.co)"
     ]
   }
 }

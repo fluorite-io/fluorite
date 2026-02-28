@@ -39,21 +39,16 @@ pub(crate) async fn can_read<S: ObjectStore + Send + Sync + 'static>(
     req: &reader::ReadRequest,
 ) -> bool {
     if let Some(principal) = principal {
-        for read in &req.reads {
-            let topic_name = read.topic_id.0.to_string();
-            let allowed = state
-                .acl_checker
-                .check(
-                    principal,
-                    ResourceType::Topic,
-                    &topic_name,
-                    Operation::Consume,
-                )
-                .await;
-            if !allowed {
-                return false;
-            }
-        }
+        let topic_name = req.topic_id.0.to_string();
+        return state
+            .acl_checker
+            .check(
+                principal,
+                ResourceType::Topic,
+                &topic_name,
+                Operation::Consume,
+            )
+            .await;
     }
     true
 }

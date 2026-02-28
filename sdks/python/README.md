@@ -176,7 +176,6 @@ asyncio.run(main())
 | `max_bytes` | `1048576` | Max bytes per read (1MB) |
 | `timeout` | `30.0` | Request timeout in seconds |
 | `heartbeat_interval` | `10.0` | Heartbeat interval in seconds |
-| `rebalance_delay` | `5.0` | Delay before claiming partitions |
 
 ## Development
 

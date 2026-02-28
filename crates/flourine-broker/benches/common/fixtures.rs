@@ -1,7 +1,7 @@
 //! Benchmark data fixtures.
 
 use bytes::Bytes;
-use flourine_common::ids::{PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
 use super::config::BenchmarkConfig;
@@ -38,13 +38,11 @@ pub fn generate_records(config: &BenchmarkConfig) -> Vec<Record> {
 /// Generate a single batch with random data.
 pub fn generate_segment(
     topic_id: TopicId,
-    partition_id: PartitionId,
     schema_id: SchemaId,
     config: &BenchmarkConfig,
 ) -> RecordBatch {
     RecordBatch {
         topic_id,
-        partition_id,
         schema_id,
         records: generate_records(config),
     }
@@ -53,7 +51,7 @@ pub fn generate_segment(
 /// Generate multiple batches for a FL file.
 pub fn generate_segments(config: &BenchmarkConfig) -> Vec<RecordBatch> {
     (0..config.segments_per_file)
-        .map(|i| generate_segment(TopicId(1), PartitionId(i as u32 % 8), SchemaId(100), config))
+        .map(|i| generate_segment(TopicId(1 + i as u32 % 8), SchemaId(100), config))
         .collect()
 }
 

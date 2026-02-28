@@ -11,7 +11,7 @@ use bytes::Bytes;
 use tempfile::TempDir;
 
 use flourine_broker::{BrokerBuffer, BufferConfig, LocalFsStore, ObjectStore, FlReader, FlWriter};
-use flourine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
 /// Test the full append flow without database (FL + ObjectStore).
@@ -20,11 +20,10 @@ async fn test_produce_flow_fl_s3() {
     let temp_dir = TempDir::new().unwrap();
     let store = LocalFsStore::new(temp_dir.path().to_path_buf());
 
-    // Create batches from multiple "writers"
+    // Create batches for two different topics
     let batches = vec![
         RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![
                 Record {
@@ -38,8 +37,7 @@ async fn test_produce_flow_fl_s3() {
             ],
         },
         RecordBatch {
-            topic_id: TopicId(1),
-            partition_id: PartitionId(1),
+            topic_id: TopicId(2),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("user-3")),
@@ -92,14 +90,13 @@ async fn test_buffer_merge_multiple_producers() {
 
     let mut buffer = BrokerBuffer::with_config(config);
 
-    // Writer 1 sends to partition 0
+    // Writer 1 sends to topic 1
     let p1 = WriterId::new();
     let mut rx1 = buffer.insert(
         p1,
         AppendSeq(1),
         vec![RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![
                 Record {
@@ -114,14 +111,13 @@ async fn test_buffer_merge_multiple_producers() {
         }],
     );
 
-    // Writer 2 sends to same partition 0
+    // Writer 2 sends to same topic 1
     let p2 = WriterId::new();
     let mut rx2 = buffer.insert(
         p2,
         AppendSeq(1),
         vec![RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("p2-k1")),
@@ -130,14 +126,13 @@ async fn test_buffer_merge_multiple_producers() {
         }],
     );
 
-    // Writer 3 sends to partition 1
+    // Writer 3 sends to topic 2
     let p3 = WriterId::new();
     let mut rx3 = buffer.insert(
         p3,
         AppendSeq(1),
         vec![RecordBatch {
-            topic_id: TopicId(1),
-            partition_id: PartitionId(1),
+            topic_id: TopicId(2),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("p3-k1")),
@@ -149,31 +144,31 @@ async fn test_buffer_merge_multiple_producers() {
     // Drain buffer
     let result = buffer.drain();
 
-    // Should have 2 merged batches (partition 0 and partition 1)
+    // Should have 2 merged batches (topic 1 and topic 2)
     assert_eq!(result.batches.len(), 2);
     assert_eq!(result.pending_writers.len(), 3);
 
-    // Find partition 0 batch - should have 3 records (2 from p1 + 1 from p2)
-    let partition0_idx = result
+    // Find topic 1 batch - should have 3 records (2 from p1 + 1 from p2)
+    let topic1_idx = result
         .batches
         .iter()
-        .position(|s| s.partition_id == PartitionId(0))
+        .position(|s| s.topic_id == TopicId(1))
         .unwrap();
-    assert_eq!(result.batches[partition0_idx].records.len(), 3);
+    assert_eq!(result.batches[topic1_idx].records.len(), 3);
 
-    // Find partition 1 batch - should have 1 record
-    let partition1_idx = result
+    // Find topic 2 batch - should have 1 record
+    let topic2_idx = result
         .batches
         .iter()
-        .position(|s| s.partition_id == PartitionId(1))
+        .position(|s| s.topic_id == TopicId(2))
         .unwrap();
-    assert_eq!(result.batches[partition1_idx].records.len(), 1);
+    assert_eq!(result.batches[topic2_idx].records.len(), 1);
 
     // Simulate offset assignment
-    // Partition 0: offsets 0-3, Partition 1: offsets 0-1
+    // Topic 1: offsets 0-3, Topic 2: offsets 0-1
     let mut segment_offsets = vec![(0u64, 0u64); 2];
-    segment_offsets[partition0_idx] = (0, 3);
-    segment_offsets[partition1_idx] = (0, 1);
+    segment_offsets[topic1_idx] = (0, 3);
+    segment_offsets[topic2_idx] = (0, 1);
 
     // Distribute append_acks
     BrokerBuffer::distribute_acks(result, &segment_offsets);
@@ -192,7 +187,7 @@ async fn test_buffer_merge_multiple_producers() {
     let acks3 = rx3.try_recv().unwrap();
     assert_eq!(acks3.len(), 1);
     assert_eq!(acks3[0].start_offset.0, 0);
-    assert_eq!(acks3[0].end_offset.0, 1); // p3 contributed 1 record to partition 1
+    assert_eq!(acks3[0].end_offset.0, 1); // p3 contributed 1 record to topic 2
 }
 
 /// Test FL compression efficiency.
@@ -209,7 +204,6 @@ async fn test_fl_compression_efficiency() {
 
     let batch = RecordBatch {
         topic_id: TopicId(1),
-        partition_id: PartitionId(0),
         schema_id: SchemaId(100),
         records,
     };
@@ -257,27 +251,24 @@ async fn test_fl_compression_efficiency() {
 async fn test_wire_protocol_large_payload() {
     use flourine_wire::writer;
 
-    // Create a large append request
+    // Create a large append request with multiple topics
     let mut batches = Vec::new();
-    for topic in 0..5 {
-        for partition in 0..10 {
-            let mut records = Vec::new();
-            for i in 0..100 {
-                records.push(Record {
-                    key: Some(Bytes::from(format!("t{}-p{}-k{}", topic, partition, i))),
-                    value: Bytes::from(format!(
-                        r#"{{"topic":{},"partition":{},"append_seq":{}}}"#,
-                        topic, partition, i
-                    )),
-                });
-            }
-            batches.push(RecordBatch {
-                topic_id: TopicId(topic),
-                partition_id: PartitionId(partition),
-                schema_id: SchemaId(100),
-                records,
+    for topic in 0..50 {
+        let mut records = Vec::new();
+        for i in 0..100 {
+            records.push(Record {
+                key: Some(Bytes::from(format!("t{}-k{}", topic, i))),
+                value: Bytes::from(format!(
+                    r#"{{"topic":{},"index":{}}}"#,
+                    topic, i
+                )),
             });
         }
+        batches.push(RecordBatch {
+            topic_id: TopicId(topic),
+            schema_id: SchemaId(100),
+            records,
+        });
     }
 
     let req = writer::AppendRequest {
@@ -298,7 +289,7 @@ async fn test_wire_protocol_large_payload() {
 
     assert_eq!(decoded_len, len);
     assert_eq!(decoded.append_seq.0, 42);
-    assert_eq!(decoded.batches.len(), 50); // 5 topics * 10 partitions
+    assert_eq!(decoded.batches.len(), 50); // 50 topics
 
     // Verify record counts
     for batch in &decoded.batches {
@@ -323,7 +314,7 @@ async fn test_e2e_buffer_to_s3() {
 
     let mut buffer = BrokerBuffer::with_config(config);
 
-    // Simulate 10 writers sending data
+    // Simulate 10 writers sending data spread across 3 topics
     let mut receivers = Vec::new();
     for i in 0..10 {
         let writer_id = WriterId::new();
@@ -331,8 +322,7 @@ async fn test_e2e_buffer_to_s3() {
             writer_id,
             AppendSeq(i as u64),
             vec![RecordBatch {
-                topic_id: TopicId(1),
-                partition_id: PartitionId((i % 3) as u32), // Spread across 3 partitions
+                topic_id: TopicId(((i % 3) + 1) as u32), // Spread across 3 topics
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: Some(Bytes::from(format!("writer-{}", i))),
@@ -345,7 +335,7 @@ async fn test_e2e_buffer_to_s3() {
 
     // Drain and write to S3
     let result = buffer.drain();
-    assert_eq!(result.batches.len(), 3); // 3 partitions
+    assert_eq!(result.batches.len(), 3); // 3 topics
 
     let mut writer = FlWriter::new();
     for batch in &result.batches {

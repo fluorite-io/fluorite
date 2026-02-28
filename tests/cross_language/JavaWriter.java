@@ -12,21 +12,20 @@ import java.util.*;
  * Cross-language E2E test: Java writer.
  *
  * Usage:
- *     java -cp <classpath> io.flourine.test.JavaWriter <url> <topic_id> <partition_id> <num_records>
+ *     java -cp <classpath> io.flourine.test.JavaWriter <url> <topic_id> <num_records>
  *
  * Appends records and prints the ack JSON to stdout.
  */
 public class JavaWriter {
     public static void main(String[] args) {
-        if (args.length != 4) {
-            System.err.println("Usage: JavaWriter <url> <topic_id> <partition_id> <num_records>");
+        if (args.length != 3) {
+            System.err.println("Usage: JavaWriter <url> <topic_id> <num_records>");
             System.exit(1);
         }
 
         String url = args[0];
         int topicId = Integer.parseInt(args[1]);
-        int partitionId = Integer.parseInt(args[2]);
-        int numRecords = Integer.parseInt(args[3]);
+        int numRecords = Integer.parseInt(args[2]);
 
         try {
             WriterConfig config = new WriterConfig().url(url);
@@ -52,13 +51,12 @@ public class JavaWriter {
                     );
                 }
 
-                BatchAck ack = writer.send(topicId, partitionId, 100, records);
+                BatchAck ack = writer.send(topicId, 100, records);
 
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("writer", "java");
                 result.put("writer_id", writer.getWriterId().toString());
                 result.put("topic_id", topicId);
-                result.put("partition_id", partitionId);
                 result.put("start_offset", ack.getStartOffset());
                 result.put("end_offset", ack.getEndOffset());
                 result.put("record_count", numRecords);

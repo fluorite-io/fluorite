@@ -5,7 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use flourine_broker::{ObjectStore, FlWriter};
-use flourine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{Offset, SchemaId, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 
 use super::TestBrokerState;
@@ -87,13 +87,12 @@ impl TestDb {
         &self.url
     }
 
-    /// Create a test topic with partitions.
-    pub async fn create_topic(&self, name: &str, partition_count: i32) -> i32 {
+    /// Create a test topic.
+    pub async fn create_topic(&self, name: &str) -> i32 {
         let topic_id: i32 = sqlx::query_scalar(
-            "INSERT INTO topics (name, partition_count) VALUES ($1, $2) RETURNING topic_id",
+            "INSERT INTO topics (name) VALUES ($1) RETURNING topic_id",
         )
         .bind(name)
-        .bind(partition_count)
         .fetch_one(&self.pool)
         .await
         .expect("Failed to create topic");
@@ -112,7 +111,6 @@ static APPEND_KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub async fn produce_records<S: ObjectStore + Send + Sync>(
     state: &TestBrokerState<S>,
     topic_id: TopicId,
-    partition_id: PartitionId,
     records: Vec<Record>,
 ) -> Result<(Offset, Offset), Box<dyn std::error::Error + Send + Sync>> {
     let counter = APPEND_KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -127,7 +125,6 @@ pub async fn produce_records<S: ObjectStore + Send + Sync>(
 
     let batch = RecordBatch {
         topic_id,
-        partition_id,
         schema_id: SchemaId(1),
         records: records.clone(),
     };
@@ -143,13 +140,12 @@ pub async fn produce_records<S: ObjectStore + Send + Sync>(
 
     let current_offset: i64 = sqlx::query_scalar(
         r#"
-        SELECT next_offset FROM partition_offsets
-        WHERE topic_id = $1 AND partition_id = $2
+        SELECT next_offset FROM topic_offsets
+        WHERE topic_id = $1
         FOR UPDATE
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&mut *tx)
     .await?
     .unwrap_or(0);
@@ -160,14 +156,11 @@ pub async fn produce_records<S: ObjectStore + Send + Sync>(
 
     sqlx::query(
         r#"
-        INSERT INTO partition_offsets (topic_id, partition_id, next_offset)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (topic_id, partition_id)
-        DO UPDATE SET next_offset = $3
+        UPDATE topic_offsets SET next_offset = $2
+        WHERE topic_id = $1
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .bind(end_offset)
     .execute(&mut *tx)
     .await?;
@@ -177,14 +170,13 @@ pub async fn produce_records<S: ObjectStore + Send + Sync>(
     sqlx::query(
         r#"
         INSERT INTO topic_batches (
-            topic_id, partition_id, schema_id,
+            topic_id, schema_id,
             start_offset, end_offset, record_count,
             s3_key, byte_offset, byte_length, ingest_time, crc32
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .bind(1i32)
     .bind(start_offset)
     .bind(end_offset)

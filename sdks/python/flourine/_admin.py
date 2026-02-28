@@ -16,7 +16,7 @@ class AdminClient:
         self._api_key = api_key
 
     async def list_topics(self) -> list[dict]:
-        """Fetch all topics. Returns list of {topic_id, name, partition_count, ...}."""
+        """Fetch all topics. Returns list of {topic_id, name, retention_hours, ...}."""
         return await self._get("/topics")
 
     async def register_schema(self, topic_id: int, schema: dict) -> int:

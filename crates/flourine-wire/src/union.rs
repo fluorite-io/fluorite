@@ -15,7 +15,7 @@ pub enum ClientMessage {
     Read(reader::ReadRequest),
     JoinGroup(reader::JoinGroupRequest),
     Heartbeat(reader::HeartbeatRequest),
-    Rejoin(reader::RejoinRequest),
+    Poll(reader::PollRequest),
     LeaveGroup(reader::LeaveGroupRequest),
     Commit(reader::CommitRequest),
     Auth(auth::AuthRequest),
@@ -28,7 +28,7 @@ pub enum ServerMessage {
     Read(reader::ReadResponse),
     JoinGroup(reader::JoinGroupResponse),
     Heartbeat(reader::HeartbeatResponseExt),
-    Rejoin(reader::RejoinResponse),
+    Poll(reader::PollResponse),
     LeaveGroup(reader::LeaveGroupResponse),
     Commit(reader::CommitResponse),
     Auth(auth::AuthResponse),
@@ -59,11 +59,11 @@ pub fn encode_client_message(msg: &ClientMessage, buf: &mut [u8]) -> Result<usiz
                 decode_from_encoded(req, reader::encode_heartbeat_request, "heartbeat request")?,
             )),
         },
-        ClientMessage::Rejoin(req) => proto::ClientMessage {
-            message: Some(proto::client_message::Message::Rejoin(decode_from_encoded(
+        ClientMessage::Poll(req) => proto::ClientMessage {
+            message: Some(proto::client_message::Message::Poll(decode_from_encoded(
                 req,
-                reader::encode_rejoin_request,
-                "rejoin request",
+                reader::encode_poll_request,
+                "poll request",
             )?)),
         },
         ClientMessage::LeaveGroup(req) => proto::ClientMessage {
@@ -116,8 +116,8 @@ pub fn decode_client_message(buf: &[u8]) -> Result<(ClientMessage, usize), Decod
                     "heartbeat request",
                 )?)
             }
-            proto::client_message::Message::Rejoin(inner) => ClientMessage::Rejoin(
-                encode_and_decode(inner, reader::decode_rejoin_request, "rejoin request")?,
+            proto::client_message::Message::Poll(inner) => ClientMessage::Poll(
+                encode_and_decode(inner, reader::decode_poll_request, "poll request")?,
             ),
             proto::client_message::Message::LeaveGroup(inner) => ClientMessage::LeaveGroup(
                 encode_and_decode(inner, reader::decode_leave_request, "leave request")?,
@@ -174,12 +174,12 @@ pub fn encode_server_message(msg: &ServerMessage, buf: &mut [u8]) -> Result<usiz
                 )?,
             )),
         },
-        ServerMessage::Rejoin(resp) => proto::ServerMessage {
-            message: Some(proto::server_message::Message::Rejoin(
+        ServerMessage::Poll(resp) => proto::ServerMessage {
+            message: Some(proto::server_message::Message::Poll(
                 decode_from_encoded_result(
                     resp,
-                    reader::encode_rejoin_response_checked,
-                    "rejoin response",
+                    reader::encode_poll_response_checked,
+                    "poll response",
                 )?,
             )),
         },
@@ -239,8 +239,8 @@ pub fn decode_server_message(buf: &[u8]) -> Result<(ServerMessage, usize), Decod
                     "heartbeat response",
                 )?)
             }
-            proto::server_message::Message::Rejoin(inner) => ServerMessage::Rejoin(
-                encode_and_decode(inner, reader::decode_rejoin_response, "rejoin response")?,
+            proto::server_message::Message::Poll(inner) => ServerMessage::Poll(
+                encode_and_decode(inner, reader::decode_poll_response, "poll response")?,
             ),
             proto::server_message::Message::LeaveGroup(inner) => ServerMessage::LeaveGroup(
                 encode_and_decode(inner, reader::decode_leave_response, "leave response")?,
@@ -336,7 +336,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use flourine_common::ids::{
-        Generation, Offset, PartitionId, WriterId, SchemaId, AppendSeq, TopicId,
+        Offset, WriterId, SchemaId, AppendSeq, TopicId,
     };
     use flourine_common::types::{Record, RecordBatch};
 
@@ -347,7 +347,6 @@ mod tests {
             append_seq: AppendSeq(7),
             batches: vec![RecordBatch {
                 topic_id: TopicId(1),
-                partition_id: PartitionId(0),
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: Some(Bytes::from_static(b"k")),
@@ -363,14 +362,13 @@ mod tests {
     }
 
     #[test]
-    fn test_server_union_roundtrip_fetch() {
+    fn test_server_union_roundtrip_read() {
         let msg = ServerMessage::Read(reader::ReadResponse {
             success: true,
             error_code: 0,
             error_message: String::new(),
-            results: vec![reader::PartitionResult {
+            results: vec![reader::TopicResult {
                 topic_id: TopicId(1),
-                partition_id: PartitionId(0),
                 schema_id: SchemaId(100),
                 high_watermark: Offset(1),
                 records: vec![Record {
@@ -407,7 +405,6 @@ mod tests {
             success: true,
             error_code: 0,
             error_message: String::new(),
-            generation: Generation(3),
             status: reader::HeartbeatStatus::Ok,
         });
         let mut buf = vec![0u8; 1024];
@@ -415,5 +412,23 @@ mod tests {
         let (decoded, used) = decode_server_message(&buf[..len]).unwrap();
         assert_eq!(used, len);
         assert!(matches!(decoded, ServerMessage::Heartbeat(_)));
+    }
+
+    #[test]
+    fn test_server_union_roundtrip_poll() {
+        let msg = ServerMessage::Poll(reader::PollResponse {
+            success: true,
+            error_code: 0,
+            error_message: String::new(),
+            results: vec![],
+            start_offset: Offset(100),
+            end_offset: Offset(200),
+            lease_deadline_ms: 1234567890,
+        });
+        let mut buf = vec![0u8; 1024];
+        let len = encode_server_message(&msg, &mut buf).unwrap();
+        let (decoded, used) = decode_server_message(&buf[..len]).unwrap();
+        assert_eq!(used, len);
+        assert!(matches!(decoded, ServerMessage::Poll(_)));
     }
 }

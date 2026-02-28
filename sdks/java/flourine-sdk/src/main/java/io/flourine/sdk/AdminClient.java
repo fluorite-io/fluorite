@@ -33,7 +33,7 @@ public class AdminClient {
     }
 
     /**
-     * Fetch all topics. Each map contains topic_id, name, partition_count, etc.
+     * Fetch all topics. Each map contains topic_id, name, retention_hours, etc.
      */
     public List<Map<String, Object>> listTopics() throws FlourineException {
         HttpRequest.Builder req = HttpRequest.newBuilder()

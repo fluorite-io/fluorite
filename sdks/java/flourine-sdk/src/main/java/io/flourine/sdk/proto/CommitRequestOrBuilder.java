@@ -35,32 +35,20 @@ public interface CommitRequestOrBuilder extends
       getReaderIdBytes();
 
   /**
-   * <code>uint64 generation = 3;</code>
-   * @return The generation.
+   * <code>uint32 topic_id = 3;</code>
+   * @return The topicId.
    */
-  long getGeneration();
+  int getTopicId();
 
   /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
+   * <code>uint64 start_offset = 4;</code>
+   * @return The startOffset.
    */
-  java.util.List<io.flourine.sdk.proto.PartitionCommit> 
-      getCommitsList();
+  long getStartOffset();
+
   /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
+   * <code>uint64 end_offset = 5;</code>
+   * @return The endOffset.
    */
-  io.flourine.sdk.proto.PartitionCommit getCommits(int index);
-  /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-   */
-  int getCommitsCount();
-  /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-   */
-  java.util.List<? extends io.flourine.sdk.proto.PartitionCommitOrBuilder> 
-      getCommitsOrBuilderList();
-  /**
-   * <code>repeated .flourine.wire.PartitionCommit commits = 4;</code>
-   */
-  io.flourine.sdk.proto.PartitionCommitOrBuilder getCommitsOrBuilder(
-      int index);
+  long getEndOffset();
 }

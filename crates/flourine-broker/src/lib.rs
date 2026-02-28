@@ -20,8 +20,8 @@ pub use auth::{AclChecker, ApiKeyValidator, AuthError, Operation, Principal, Res
 pub use batched_server::{BrokerConfig, BrokerState, run, run_with_shutdown};
 pub use buffer::{BrokerBuffer, BufferConfig, DrainResult, PendingWriter, BatchKey};
 pub use coordinator::{
-    Assignment, CommitStatus, Coordinator, CoordinatorConfig, HeartbeatResult, HeartbeatStatus,
-    JoinResult, RejoinResult, RejoinStatus, compute_assignment,
+    CommitStatus, Coordinator, CoordinatorConfig, HeartbeatStatus,
+    PollResult, PollStatus,
 };
 pub use dedup::{DedupCache, DedupCacheConfig, DedupResult, WriterState};
 pub use error::BrokerError;

@@ -4,20 +4,18 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box};
 use std::time::Duration;
 use flourine_broker::{BrokerBuffer, BufferConfig};
-use flourine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 use uuid::Uuid;
 
 /// Create a batch with specified record count and value size.
 fn make_segment(
     topic_id: u32,
-    partition_id: u32,
     record_count: usize,
     value_size: usize,
 ) -> RecordBatch {
     RecordBatch {
         topic_id: TopicId(topic_id),
-        partition_id: PartitionId(partition_id),
         schema_id: SchemaId(100),
         records: (0..record_count)
             .map(|_| Record {
@@ -33,7 +31,7 @@ pub fn bench_buffer_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("buffer_insert");
 
     for record_count in &[1, 10, 100, 1000] {
-        let batch = make_segment(1, 0, *record_count, 256);
+        let batch = make_segment(1, *record_count, 256);
         let bytes: usize = batch.records.iter().map(|r| r.value.len() + 16).sum();
 
         group.throughput(Throughput::Bytes(bytes as u64));
@@ -64,7 +62,7 @@ pub fn bench_buffer_insert(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark batch merging (multiple producers to same partition).
+/// Benchmark batch merging (multiple producers to same topic).
 pub fn bench_buffer_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("buffer_merge");
 
@@ -89,11 +87,11 @@ pub fn bench_buffer_merge(c: &mut Criterion) {
                         // Pre-insert producers except the last one
                         for i in 0..(count - 1) {
                             let writer_id = WriterId(Uuid::from_u128(i as u128));
-                            let batch = make_segment(1, 0, record_count, value_size);
+                            let batch = make_segment(1, record_count, value_size);
                             let _ = buffer.insert(writer_id, AppendSeq(1), vec![batch]);
                         }
 
-                        let last_segment = make_segment(1, 0, record_count, value_size);
+                        let last_segment = make_segment(1, record_count, value_size);
                         (buffer, last_segment)
                     },
                     |(mut buffer, seg)| {
@@ -113,11 +111,11 @@ pub fn bench_buffer_merge(c: &mut Criterion) {
 pub fn bench_buffer_drain(c: &mut Criterion) {
     let mut group = c.benchmark_group("buffer_drain");
 
-    for (producers, partitions) in &[(10, 1), (10, 4), (50, 8), (100, 16)] {
+    for (producers, topics) in &[(10, 1), (10, 4), (50, 8), (100, 16)] {
         group.bench_with_input(
-            BenchmarkId::new("config", format!("{}p_{}part", producers, partitions)),
-            &(*producers, *partitions),
-            |b, &(producer_count, partition_count)| {
+            BenchmarkId::new("config", format!("{}p_{}t", producers, topics)),
+            &(*producers, *topics),
+            |b, &(producer_count, topic_count)| {
                 b.iter_batched(
                     || {
                         let config = BufferConfig {
@@ -131,8 +129,8 @@ pub fn bench_buffer_drain(c: &mut Criterion) {
                         // Insert data from multiple producers
                         for i in 0..producer_count {
                             let writer_id = WriterId(Uuid::from_u128(i as u128));
-                            let partition = (i % partition_count) as u32;
-                            let batch = make_segment(1, partition, 10, 256);
+                            let topic = (i % topic_count) as u32 + 1;
+                            let batch = make_segment(topic, 10, 256);
                             let _ = buffer.insert(writer_id, AppendSeq(1), vec![batch]);
                         }
 
@@ -168,10 +166,10 @@ pub fn bench_distribute_acks(c: &mut Criterion) {
                         let mut buffer = BrokerBuffer::with_config(config);
                         let mut receivers = Vec::with_capacity(count);
 
-                        // Insert data from multiple producers (all to partition 0)
+                        // Insert data from multiple producers (all to topic 1)
                         for i in 0..count {
                             let writer_id = WriterId(Uuid::from_u128(i as u128));
-                            let batch = make_segment(1, 0, 10, 256);
+                            let batch = make_segment(1, 10, 256);
                             let rx = buffer.insert(writer_id, AppendSeq(1), vec![batch]);
                             receivers.push(rx);
                         }
@@ -203,17 +201,17 @@ pub fn bench_distribute_acks(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark multi-partition insert (writer sends to multiple partitions).
-pub fn bench_multi_partition_insert(c: &mut Criterion) {
-    let mut group = c.benchmark_group("multi_partition_insert");
+/// Benchmark multi-topic insert (writer sends to multiple topics).
+pub fn bench_multi_topic_insert(c: &mut Criterion) {
+    let mut group = c.benchmark_group("multi_topic_insert");
 
-    for partition_count in &[1, 4, 8, 16] {
-        let batches: Vec<RecordBatch> = (0..*partition_count)
-            .map(|p| make_segment(1, p as u32, 10, 256))
+    for topic_count in &[1, 4, 8, 16] {
+        let batches: Vec<RecordBatch> = (0..*topic_count)
+            .map(|t| make_segment(t as u32 + 1, 10, 256))
             .collect();
 
         group.bench_with_input(
-            BenchmarkId::new("partitions", partition_count),
+            BenchmarkId::new("topics", topic_count),
             &batches,
             |b, segs| {
                 b.iter_batched(

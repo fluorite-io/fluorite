@@ -15,7 +15,6 @@ use super::AdminState;
 pub struct TopicInfo {
     pub topic_id: i32,
     pub name: String,
-    pub partition_count: i32,
     pub retention_hours: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -24,7 +23,6 @@ pub struct TopicInfo {
 #[derive(Debug, Deserialize)]
 pub struct CreateTopicRequest {
     pub name: String,
-    pub partition_count: i32,
     #[serde(default = "default_retention")]
     pub retention_hours: i32,
 }
@@ -57,7 +55,7 @@ pub fn router() -> Router<AdminState> {
 async fn list_topics(State(state): State<AdminState>) -> Result<Json<Vec<TopicInfo>>, StatusCode> {
     let rows: Vec<TopicRow> = sqlx::query_as(
         r#"
-        SELECT topic_id, name, partition_count, retention_hours, created_at
+        SELECT topic_id, name, retention_hours, created_at
         FROM topics
         ORDER BY created_at DESC
         "#,
@@ -71,7 +69,6 @@ async fn list_topics(State(state): State<AdminState>) -> Result<Json<Vec<TopicIn
         .map(|r| TopicInfo {
             topic_id: r.topic_id,
             name: r.name,
-            partition_count: r.partition_count,
             retention_hours: r.retention_hours,
             created_at: r.created_at,
         })
@@ -84,16 +81,15 @@ async fn create_topic(
     State(state): State<AdminState>,
     Json(req): Json<CreateTopicRequest>,
 ) -> Result<(StatusCode, Json<CreateTopicResponse>), StatusCode> {
-    // Insert topic. Partition offsets are created by DB trigger.
+    // Insert topic. Topic offset is created by DB trigger.
     let topic_id: i32 = sqlx::query_scalar(
         r#"
-        INSERT INTO topics (name, partition_count, retention_hours)
-        VALUES ($1, $2, $3)
+        INSERT INTO topics (name, retention_hours)
+        VALUES ($1, $2)
         RETURNING topic_id
         "#,
     )
     .bind(&req.name)
-    .bind(req.partition_count)
     .bind(req.retention_hours)
     .fetch_one(&state.pool)
     .await
@@ -115,7 +111,7 @@ async fn get_topic(
 ) -> Result<Json<TopicInfo>, StatusCode> {
     let row: Option<TopicRow> = sqlx::query_as(
         r#"
-        SELECT topic_id, name, partition_count, retention_hours, created_at
+        SELECT topic_id, name, retention_hours, created_at
         FROM topics
         WHERE topic_id = $1
         "#,
@@ -130,7 +126,6 @@ async fn get_topic(
     Ok(Json(TopicInfo {
         topic_id: row.topic_id,
         name: row.name,
-        partition_count: row.partition_count,
         retention_hours: row.retention_hours,
         created_at: row.created_at,
     }))
@@ -184,7 +179,6 @@ async fn delete_topic(
 struct TopicRow {
     topic_id: i32,
     name: String,
-    partition_count: i32,
     retention_hours: i32,
     created_at: chrono::DateTime<chrono::Utc>,
 }

@@ -7,7 +7,7 @@ This document describes the algorithms that provide failure tolerance between wr
 ```
 Writer ──WebSocket──► Broker ──S3 PUT──► Object Store (FL files)
                         │
-                        ├──Postgres──► partition_offsets
+                        ├──Postgres──► topic_offsets
                         ├──Postgres──► topic_batches  (segment index)
                         ├──Postgres──► writer_state   (dedup)
                         └──Postgres──► reader_*       (group coordination)
@@ -112,13 +112,13 @@ This is safe given the SDK's guarantees: `append_seq` only increments and is nev
 
 ### Problem
 
-The broker must merge records from many writers into efficient S3 objects while ensuring that offsets are gap-free, per-partition monotonic, and that each writer gets correct ack offsets.
+The broker must merge records from many writers into efficient S3 objects while ensuring that offsets are gap-free, per-topic monotonic, and that each writer gets correct ack offsets.
 
 ### Algorithm
 
 **Buffer** (`crates/flourine-broker/src/buffer.rs`):
 
-Records are grouped by `BatchKey(topic_id, partition_id, schema_id)`. Multiple writers targeting the same key have their records appended into a single `BufferedSegment`. Each `PendingWriter` tracks:
+Records are grouped by `BatchKey(topic_id, schema_id)`. Multiple writers targeting the same key have their records appended into a single `BufferedSegment`. Each `PendingWriter` tracks:
 - `segment_keys`: which batch keys this writer contributed to
 - `record_counts`: how many records per key
 - `start_indices`: the insertion point within each merged batch
@@ -161,9 +161,9 @@ execute_flush(drain_result):
   2. Build FL file (ZSTD-compressed, CRC32 per segment)
   3. S3 PUT (single write for all segments in this flush)
   4. commit_batch() in a single Postgres transaction:
-     a. Allocate offsets: atomic increment of partition_offsets.next_offset
-        per (topic_id, partition_id). Uses INSERT ... ON CONFLICT DO UPDATE
-        with a single batched query for all partitions.
+     a. Allocate offsets: atomic increment of topic_offsets.next_offset
+        per topic_id. Uses INSERT ... ON CONFLICT DO UPDATE
+        with a single batched query for all topics.
      b. Insert segment index rows into topic_batches.
      c. Persist writer dedup state (highest append_seq per writer in this flush).
      d. COMMIT transaction.
@@ -177,17 +177,17 @@ execute_flush(drain_result):
 The key algorithm for gap-free offsets:
 
 ```
-For each (topic_id, partition_id):
-  total_delta = sum of record_counts for all segments in this partition
-  partition_end = atomically increment partition_offsets.next_offset by total_delta
-  cursor = partition_end - total_delta  (this is the start)
+For each topic_id:
+  total_delta = sum of record_counts for all segments in this topic
+  topic_end = atomically increment topic_offsets.next_offset by total_delta
+  cursor = topic_end - total_delta  (this is the start)
 
-  For each segment in this partition (in insertion order):
+  For each segment in this topic (in insertion order):
     segment_offsets[seg_idx] = (cursor, cursor + segment.record_count)
     cursor += segment.record_count
 ```
 
-This is done in a single batched `INSERT ... ON CONFLICT ... RETURNING` query, so all partitions get their offsets in one round-trip.
+This is done in a single batched `INSERT ... ON CONFLICT ... RETURNING` query, so all topics get their offsets in one round-trip.
 
 **Ack distribution** (`BrokerBuffer::distribute_acks` in `buffer.rs`):
 
@@ -198,7 +198,7 @@ For each PendingWriter:
     (seg_start, seg_end) = segment_offsets[seg_idx]
     writer_start = seg_start + start_idx
     writer_end = writer_start + record_count
-    → BatchAck { topic_id, partition_id, schema_id, start_offset, end_offset }
+    → BatchAck { topic_id, schema_id, start_offset, end_offset }
 ```
 
 ### Backpressure
@@ -209,7 +209,7 @@ For each PendingWriter:
 
 ### Invariant
 
-> Within a single partition, offsets are contiguous and monotonically increasing. No offset is assigned twice. The S3 data, the segment index, and the offset counter are committed atomically.
+> Within a single topic, offsets are contiguous and monotonically increasing. No offset is assigned twice. The S3 data, the segment index, and the offset counter are committed atomically.
 
 ### Failure Scenarios
 
@@ -226,7 +226,7 @@ For each PendingWriter:
 
 ### Problem
 
-Records must be stored durably in S3 and retrieved efficiently for reads. A single S3 object may contain segments for multiple (topic, partition, schema) combinations.
+Records must be stored durably in S3 and retrieved efficiently for reads. A single S3 object may contain segments for multiple (topic, schema) combinations.
 
 ### Format (`crates/flourine-broker/src/fl.rs`)
 
@@ -244,9 +244,9 @@ Records must be stored durably in S3 and retrieved efficiently for reads. A sing
 └───────────────────────────────────────┘
 ```
 
-Each `SegmentMeta` contains: `topic_id, partition_id, schema_id, start_offset, end_offset, record_count, byte_offset, byte_length, ingest_time, compression_codec, crc32`.
+Each `SegmentMeta` contains: `topic_id, schema_id, start_offset, end_offset, record_count, byte_offset, byte_length, ingest_time, compression_codec, crc32`.
 
-The footer is encoded as: a varint count, then for each segment: varints for topic_id, partition_id, schema_id, start_offset (unsigned), end_offset (unsigned), record_count; unsigned varints for byte_offset, byte_length, ingest_time; a single byte for compression codec; and 4 bytes big-endian for crc32.
+The footer is encoded as: a varint count, then for each segment: varints for topic_id, schema_id, start_offset (unsigned), end_offset (unsigned), record_count; unsigned varints for byte_offset, byte_length, ingest_time; a single byte for compression codec; and 4 bytes big-endian for crc32.
 
 **Integrity:** each segment is independently CRC32-checksummed over the compressed bytes. On read, the CRC is verified before decompression.
 
@@ -258,36 +258,35 @@ The footer is encoded as: a varint count, then for each segment: varints for top
 
 ### Problem
 
-Readers need to fetch records starting from a given offset for a partition. The data is in S3, indexed by the `topic_batches` table.
+Readers need to fetch records starting from a given offset for a topic. The data is in S3, indexed by the `topic_batches` table.
 
-### Algorithm (`crates/flourine-broker/src/batched_server/read.rs`)
+### Algorithm (`crates/flourine-broker/src/batched_server/read.rs`, `fetch.rs`)
 
 ```
-process_read(req):
-  for each PartitionRead in req.reads:
-    1. Query topic_batches WHERE topic_id AND partition_id
-       AND end_offset > requested_offset
-       ORDER BY start_offset LIMIT 10
+process_read(ReadRequest { topic_id, offset, max_bytes }):
+  1. Query topic_batches WHERE topic_id
+     AND end_offset > requested_offset
+     ORDER BY start_offset LIMIT 10
 
-    2. Query partition_offsets for high_watermark (next_offset)
+  2. Query topic_offsets for high_watermark (next_offset)
 
-    3. For each matching segment:
-       a. S3 range read: get_range(s3_key, byte_offset, byte_length)
-       b. Construct SegmentMeta with byte_offset=0 (range read is the slice)
-       c. FlReader::read_segment(data, meta, verify_crc=true)
-       d. Skip records before requested_offset
+  3. For each matching segment:
+     a. S3 range read: get_range(s3_key, byte_offset, byte_length)
+     b. Construct SegmentMeta with byte_offset=0 (range read is the slice)
+     c. FlReader::read_segment(data, meta, verify_crc=true)
+     d. Skip records before requested_offset
 
-    4. Group records by schema_id: when the schema changes between
-       segments, a new PartitionResult is emitted. This preserves
-       schema boundaries so the reader knows which schema to use
-       for deserialization.
+  4. Group records by schema_id: when the schema changes between
+     segments, a new TopicResult is emitted. This preserves
+     schema boundaries so the reader knows which schema to use
+     for deserialization.
 
-    5. Accumulate records up to max_bytes limit (counted by
-       key + value byte sizes). Stop fetching segments once
-       the limit is reached.
+  5. Accumulate records up to max_bytes limit (counted by
+     key + value byte sizes). Stop fetching segments once
+     the limit is reached.
 
-    6. If no segments matched, return an empty PartitionResult
-       with schema_id=0 and the current high_watermark.
+  6. If no segments matched, return an empty TopicResult
+     with schema_id=0 and the current high_watermark.
 ```
 
 ### Failure Tolerance
@@ -298,52 +297,31 @@ process_read(req):
 
 ---
 
-## 5. Reader Groups: Partition Assignment and Rebalance
+## 5. Reader Groups: Broker-Driven Offset-Range Dispatch
 
 ### Problem
 
-Multiple readers in a group must split partitions among themselves. When readers join, leave, or crash, partitions must be reassigned with minimal disruption, and committed offsets must be preserved.
+Multiple readers in a group need to consume a topic in parallel without duplicating work. Rather than assigning fixed ownership of offsets to readers (which requires rebalancing when membership changes), the broker acts as a work dispatcher — handing out leased offset ranges to readers on demand.
 
 ### State Model (all in Postgres)
 
 | Table | Purpose |
 |-------|---------|
-| `reader_groups` | `(group_id, topic_id, generation)` — generation monotonically increases on rebalance |
+| `reader_groups` | `(group_id, topic_id)` — group registration |
 | `reader_members` | `(group_id, topic_id, reader_id, broker_id, last_heartbeat)` |
-| `reader_assignments` | `(group_id, topic_id, partition_id, reader_id, generation, committed_offset, lease_expires_at)` |
+| `reader_group_state` | `(group_id, topic_id, dispatch_cursor, committed_watermark)` — group-level progress |
+| `reader_inflight` | `(group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at)` — leased offset ranges |
+
+The `dispatch_cursor` tracks the frontier of dispatched work. The `committed_watermark` tracks the lowest offset that has not yet been committed — everything below it has been fully processed.
 
 ### Coordinator Configuration (`crates/flourine-broker/src/coordinator/mod.rs`)
 
-`CoordinatorConfig` has three fields:
-
 | Field | Default | Purpose |
 |-------|---------|---------|
-| `lease_duration` | 45s | How long a partition lease remains valid after renewal |
+| `lease_duration` | 45s | How long an inflight range lease remains valid after renewal |
 | `session_timeout` | 30s | How long before a member without heartbeat is considered expired |
-| `broker_id` | random UUID | Identifies this broker instance; stored in `reader_members.broker_id` on join/heartbeat |
-
-### Partition Assignment Algorithm (`crates/flourine-broker/src/coordinator/mod.rs`)
-
-Deterministic range-based assignment. Given a sorted member list and partition count:
-
-```
-compute_assignment(reader_id, members, partition_count):
-  sorted_members = sort(members)
-  my_index = position of reader_id in sorted_members
-  per_member = partition_count / len(members)
-  remainder = partition_count % len(members)
-
-  if my_index < remainder:
-    start = my_index * (per_member + 1)
-    count = per_member + 1
-  else:
-    start = remainder * (per_member + 1) + (my_index - remainder) * per_member
-    count = per_member
-
-  return [start, start+1, ..., start+count-1]
-```
-
-This is a pure function — any broker computes the same result for the same inputs. No leader election or centralized assignment needed.
+| `broker_id` | random UUID | Identifies this broker instance; stored in `reader_members.broker_id` |
+| `max_inflight_per_reader` | 10 | Maximum outstanding (uncommitted) poll ranges per reader |
 
 ### Join Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
 
@@ -352,124 +330,138 @@ join_group(group_id, topic_id, reader_id):
   BEGIN TRANSACTION
   1. Initialize group if first reader (idempotent):
      - INSERT reader_groups ON CONFLICT DO NOTHING
-     - Create reader_assignments rows for all partitions (ON CONFLICT DO NOTHING)
+     - INSERT reader_group_state (dispatch_cursor=0, committed_watermark=0)
+       ON CONFLICT DO NOTHING
   2. Upsert into reader_members (register membership, update heartbeat)
-  3. Bump generation (generation += 1 in reader_groups)
-  4. Query live members (last_heartbeat within session_timeout)
-  5. Get partition_count from topics table
-  6. compute_assignment for this reader
-  7. For each assigned partition:
-     Claim only if reader_id IS NULL OR lease_expires_at < NOW()
-     Set lease_expires_at = NOW() + lease_duration (default 45s)
   COMMIT
-  Return (generation, claimed_assignments)
 ```
 
-**Key detail:** step 7 only claims **unclaimed or expired** partitions. A reader cannot steal a partition from another live reader. This prevents split-brain during concurrent joins.
+Join is lightweight — it registers the member. No assignment computation, no generation bump. The reader begins polling immediately after join.
+
+### Poll Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
+
+The poll is the core dispatch mechanism. The broker hands out the next available offset range:
+
+```
+poll(group_id, topic_id, reader_id, max_bytes):
+  BEGIN TRANSACTION
+  1. Verify member exists → empty result if not
+  2. Check inflight count for this reader vs max_inflight_per_reader
+     → return MaxInflight status if at limit
+  3. Try to steal an expired inflight lease (lease_expires_at < NOW()):
+     UPDATE reader_inflight SET reader_id = this_reader, renew lease
+     WHERE expired, ORDER BY start_offset LIMIT 1 FOR UPDATE SKIP LOCKED
+     → if stolen: COMMIT, return stolen range
+  4. Lock dispatch_cursor FOR UPDATE (serializes concurrent polls)
+  5. Read high_watermark from topic_offsets
+     → if dispatch_cursor >= high_watermark: no new data, return empty
+  6. Find batches from topic_batches WHERE topic_id
+     AND end_offset > dispatch_cursor AND start_offset < high_watermark
+     Accumulate byte_length up to max_bytes
+  7. INSERT into reader_inflight (start_offset, end_offset, reader_id, lease)
+  8. Advance dispatch_cursor to end_offset
+  COMMIT
+  Return (start_offset, end_offset, lease_deadline_ms)
+```
+
+**Key details:**
+- Step 3 reclaims expired leases before advancing the cursor, preventing offset gaps when readers die.
+- Step 4 uses `FOR UPDATE` on `reader_group_state` to serialize concurrent polls. This is the single serialization point for the group.
+- The broker also fetches and returns the actual records for the dispatched range (via `fetch_records`), so the poll response includes both the lease and the data.
 
 ### Heartbeat Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
 
 ```
-heartbeat(group_id, topic_id, reader_id, reader_generation):
+heartbeat(group_id, topic_id, reader_id):
   BEGIN TRANSACTION
   1. Update last_heartbeat for this member
      → if no row updated: return UnknownMember
-  2. Renew leases on all partitions owned by this reader
+  2. Renew leases on all inflight ranges owned by this reader
   3. Find expired members (last_heartbeat < NOW() - session_timeout)
   4. If expired members exist:
      a. Delete expired members
-     b. Release their partitions (set reader_id = NULL)
-     c. Bump generation
-  5. Read current generation
+     b. Delete their inflight ranges, capturing the minimum start_offset
+     c. Roll back dispatch_cursor to MIN(deleted start_offset, dispatch_cursor)
+        so those ranges get re-dispatched on next poll
+     d. Update committed_watermark = MIN(remaining inflight start_offsets)
+        or dispatch_cursor if no inflight ranges remain
   COMMIT
-  If current_generation > reader_generation: return RebalanceNeeded
-  Else: return Ok
+  Return Ok
 ```
 
-**How dead readers are detected:** the heartbeat handler of any live reader finds expired members and evicts them. This is distributed — no dedicated reaper thread. Any broker processing any heartbeat for the group can trigger the eviction.
-
-### Rejoin Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
-
-When a reader receives `RebalanceNeeded` from a heartbeat:
-
-```
-rejoin(group_id, topic_id, reader_id, generation):
-  BEGIN TRANSACTION
-  1. Verify generation matches current (if not, return RebalanceNeeded again)
-  2. Query live members
-  3. Get partition_count
-  4. compute_assignment for this reader
-  5. Compare assigned vs currently_owned:
-     a. Release excess partitions (diff: owned - assigned)
-     b. Renew leases on kept partitions (intersection), update generation
-     c. Claim newly-assigned partitions (diff: assigned - owned)
-        Only if reader_id IS NULL OR lease_expires_at < NOW()
-  6. Fetch committed offsets for kept partitions
-  7. Return all assignments with committed offsets
-  COMMIT
-```
-
-**Incremental rebalance:** the reader keeps partitions it already owns when possible (step 5b). Only excess partitions are released and new ones claimed. This minimizes disruption.
+**How dead readers are recovered:** the heartbeat handler of any live reader detects expired members and rolls back the dispatch cursor so their uncommitted work is re-dispatched. No rebalance protocol — the work simply becomes available again.
 
 ### Commit Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
 
 ```
-commit_offset(group_id, topic_id, reader_id, generation, partition_id, offset):
-  UPDATE reader_assignments
-  SET committed_offset = offset
-  FROM reader_groups
-  WHERE reader_assignments.group_id AND topic_id AND partition_id
-    AND reader_id = this_reader
-    AND reader_assignments.generation = this_generation
-    AND reader_groups.group_id = reader_assignments.group_id
-    AND reader_groups.topic_id = reader_assignments.topic_id
-    AND reader_groups.generation = this_generation
-
-  If no rows updated → diagnose: StaleGeneration or NotOwner
+commit_range(group_id, topic_id, reader_id, start_offset, end_offset):
+  BEGIN TRANSACTION
+  1. DELETE FROM reader_inflight
+     WHERE group_id AND topic_id AND start_offset AND end_offset AND reader_id
+     → if no row deleted: return NotOwner
+  2. Update committed_watermark = MIN(remaining inflight start_offsets)
+     or dispatch_cursor if no inflight ranges remain
+  COMMIT
+  Return Ok
 ```
 
-The commit requires both the assignment generation and the group generation to match. This prevents a reader that has been evicted (and whose partitions were reassigned) from overwriting another reader's committed offset.
+The commit requires exact match on `(start_offset, end_offset, reader_id)`. A reader that has been evicted (inflight deleted by heartbeat) cannot commit — the row no longer exists.
 
 ### Leave Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
 
 ```
 leave_group(group_id, topic_id, reader_id):
   BEGIN TRANSACTION
-  1. Release this reader's partitions (set reader_id = NULL)
-  2. Delete member row
-  3. Bump generation
+  1. Delete this reader's inflight ranges
+  2. Update committed_watermark
+  3. Delete member row
   COMMIT
 ```
+
+Before leaving, the SDK commits all outstanding inflight ranges. Any uncommitted ranges are released for re-dispatch.
+
+### Force Reset (Break-Glass) (`crates/flourine-broker/src/coordinator/db.rs`)
+
+```
+force_reset(group_id, topic_id):
+  BEGIN TRANSACTION
+  1. Delete all inflight ranges
+  2. Delete all members
+  3. Roll back dispatch_cursor to committed_watermark
+  COMMIT
+```
+
+This is a manual intervention for stuck groups — clears all state and resets to the last committed position.
 
 ### Reader SDK State Machine (`crates/flourine-sdk/src/reader/mod.rs`)
 
 ```
-Init ──join()──► Active ──heartbeat(RebalanceNeeded)──► Rebalancing ──rejoin()──► Active
-                   │                                                                │
-                   ├──heartbeat(UnknownMember)──► Init ──join()──────────────────────┘
+Init ──join()──► Active ──poll()──► Active (accumulate inflight)
+                   │                   │
+                   │                   ├──commit(batch)──► Active (release inflight)
+                   │                   │
+                   ├──heartbeat(UnknownMember)──► Init ──join()──► Active
                    │
                    └──stop()──► Stopped
 ```
 
-Before every rebalance and leave, the reader commits its current offsets. On rejoin, offsets are reset to the committed values from the database (the offset map is cleared and rebuilt from assignments).
-
-The rejoin loop retries if it receives `RebalanceNeeded` from the broker (another concurrent rebalance happened between the heartbeat notification and the rejoin attempt), with a configurable `rebalance_delay` (default 5s) between retries.
+The SDK tracks inflight ranges locally. Before leaving, it commits all outstanding ranges. On `UnknownMember` (eviction detected via heartbeat), it clears local state and re-joins.
 
 ### Failure Scenarios
 
 | Failure | Behavior |
 |---------|----------|
-| Reader crashes without leaving | Heartbeat stops. Other readers' heartbeat handlers detect expired member within `session_timeout` (30s). Partitions released, generation bumped, live readers rejoin |
-| Reader network partition | Same as crash — heartbeat expires. Reader returns to `UnknownMember`, must re-join |
-| Broker crashes | Reader reconnects to another broker. Since all state is in Postgres, the new broker computes identical assignments |
-| Two readers claim same partition | Prevented by `WHERE reader_id IS NULL OR lease_expires_at < NOW()` in claim query. Only one succeeds in the Postgres transaction |
-| Concurrent joins | Each join bumps generation and computes assignment. Serialized by Postgres transactions. Last joiner's generation wins; previous joiners get `RebalanceNeeded` on next heartbeat |
-| Commit after eviction | `commit_offset` checks generation match. Returns `StaleGeneration` or `NotOwner` — the stale reader cannot corrupt another reader's offset |
+| Reader crashes without leaving | Heartbeat stops. Other readers' heartbeat handlers detect expired member within `session_timeout` (30s). Inflight ranges deleted, dispatch_cursor rolled back, ranges re-dispatched on next poll |
+| Reader network isolation | Same as crash — heartbeat expires. Inflight leases expire. On reconnect, reader gets `UnknownMember` and re-joins |
+| Broker crashes | Reader reconnects to another broker. All state is in Postgres — new broker dispatches correctly |
+| Lease expires while reader is slow | On next poll by any reader, the expired lease is stolen (step 3). The slow reader's commit will return `NotOwner` for that range |
+| Concurrent polls | Serialized by `FOR UPDATE` on `reader_group_state.dispatch_cursor`. Each poll gets a distinct, non-overlapping range |
+| Commit after eviction | The inflight row was deleted during heartbeat-driven cleanup. `commit_range` finds no matching row — returns `NotOwner` |
 
 ### Current Limitations
 
 - **Single-topic groups only:** `join_group` accepts a single `topic_id`. Multi-topic reader groups are not yet supported.
-- **Non-atomic multi-partition commit:** `commit_offset` handles one `(partition_id, offset)` at a time. A batch of commits from the SDK can partially succeed if the broker crashes mid-way.
+- **Dispatch cursor serialization:** All polls for a group serialize on `FOR UPDATE` of the dispatch cursor. This limits poll throughput to one concurrent poll per group (though pipelining via `max_inflight_per_reader` amortizes this).
 
 ---
 
@@ -507,7 +499,7 @@ run_with_shutdown(state, shutdown_signal):
 A record is **durably committed** when all of the following are true:
 1. The FL file containing the record is written to S3
 2. The `topic_batches` segment index row is committed to Postgres
-3. The `partition_offsets` counter is incremented in the same transaction
+3. The `topic_offsets` counter is incremented in the same transaction
 4. The `writer_state` dedup entry is persisted in the same transaction
 
 Steps 2-4 happen in a single Postgres transaction. If the transaction fails, the S3 file is orphaned but no offset is allocated and no segment is indexed — the record effectively doesn't exist and the writer will retry.

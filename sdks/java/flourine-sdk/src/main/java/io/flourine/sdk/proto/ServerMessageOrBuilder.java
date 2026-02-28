@@ -71,19 +71,19 @@ public interface ServerMessageOrBuilder extends
   io.flourine.sdk.proto.HeartbeatResponseOrBuilder getHeartbeatOrBuilder();
 
   /**
-   * <code>.flourine.wire.RejoinResponse rejoin = 5;</code>
-   * @return Whether the rejoin field is set.
+   * <code>.flourine.wire.PollResponse poll = 5;</code>
+   * @return Whether the poll field is set.
    */
-  boolean hasRejoin();
+  boolean hasPoll();
   /**
-   * <code>.flourine.wire.RejoinResponse rejoin = 5;</code>
-   * @return The rejoin.
+   * <code>.flourine.wire.PollResponse poll = 5;</code>
+   * @return The poll.
    */
-  io.flourine.sdk.proto.RejoinResponse getRejoin();
+  io.flourine.sdk.proto.PollResponse getPoll();
   /**
-   * <code>.flourine.wire.RejoinResponse rejoin = 5;</code>
+   * <code>.flourine.wire.PollResponse poll = 5;</code>
    */
-  io.flourine.sdk.proto.RejoinResponseOrBuilder getRejoinOrBuilder();
+  io.flourine.sdk.proto.PollResponseOrBuilder getPollOrBuilder();
 
   /**
    * <code>.flourine.wire.LeaveGroupResponse leave_group = 6;</code>

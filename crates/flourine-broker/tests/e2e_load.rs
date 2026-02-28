@@ -32,7 +32,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use flourine_broker::buffer::BufferConfig;
 use flourine_broker::{BrokerConfig, BrokerState, LocalFsStore};
-use flourine_common::ids::{Generation, Offset, PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch};
 use flourine_wire::{
     ClientMessage, ERR_BACKPRESSURE, ServerMessage, reader, decode_server_message,
@@ -44,7 +44,6 @@ use common::TestDb;
 #[derive(Debug, Clone, Copy)]
 struct LoadScenario {
     writers: usize,
-    partitions: u32,
     batches_per_producer: u32,
     records_per_batch: u32,
     payload_bytes: usize,
@@ -217,8 +216,6 @@ fn decode_read_response(data: &[u8]) -> reader::ReadResponse {
 
 fn websocket_client_config() -> WebSocketConfig {
     let mut config = WebSocketConfig::default();
-    // Load sweeps can return multi-partition read frames larger than tungstenite's
-    // 16 MiB per-frame default even when each partition read is capped.
     config.max_frame_size = Some(64 << 20);
     config.max_message_size = Some(64 << 20);
     config
@@ -348,8 +345,7 @@ async fn start_server(
 async fn run_producer_worker(
     url: &str,
     topic_id: TopicId,
-    producer_idx: usize,
-    partitions: u32,
+    _producer_idx: usize,
     batches_per_producer: u32,
     records_per_batch: u32,
     payload_bytes: usize,
@@ -400,13 +396,11 @@ async fn run_producer_worker(
     while acked < batches_per_producer as u64 {
         while next_seq <= batches_per_producer as u64 && in_flight.len() < window {
             let append_seq = next_seq;
-            let partition = PartitionId(((producer_idx as u32 + append_seq as u32) % partitions) as u32);
             let req = writer::AppendRequest {
                 writer_id,
                 append_seq: AppendSeq(append_seq),
                 batches: vec![RecordBatch {
                     topic_id,
-                    partition_id: partition,
                     schema_id: SchemaId(100),
                     records: template_records.clone(),
                 }],
@@ -492,38 +486,21 @@ async fn run_producer_worker(
 async fn fetch_all_records(
     url: &str,
     topic_id: TopicId,
-    partitions: u32,
     expected_total: u64,
     timeout: Duration,
 ) {
-    const READ_RESPONSE_BUDGET_BYTES: u32 = 16 * 1024 * 1024;
-    const MIN_PARTITION_FETCH_BYTES: u32 = 64 * 1024;
-
     let (mut ws, _) = connect_async_with_config(url, Some(websocket_client_config()), false)
         .await
         .expect("read connect");
-    let mut offsets = vec![Offset(0); partitions as usize];
-    let mut done = vec![false; partitions as usize];
+    let mut current_offset = Offset(0);
     let mut seen_total = 0u64;
-    let per_partition_max_bytes = (READ_RESPONSE_BUDGET_BYTES / partitions.max(1))
-        .max(MIN_PARTITION_FETCH_BYTES);
 
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        let reads: Vec<reader::PartitionRead> = (0..partitions)
-            .map(|partition_id| reader::PartitionRead {
-                topic_id,
-                partition_id: PartitionId(partition_id),
-                offset: offsets[partition_id as usize],
-                max_bytes: per_partition_max_bytes,
-            })
-            .collect();
-
         let req = reader::ReadRequest {
-            group_id: String::new(),
-            reader_id: String::new(),
-            generation: Generation(0),
-            reads,
+            topic_id,
+            offset: current_offset,
+            max_bytes: 16 * 1024 * 1024,
         };
 
         ws.send(Message::Binary(encode_client_frame(
@@ -549,20 +526,20 @@ async fn fetch_all_records(
 
         let mut progressed = false;
         for result in fetch_resp.results {
-            let idx = result.partition_id.0 as usize;
             let count = result.records.len() as u64;
             if count > 0 {
-                offsets[idx] = Offset(offsets[idx].0 + count);
+                current_offset = Offset(current_offset.0 + count);
                 seen_total += count;
                 progressed = true;
             }
 
-            if offsets[idx].0 >= result.high_watermark.0 {
-                done[idx] = true;
+            if current_offset.0 >= result.high_watermark.0 && seen_total >= expected_total {
+                ws.close(None).await.ok();
+                return;
             }
         }
 
-        if done.iter().all(|d| *d) && seen_total >= expected_total {
+        if seen_total >= expected_total {
             break;
         }
 
@@ -571,12 +548,6 @@ async fn fetch_all_records(
         }
     }
 
-    assert!(
-        done.iter().all(|d| *d),
-        "did not reach partition high watermarks: offsets={:?}, done={:?}",
-        offsets,
-        done
-    );
     assert_eq!(
         seen_total, expected_total,
         "read count mismatch after load run"
@@ -589,9 +560,7 @@ async fn run_load_scenario(scenario: LoadScenario, capture_otel: bool) -> LoadRu
     let ws_hist_before = hot_histogram_snapshot();
 
     let db = TestDb::new().await;
-    let topic_id = db
-        .create_topic("load-test", scenario.partitions as i32)
-        .await;
+    let topic_id = db.create_topic("load-test").await;
     let temp_dir = TempDir::new().unwrap();
     let (addr, _server_handle) =
         start_server(db.pool.clone(), &temp_dir, Duration::from_millis(20)).await;
@@ -615,7 +584,6 @@ async fn run_load_scenario(scenario: LoadScenario, capture_otel: bool) -> LoadRu
                 &url,
                 topic_id,
                 producer_idx,
-                scenario.partitions,
                 scenario.batches_per_producer,
                 scenario.records_per_batch,
                 scenario.payload_bytes,
@@ -647,7 +615,6 @@ async fn run_load_scenario(scenario: LoadScenario, capture_otel: bool) -> LoadRu
     fetch_all_records(
         &url,
         topic_id,
-        scenario.partitions,
         record_count,
         scenario.fetch_timeout,
     )
@@ -702,7 +669,6 @@ async fn run_load_scenario(scenario: LoadScenario, capture_otel: bool) -> LoadRu
 async fn test_e2e_load_smoke() {
     let scenario = LoadScenario {
         writers: 8,
-        partitions: 8,
         batches_per_producer: 10,
         records_per_batch: 20,
         payload_bytes: 128,
@@ -732,7 +698,6 @@ async fn test_e2e_load_smoke() {
 async fn test_e2e_load_sustained() {
     let scenario = LoadScenario {
         writers: 32,
-        partitions: 16,
         batches_per_producer: 40,
         records_per_batch: 50,
         payload_bytes: 256,
@@ -764,7 +729,6 @@ async fn test_e2e_load_sustained() {
 async fn test_e2e_load_one_million_requests() {
     let writers = env_usize("FLOURINE_LOAD_PRODUCERS", 40);
     let batches_per_producer = env_u32("FLOURINE_LOAD_BATCHES_PER_PRODUCER", 25_000);
-    let partitions = env_u32("FLOURINE_LOAD_PARTITIONS", 32);
     let records_per_batch = env_u32("FLOURINE_LOAD_RECORDS_PER_BATCH", 128);
     let payload_bytes = env_usize("FLOURINE_LOAD_PAYLOAD_BYTES", 32);
     let max_in_flight = env_usize("FLOURINE_LOAD_MAX_IN_FLIGHT", 64);
@@ -775,7 +739,6 @@ async fn test_e2e_load_one_million_requests() {
 
     let scenario = LoadScenario {
         writers,
-        partitions,
         batches_per_producer,
         records_per_batch,
         payload_bytes,
@@ -785,11 +748,10 @@ async fn test_e2e_load_one_million_requests() {
 
     let expected_requests = (writers as u64) * (batches_per_producer as u64);
     eprintln!(
-        "starting 1M-request scenario: writers={} batches_per_producer={} total_requests={} partitions={} records_per_batch={} payload_bytes={} max_in_flight={} otel={}",
+        "starting 1M-request scenario: writers={} batches_per_producer={} total_requests={} records_per_batch={} payload_bytes={} max_in_flight={} otel={}",
         writers,
         batches_per_producer,
         expected_requests,
-        partitions,
         records_per_batch,
         payload_bytes,
         max_in_flight,

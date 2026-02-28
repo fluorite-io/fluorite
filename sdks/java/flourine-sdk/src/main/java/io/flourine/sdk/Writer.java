@@ -175,10 +175,9 @@ public class Writer implements AutoCloseable {
         return writerId;
     }
 
-    public BatchAck send(int topicId, int partitionId, int schemaId, List<Record> records) throws FlourineException {
+    public BatchAck send(int topicId, int schemaId, List<Record> records) throws FlourineException {
         RecordBatch batch = RecordBatch.newBuilder()
                 .setTopicId(topicId)
-                .setPartitionId(partitionId)
                 .setSchemaId(schemaId)
                 .addAllRecords(records)
                 .build();
@@ -191,13 +190,11 @@ public class Writer implements AutoCloseable {
 
     public CompletableFuture<BatchAck> sendAsync(
             int topicId,
-            int partitionId,
             int schemaId,
             List<Record> records
     ) {
         RecordBatch batch = RecordBatch.newBuilder()
                 .setTopicId(topicId)
-                .setPartitionId(partitionId)
                 .setSchemaId(schemaId)
                 .addAllRecords(records)
                 .build();
@@ -209,13 +206,13 @@ public class Writer implements AutoCloseable {
         });
     }
 
-    public BatchAck sendOne(int topicId, int partitionId, int schemaId, byte[] key, byte[] value)
+    public BatchAck sendOne(int topicId, int schemaId, byte[] key, byte[] value)
             throws FlourineException {
         Record.Builder recordBuilder = Record.newBuilder().setValue(ByteString.copyFrom(value));
         if (key != null) {
             recordBuilder.setKey(ByteString.copyFrom(key));
         }
-        return send(topicId, partitionId, schemaId, List.of(recordBuilder.build()));
+        return send(topicId, schemaId, List.of(recordBuilder.build()));
     }
 
     public List<BatchAck> sendBatch(List<RecordBatch> batches) throws FlourineException {

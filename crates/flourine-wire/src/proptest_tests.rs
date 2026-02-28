@@ -4,7 +4,7 @@
 
 use bytes::Bytes;
 use proptest::prelude::*;
-use flourine_common::ids::{Generation, Offset, PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch, BatchAck};
 
 use crate::{reader, writer, record, varint};
@@ -96,12 +96,10 @@ fn arb_segment() -> impl Strategy<Value = RecordBatch> {
     (
         any::<u32>(),
         any::<u32>(),
-        any::<u32>(),
         prop::collection::vec(arb_record(), 0..20),
     )
-        .prop_map(|(topic_id, partition_id, schema_id, records)| RecordBatch {
+        .prop_map(|(topic_id, schema_id, records)| RecordBatch {
             topic_id: TopicId(topic_id),
-            partition_id: PartitionId(partition_id),
             schema_id: SchemaId(schema_id),
             records,
         })
@@ -111,14 +109,12 @@ fn arb_segment_ack() -> impl Strategy<Value = BatchAck> {
     (
         any::<u32>(),
         any::<u32>(),
-        any::<u32>(),
         any::<u64>(),
         any::<u64>(),
     )
         .prop_map(
-            |(topic_id, partition_id, schema_id, start_offset, end_offset)| BatchAck {
+            |(topic_id, schema_id, start_offset, end_offset)| BatchAck {
                 topic_id: TopicId(topic_id),
-                partition_id: PartitionId(partition_id),
                 schema_id: SchemaId(schema_id),
                 start_offset: Offset(start_offset),
                 end_offset: Offset(end_offset),
@@ -187,57 +183,35 @@ proptest! {
 
 // ============ Reader Message Property Tests ============
 
-fn arb_fetch_request() -> impl Strategy<Value = reader::ReadRequest> {
-    (
-        "[a-z]{1,20}",
-        "[a-z0-9]{1,30}",
-        any::<u64>(),
-        prop::collection::vec(
-            (any::<u32>(), any::<u32>(), any::<u64>(), any::<u32>()),
-            0..10,
-        ),
-    )
-        .prop_map(
-            |(group_id, reader_id, generation, reads)| reader::ReadRequest {
-                group_id,
-                reader_id,
-                generation: Generation(generation),
-                reads: reads
-                    .into_iter()
-                    .map(|(tid, pid, offset, max_bytes)| reader::PartitionRead {
-                        topic_id: TopicId(tid),
-                        partition_id: PartitionId(pid),
-                        offset: Offset(offset),
-                        max_bytes,
-                    })
-                    .collect(),
-            },
-        )
+fn arb_read_request() -> impl Strategy<Value = reader::ReadRequest> {
+    (any::<u32>(), any::<u64>(), any::<u32>()).prop_map(|(topic_id, offset, max_bytes)| {
+        reader::ReadRequest {
+            topic_id: TopicId(topic_id),
+            offset: Offset(offset),
+            max_bytes,
+        }
+    })
 }
 
-fn arb_partition_result() -> impl Strategy<Value = reader::PartitionResult> {
+fn arb_topic_result() -> impl Strategy<Value = reader::TopicResult> {
     (
-        any::<u32>(),
         any::<u32>(),
         any::<u32>(),
         any::<u64>(),
         prop::collection::vec(arb_record(), 0..10),
     )
-        .prop_map(
-            |(topic_id, partition_id, schema_id, high_watermark, records)| {
-                reader::PartitionResult {
-                    topic_id: TopicId(topic_id),
-                    partition_id: PartitionId(partition_id),
-                    schema_id: SchemaId(schema_id),
-                    high_watermark: Offset(high_watermark),
-                    records,
-                }
-            },
-        )
+        .prop_map(|(topic_id, schema_id, high_watermark, records)| {
+            reader::TopicResult {
+                topic_id: TopicId(topic_id),
+                schema_id: SchemaId(schema_id),
+                high_watermark: Offset(high_watermark),
+                records,
+            }
+        })
 }
 
-fn arb_fetch_response() -> impl Strategy<Value = reader::ReadResponse> {
-    prop::collection::vec(arb_partition_result(), 0..5).prop_map(|results| {
+fn arb_read_response() -> impl Strategy<Value = reader::ReadResponse> {
+    prop::collection::vec(arb_topic_result(), 0..5).prop_map(|results| {
         reader::ReadResponse {
             success: true,
             error_code: 0,
@@ -247,30 +221,89 @@ fn arb_fetch_response() -> impl Strategy<Value = reader::ReadResponse> {
     })
 }
 
+fn arb_poll_request() -> impl Strategy<Value = reader::PollRequest> {
+    (
+        "[a-z]{1,20}",
+        any::<u32>(),
+        "[a-z0-9]{1,30}",
+        any::<u32>(),
+    )
+        .prop_map(|(group_id, topic_id, reader_id, max_bytes)| {
+            reader::PollRequest {
+                group_id,
+                topic_id: TopicId(topic_id),
+                reader_id,
+                max_bytes,
+            }
+        })
+}
+
+fn arb_poll_response() -> impl Strategy<Value = reader::PollResponse> {
+    (
+        prop::collection::vec(arb_topic_result(), 0..5),
+        any::<u64>(),
+        any::<u64>(),
+        any::<u64>(),
+    )
+        .prop_map(|(results, start_offset, end_offset, lease_deadline_ms)| reader::PollResponse {
+            success: true,
+            error_code: 0,
+            error_message: String::new(),
+            results,
+            start_offset: Offset(start_offset),
+            end_offset: Offset(end_offset),
+            lease_deadline_ms,
+        })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
 
     #[test]
-    fn prop_fetch_request_roundtrip(req in arb_fetch_request()) {
-        let mut buf = vec![0u8; 8 * 1024];
+    fn prop_read_request_roundtrip(req in arb_read_request()) {
+        let mut buf = vec![0u8; 1024];
         let encoded_len = reader::encode_read_request(&req, &mut buf);
         let (decoded, decoded_len) = reader::decode_read_request(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
-        prop_assert_eq!(decoded.group_id, req.group_id);
-        prop_assert_eq!(decoded.reader_id, req.reader_id);
-        prop_assert_eq!(decoded.generation.0, req.generation.0);
-        prop_assert_eq!(decoded.reads.len(), req.reads.len());
+        prop_assert_eq!(decoded.topic_id.0, req.topic_id.0);
+        prop_assert_eq!(decoded.offset.0, req.offset.0);
+        prop_assert_eq!(decoded.max_bytes, req.max_bytes);
     }
 
     #[test]
-    fn prop_fetch_response_roundtrip(resp in arb_fetch_response()) {
+    fn prop_read_response_roundtrip(resp in arb_read_response()) {
         let mut buf = vec![0u8; 64 * 1024];
         let encoded_len = reader::encode_read_response(&resp, &mut buf);
         let (decoded, decoded_len) = reader::decode_read_response(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.results.len(), resp.results.len());
+    }
+
+    #[test]
+    fn prop_poll_request_roundtrip(req in arb_poll_request()) {
+        let mut buf = vec![0u8; 1024];
+        let encoded_len = reader::encode_poll_request(&req, &mut buf);
+        let (decoded, decoded_len) = reader::decode_poll_request(&buf[..encoded_len]).unwrap();
+
+        prop_assert_eq!(decoded_len, encoded_len);
+        prop_assert_eq!(decoded.group_id, req.group_id);
+        prop_assert_eq!(decoded.topic_id.0, req.topic_id.0);
+        prop_assert_eq!(decoded.reader_id, req.reader_id);
+        prop_assert_eq!(decoded.max_bytes, req.max_bytes);
+    }
+
+    #[test]
+    fn prop_poll_response_roundtrip(resp in arb_poll_response()) {
+        let mut buf = vec![0u8; 64 * 1024];
+        let encoded_len = reader::encode_poll_response(&resp, &mut buf);
+        let (decoded, decoded_len) = reader::decode_poll_response(&buf[..encoded_len]).unwrap();
+
+        prop_assert_eq!(decoded_len, encoded_len);
+        prop_assert_eq!(decoded.results.len(), resp.results.len());
+        prop_assert_eq!(decoded.start_offset.0, resp.start_offset.0);
+        prop_assert_eq!(decoded.end_offset.0, resp.end_offset.0);
     }
 }
 
@@ -306,13 +339,11 @@ proptest! {
         group_id in "[a-z]{1,20}",
         topic_id: u32,
         reader_id in "[a-z0-9]{1,30}",
-        generation: u64
     ) {
         let req = reader::HeartbeatRequest {
             group_id: group_id.clone(),
             topic_id: TopicId(topic_id),
             reader_id: reader_id.clone(),
-            generation: Generation(generation),
         };
 
         let mut buf = vec![0u8; 256];
@@ -323,17 +354,49 @@ proptest! {
         prop_assert_eq!(decoded.group_id, group_id);
         prop_assert_eq!(decoded.topic_id.0, topic_id);
         prop_assert_eq!(decoded.reader_id, reader_id);
-        prop_assert_eq!(decoded.generation.0, generation);
     }
 
     #[test]
-    fn prop_heartbeat_response_roundtrip(rebalance_needed: bool) {
-        let resp = reader::HeartbeatResponse { rebalance_needed };
+    fn prop_heartbeat_response_ext_roundtrip(_dummy: u64) {
+        let resp = reader::HeartbeatResponseExt {
+            success: true,
+            error_code: 0,
+            error_message: String::new(),
+            status: reader::HeartbeatStatus::Ok,
+        };
 
-        let mut buf = vec![0u8; 8];
-        let encoded_len = reader::encode_heartbeat_response(&resp, &mut buf);
-        let (decoded, _) = reader::decode_heartbeat_response(&buf[..encoded_len]).unwrap();
+        let mut buf = vec![0u8; 64];
+        let encoded_len = reader::encode_heartbeat_response_ext(&resp, &mut buf);
+        let (decoded, _) = reader::decode_heartbeat_response_ext(&buf[..encoded_len]).unwrap();
 
-        prop_assert_eq!(decoded.rebalance_needed, rebalance_needed);
+        prop_assert_eq!(decoded.status, reader::HeartbeatStatus::Ok);
+    }
+
+    #[test]
+    fn prop_commit_request_roundtrip(
+        group_id in "[a-z]{1,20}",
+        reader_id in "[a-z0-9]{1,30}",
+        topic_id: u32,
+        start_offset: u64,
+        end_offset: u64
+    ) {
+        let req = reader::CommitRequest {
+            group_id: group_id.clone(),
+            reader_id: reader_id.clone(),
+            topic_id: TopicId(topic_id),
+            start_offset: Offset(start_offset),
+            end_offset: Offset(end_offset),
+        };
+
+        let mut buf = vec![0u8; 1024];
+        let encoded_len = reader::encode_commit_request(&req, &mut buf);
+        let (decoded, decoded_len) = reader::decode_commit_request(&buf[..encoded_len]).unwrap();
+
+        prop_assert_eq!(decoded_len, encoded_len);
+        prop_assert_eq!(decoded.group_id, group_id);
+        prop_assert_eq!(decoded.reader_id, reader_id);
+        prop_assert_eq!(decoded.topic_id.0, topic_id);
+        prop_assert_eq!(decoded.start_offset.0, start_offset);
+        prop_assert_eq!(decoded.end_offset.0, end_offset);
     }
 }

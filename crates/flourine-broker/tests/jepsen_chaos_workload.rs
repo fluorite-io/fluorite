@@ -40,7 +40,6 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
     let req = writer::AppendRequest {
@@ -48,7 +47,6 @@ async fn ws_produce(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -80,19 +78,12 @@ async fn ws_produce(
 async fn ws_read(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
     offset: Offset,
 ) -> Result<reader::ReadResponse, String> {
     let req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id,
-            partition_id,
-            offset,
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id,
+        offset,
+        max_bytes: 1024 * 1024,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
     ws.send(Message::Binary(buf))
@@ -145,13 +136,12 @@ const SHORT_PHASES: &[FaultPhase] = &[
 struct ChaosConfig {
     num_producers: usize,
     num_consumers: usize,
-    num_partitions: i32,
     phase_duration: Duration,
 }
 
 async fn run_chaos_workload(cfg: ChaosConfig) {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("chaos", cfg.num_partitions).await as u32);
+    let topic_id = TopicId(db.create_topic("chaos").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let history = OperationHistory::shared();
@@ -170,7 +160,6 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
         let mut stop_rx = stop_tx.subscribe();
 
         producer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((p % cfg.num_partitions as usize) as u32);
             let writer_id = WriterId::new();
             let mut seq = 0u64;
             let mut ws: Option<Ws> = None;
@@ -197,10 +186,10 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                    h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
                 };
 
-                match ws_produce(w, writer_id, seq, topic_id, partition_id, &val).await {
+                match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
                         let offset = resp
                             .append_acks
@@ -229,7 +218,6 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
         let mut stop_rx = stop_tx.subscribe();
 
         consumer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((c % cfg.num_partitions as usize) as u32);
             let reader_id = format!("reader-{}", c);
             let mut next_offset = Offset(0);
             let mut ws: Option<Ws> = None;
@@ -253,10 +241,10 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_read(partition_id.0, reader_id.clone(), next_offset)
+                    h.record_read(TopicId(0), reader_id.clone(), next_offset)
                 };
 
-                match ws_read(w, topic_id, partition_id, next_offset).await {
+                match ws_read(w, topic_id, next_offset).await {
                     Ok(resp) if resp.success => {
                         let values: Vec<Bytes> = resp
                             .results
@@ -304,7 +292,7 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
             }
             FaultPhase::DbLock => {
                 let mut blocker = DbBlocker::new(db.pool.clone());
-                blocker.block_partition(topic_id.0 as i32, 0).await;
+                blocker.block_topic(topic_id.0 as i32).await;
                 tokio::time::sleep(cfg.phase_duration).await;
                 blocker.unblock().await;
                 continue; // skip the normal phase_duration sleep
@@ -332,37 +320,36 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
     broker.faulty_store().reset();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mut ws = ws_connect(broker.addr()).await;
-    for p in 0..cfg.num_partitions as u32 {
-        let partition_id = PartitionId(p);
-        let mut all_values = Vec::<Bytes>::new();
-        let mut high_watermark = Offset(0);
-        let mut next_offset = Offset(0);
+    let mut all_values = Vec::<Bytes>::new();
+    let mut high_watermark = Offset(0);
+    let mut next_offset = Offset(0);
 
-        loop {
-            let resp = ws_read(&mut ws, topic_id, partition_id, next_offset)
-                .await
-                .expect("final paginated read should succeed");
-            if !resp.success {
-                break;
+    loop {
+        let resp = ws_read(&mut ws, topic_id, next_offset)
+            .await
+            .expect("final paginated read should succeed");
+        if !resp.success {
+            break;
+        }
+        let mut got = false;
+        for r in &resp.results {
+            if r.high_watermark.0 > high_watermark.0 {
+                high_watermark = r.high_watermark;
             }
-            let mut got = false;
-            for r in &resp.results {
-                if r.high_watermark.0 > high_watermark.0 {
-                    high_watermark = r.high_watermark;
-                }
-                if !r.records.is_empty() {
-                    got = true;
-                    next_offset = Offset(next_offset.0 + r.records.len() as u64);
-                    all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
-                }
-            }
-            if !got || next_offset.0 >= high_watermark.0 {
-                break;
+            if !r.records.is_empty() {
+                got = true;
+                next_offset = Offset(next_offset.0 + r.records.len() as u64);
+                all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
             }
         }
+        if !got || next_offset.0 >= high_watermark.0 {
+            break;
+        }
+    }
 
+    {
         let mut h = history.lock().await;
-        let idx = h.record_read(p, "final".to_string(), Offset(0));
+        let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
         h.record_read_complete(idx, all_values, high_watermark, true);
     }
 
@@ -374,7 +361,7 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
     h.verify_unique_offsets()
         .expect("INVARIANT: no duplicate offsets");
     h.verify_watermark_monotonic()
-        .expect("INVARIANT: watermark monotonic per reader/partition");
+        .expect("INVARIANT: watermark monotonic per reader");
     h.verify_no_duplicates()
         .expect("INVARIANT: no duplicate records");
     h.verify_monotonic_sends()
@@ -387,26 +374,24 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Short chaos workload: 15s, 2 producers, 1 consumer, 2 partitions.
+/// Short chaos workload: 15s, 2 producers, 1 consumer.
 #[tokio::test]
 async fn test_chaos_workload_short() {
     run_chaos_workload(ChaosConfig {
         num_producers: 2,
         num_consumers: 1,
-        num_partitions: 2,
         phase_duration: Duration::from_millis(2500),
     })
     .await;
 }
 
-/// Full chaos workload: 60s, 4 producers, 2 consumers, 4 partitions.
+/// Full chaos workload: 60s, 4 producers, 2 consumers.
 #[ignore]
 #[tokio::test]
 async fn test_chaos_workload_full() {
     run_chaos_workload(ChaosConfig {
         num_producers: 4,
         num_consumers: 2,
-        num_partitions: 4,
         phase_duration: Duration::from_secs(10),
     })
     .await;
@@ -442,7 +427,6 @@ const ALL_FAULTS: &[RandomFault] = &[
 struct RandomChaosConfig {
     num_producers: usize,
     num_consumers: usize,
-    num_partitions: i32,
     num_cycles: usize,
     cycle_duration: Duration,
     seed: u64,
@@ -453,7 +437,7 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
     eprintln!("  [randomized-chaos] seed={}", cfg.seed);
 
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("random-chaos", cfg.num_partitions).await as u32);
+    let topic_id = TopicId(db.create_topic("random-chaos").await as u32);
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let history = OperationHistory::shared();
@@ -469,7 +453,6 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
         let mut stop_rx = stop_tx.subscribe();
 
         producer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((p % cfg.num_partitions as usize) as u32);
             let writer_id = WriterId::new();
             let mut seq = 0u64;
             let mut ws: Option<Ws> = None;
@@ -495,10 +478,10 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                    h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
                 };
 
-                match ws_produce(w, writer_id, seq, topic_id, partition_id, &val).await {
+                match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
                         let offset = resp
                             .append_acks
@@ -527,7 +510,6 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
         let mut stop_rx = stop_tx.subscribe();
 
         consumer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((c % cfg.num_partitions as usize) as u32);
             let reader_id = format!("rreader-{}", c);
             let mut next_offset = Offset(0);
             let mut ws: Option<Ws> = None;
@@ -551,10 +533,10 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_read(partition_id.0, reader_id.clone(), next_offset)
+                    h.record_read(TopicId(0), reader_id.clone(), next_offset)
                 };
 
-                match ws_read(w, topic_id, partition_id, next_offset).await {
+                match ws_read(w, topic_id, next_offset).await {
                     Ok(resp) if resp.success => {
                         let values: Vec<Bytes> = resp
                             .results
@@ -612,7 +594,7 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
                 }
                 RandomFault::DbLock => {
                     let mut blocker = DbBlocker::new(db.pool.clone());
-                    blocker.block_partition(topic_id.0 as i32, 0).await;
+                    blocker.block_topic(topic_id.0 as i32).await;
                     db_blocker = Some(blocker);
                 }
                 RandomFault::S3Partition => {
@@ -666,37 +648,36 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
     // --- Final read ---
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mut ws = ws_connect(broker.addr()).await;
-    for p in 0..cfg.num_partitions as u32 {
-        let partition_id = PartitionId(p);
-        let mut all_values = Vec::<Bytes>::new();
-        let mut high_watermark = Offset(0);
-        let mut next_offset = Offset(0);
+    let mut all_values = Vec::<Bytes>::new();
+    let mut high_watermark = Offset(0);
+    let mut next_offset = Offset(0);
 
-        loop {
-            let resp = ws_read(&mut ws, topic_id, partition_id, next_offset)
-                .await
-                .expect("final paginated read should succeed");
-            if !resp.success {
-                break;
+    loop {
+        let resp = ws_read(&mut ws, topic_id, next_offset)
+            .await
+            .expect("final paginated read should succeed");
+        if !resp.success {
+            break;
+        }
+        let mut got = false;
+        for r in &resp.results {
+            if r.high_watermark.0 > high_watermark.0 {
+                high_watermark = r.high_watermark;
             }
-            let mut got = false;
-            for r in &resp.results {
-                if r.high_watermark.0 > high_watermark.0 {
-                    high_watermark = r.high_watermark;
-                }
-                if !r.records.is_empty() {
-                    got = true;
-                    next_offset = Offset(next_offset.0 + r.records.len() as u64);
-                    all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
-                }
-            }
-            if !got || next_offset.0 >= high_watermark.0 {
-                break;
+            if !r.records.is_empty() {
+                got = true;
+                next_offset = Offset(next_offset.0 + r.records.len() as u64);
+                all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
             }
         }
+        if !got || next_offset.0 >= high_watermark.0 {
+            break;
+        }
+    }
 
+    {
         let mut h = history.lock().await;
-        let idx = h.record_read(p, "final".to_string(), Offset(0));
+        let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
         h.record_read_complete(idx, all_values, high_watermark, true);
     }
 
@@ -722,7 +703,6 @@ async fn test_randomized_chaos_short() {
     run_randomized_chaos_workload(RandomChaosConfig {
         num_producers: 2,
         num_consumers: 1,
-        num_partitions: 2,
         num_cycles: 6,
         cycle_duration: Duration::from_secs(5),
         seed: 42,
@@ -737,7 +717,6 @@ async fn test_randomized_chaos_full() {
     run_randomized_chaos_workload(RandomChaosConfig {
         num_producers: 4,
         num_consumers: 2,
-        num_partitions: 4,
         num_cycles: 18,
         cycle_duration: Duration::from_secs(10),
         seed: 12345,
@@ -758,7 +737,7 @@ enum MultiBrokerFault {
     GetLatencyBroker(usize, u64),
 }
 
-/// 2-minute multi-broker soak: 2 brokers, 6 producers, 3 consumers, 4 partitions.
+/// 2-minute multi-broker soak: 2 brokers, 6 producers, 3 consumers.
 /// 12 cycles of 10s each. All fault types including per-broker S3 partition.
 /// Full OperationHistory verification including WW causal ordering.
 #[ignore]
@@ -769,8 +748,7 @@ async fn test_soak_2min() {
     eprintln!("  [soak-2min] seed={}", seed);
 
     let db = TestDb::new().await;
-    let num_partitions = 4i32;
-    let topic_id = TopicId(db.create_topic("soak", num_partitions).await as u32);
+    let topic_id = TopicId(db.create_topic("soak").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
     let history = OperationHistory::shared();
@@ -785,7 +763,6 @@ async fn test_soak_2min() {
         let mut stop_rx = stop_tx.subscribe();
 
         producer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((p % num_partitions as usize) as u32);
             let writer_id = WriterId::new();
             let mut seq = 0u64;
             let mut ws: Option<Ws> = None;
@@ -812,10 +789,10 @@ async fn test_soak_2min() {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                    h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
                 };
 
-                match ws_produce(w, writer_id, seq, topic_id, partition_id, &val).await {
+                match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
                         let offset = resp
                             .append_acks
@@ -844,7 +821,6 @@ async fn test_soak_2min() {
         let mut stop_rx = stop_tx.subscribe();
 
         consumer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((c % num_partitions as usize) as u32);
             let reader_id = format!("sreader-{}", c);
             let mut next_offset = Offset(0);
             let mut ws: Option<Ws> = None;
@@ -869,10 +845,10 @@ async fn test_soak_2min() {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_read(partition_id.0, reader_id.clone(), next_offset)
+                    h.record_read(TopicId(0), reader_id.clone(), next_offset)
                 };
 
-                match ws_read(w, topic_id, partition_id, next_offset).await {
+                match ws_read(w, topic_id, next_offset).await {
                     Ok(resp) if resp.success => {
                         let values: Vec<Bytes> = resp
                             .results
@@ -905,7 +881,7 @@ async fn test_soak_2min() {
         }));
     }
 
-    // --- 30 fault cycles of 10s each ---
+    // --- 12 fault cycles of 10s each ---
     let all_multi_faults = [
         MultiBrokerFault::S3LatencyBroker(0, 300),
         MultiBrokerFault::S3LatencyBroker(1, 200),
@@ -983,37 +959,36 @@ async fn test_soak_2min() {
     // --- Final read ---
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mut ws = ws_connect(cluster.broker(0).addr()).await;
-    for p in 0..num_partitions as u32 {
-        let partition_id = PartitionId(p);
-        let mut all_values = Vec::<Bytes>::new();
-        let mut high_watermark = Offset(0);
-        let mut next_offset = Offset(0);
+    let mut all_values = Vec::<Bytes>::new();
+    let mut high_watermark = Offset(0);
+    let mut next_offset = Offset(0);
 
-        loop {
-            let resp = ws_read(&mut ws, topic_id, partition_id, next_offset)
-                .await
-                .expect("final paginated read should succeed");
-            if !resp.success {
-                break;
+    loop {
+        let resp = ws_read(&mut ws, topic_id, next_offset)
+            .await
+            .expect("final paginated read should succeed");
+        if !resp.success {
+            break;
+        }
+        let mut got = false;
+        for r in &resp.results {
+            if r.high_watermark.0 > high_watermark.0 {
+                high_watermark = r.high_watermark;
             }
-            let mut got = false;
-            for r in &resp.results {
-                if r.high_watermark.0 > high_watermark.0 {
-                    high_watermark = r.high_watermark;
-                }
-                if !r.records.is_empty() {
-                    got = true;
-                    next_offset = Offset(next_offset.0 + r.records.len() as u64);
-                    all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
-                }
-            }
-            if !got || next_offset.0 >= high_watermark.0 {
-                break;
+            if !r.records.is_empty() {
+                got = true;
+                next_offset = Offset(next_offset.0 + r.records.len() as u64);
+                all_values.extend(r.records.iter().map(|rec| rec.value.clone()));
             }
         }
+        if !got || next_offset.0 >= high_watermark.0 {
+            break;
+        }
+    }
 
+    {
         let mut h = history.lock().await;
-        let idx = h.record_read(p, "final".to_string(), Offset(0));
+        let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
         h.record_read_complete(idx, all_values, high_watermark, true);
     }
 

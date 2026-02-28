@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-use flourine_common::ids::{Offset, PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch, BatchAck};
 use flourine_wire::writer::{
     AppendRequest, AppendResponse, decode_request, decode_response, encode_request,
@@ -21,8 +21,7 @@ fn make_request(
         append_seq: AppendSeq(42),
         batches: (0..segment_count)
             .map(|i| RecordBatch {
-                topic_id: TopicId(1),
-                partition_id: PartitionId(i as u32),
+                topic_id: TopicId(i as u32 + 1),
                 schema_id: SchemaId(100),
                 records: (0..records_per_segment)
                     .map(|j| Record {
@@ -44,8 +43,7 @@ fn make_response(ack_count: usize) -> AppendResponse {
         error_message: String::new(),
         append_acks: (0..ack_count)
             .map(|i| BatchAck {
-                topic_id: TopicId(1),
-                partition_id: PartitionId(i as u32),
+                topic_id: TopicId(i as u32 + 1),
                 schema_id: SchemaId(100),
                 start_offset: Offset(i as u64 * 100),
                 end_offset: Offset(i as u64 * 100 + 99),

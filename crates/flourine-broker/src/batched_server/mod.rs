@@ -9,6 +9,7 @@
 mod append;
 mod authz;
 mod encoding;
+mod fetch;
 mod flush;
 mod read;
 mod reader_group;
@@ -30,8 +31,6 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use flourine_common::ids::{AppendSeq, WriterId};
-#[cfg(test)]
-use flourine_common::ids::Offset;
 use flourine_common::types::{BatchAck, RecordBatch};
 use flourine_wire::{
     ClientMessage, ERR_AUTHZ_DENIED, ERR_DECODE_ERROR, ERR_INTERNAL_ERROR,
@@ -61,7 +60,7 @@ use encoding::{
 use flush::flush_loop;
 use read::handle_read_request;
 use reader_group::{
-    handle_commit, handle_heartbeat, handle_join_group, handle_leave_group, handle_rejoin,
+    handle_commit, handle_heartbeat, handle_join_group, handle_leave_group, handle_poll,
 };
 
 const DEFAULT_WRITER_STATE_BUMP_CAPACITY_BYTES: usize = 512 * 1024 * 1024;
@@ -91,6 +90,9 @@ pub struct BrokerConfig {
     pub require_auth: bool,
     /// Auth timeout for connection handshake.
     pub auth_timeout: Duration,
+    /// Iceberg ingestion config (None = disabled).
+    #[cfg(feature = "iceberg")]
+    pub iceberg: Option<flourine_iceberg::IcebergConfig>,
 }
 
 impl Default for BrokerConfig {
@@ -103,6 +105,8 @@ impl Default for BrokerConfig {
             flush_interval: Duration::from_millis(100),
             require_auth: false,
             auth_timeout: Duration::from_secs(10),
+            #[cfg(feature = "iceberg")]
+            iceberg: None,
         }
     }
 }
@@ -141,6 +145,9 @@ pub struct BrokerState<S: ObjectStore> {
     in_flight_append: Arc<Mutex<HashMap<WriterId, WriterInFlightState>>>,
     /// Number of queued append commands waiting in flush loop.
     pending_flush_commands: Arc<AtomicUsize>,
+    /// Iceberg ingestion buffer (None = disabled).
+    #[cfg(feature = "iceberg")]
+    pub iceberg_buffer: Option<Arc<flourine_iceberg::IcebergBuffer>>,
 }
 
 impl<S: ObjectStore + Send + Sync + 'static> BrokerState<S> {
@@ -166,6 +173,33 @@ impl<S: ObjectStore + Send + Sync + 'static> BrokerState<S> {
         let in_flight_append = Arc::new(Mutex::new(HashMap::new()));
         let pending_flush_commands = Arc::new(AtomicUsize::new(0));
 
+        // Initialize Iceberg buffer if configured
+        #[cfg(feature = "iceberg")]
+        let iceberg_buffer = {
+            if let Some(ref iceberg_config) = config.iceberg {
+                match flourine_iceberg::iceberg_writer::TableWriter::new(
+                    iceberg_config.clone(),
+                    pool.clone(),
+                )
+                .await
+                {
+                    Ok(writer) => {
+                        info!("Iceberg ingestion enabled");
+                        Some(flourine_iceberg::IcebergBuffer::new(
+                            iceberg_config.clone(),
+                            writer,
+                        ))
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize Iceberg writer: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
         let state = Arc::new(Self {
             pool: pool.clone(),
             store: store.clone(),
@@ -178,6 +212,8 @@ impl<S: ObjectStore + Send + Sync + 'static> BrokerState<S> {
             backpressure: backpressure.clone(),
             in_flight_append,
             pending_flush_commands,
+            #[cfg(feature = "iceberg")]
+            iceberg_buffer,
         });
         FLUSH_QUEUE_DEPTH.set(0.0);
         BUFFER_SIZE_BYTES.set(0.0);
@@ -586,7 +622,7 @@ async fn handle_message<S: ObjectStore + Send + Sync + 'static>(
                         ErrorResponseKind::Heartbeat,
                         "failed to decode heartbeat request",
                     ),
-                    5 => (ErrorResponseKind::Rejoin, "failed to decode rejoin request"),
+                    5 => (ErrorResponseKind::Poll, "failed to decode poll request"),
                     6 => (
                         ErrorResponseKind::LeaveGroup,
                         "failed to decode leave request",
@@ -604,7 +640,7 @@ async fn handle_message<S: ObjectStore + Send + Sync + 'static>(
                         | ErrorResponseKind::Read
                         | ErrorResponseKind::JoinGroup
                         | ErrorResponseKind::Heartbeat
-                        | ErrorResponseKind::Rejoin
+                        | ErrorResponseKind::Poll
                         | ErrorResponseKind::LeaveGroup
                         | ErrorResponseKind::Commit
                 ) {
@@ -702,17 +738,17 @@ async fn handle_message<S: ObjectStore + Send + Sync + 'static>(
                 handle_heartbeat(req, state).await
             }
         }
-        ClientMessage::Rejoin(req) => {
+        ClientMessage::Poll(req) => {
             if !can_group_consume(state, ctx.principal.as_ref(), &req.group_id).await
                 || !can_consume_topic(state, ctx.principal.as_ref(), req.topic_id).await
             {
                 encode_error_response(
-                    ErrorResponseKind::Rejoin,
+                    ErrorResponseKind::Poll,
                     ERR_AUTHZ_DENIED,
-                    "rejoin not authorized",
+                    "poll not authorized",
                 )
             } else {
-                handle_rejoin(req, state).await
+                handle_poll(req, state).await
             }
         }
         ClientMessage::LeaveGroup(req) => {
@@ -729,29 +765,16 @@ async fn handle_message<S: ObjectStore + Send + Sync + 'static>(
             }
         }
         ClientMessage::Commit(req) => {
-            if !can_group_consume(state, ctx.principal.as_ref(), &req.group_id).await {
+            if !can_group_consume(state, ctx.principal.as_ref(), &req.group_id).await
+                || !can_consume_topic(state, ctx.principal.as_ref(), req.topic_id).await
+            {
                 encode_error_response(
                     ErrorResponseKind::Commit,
                     ERR_AUTHZ_DENIED,
-                    "commit group not authorized",
+                    "commit not authorized",
                 )
             } else {
-                let mut denied = false;
-                for commit in &req.commits {
-                    if !can_consume_topic(state, ctx.principal.as_ref(), commit.topic_id).await {
-                        denied = true;
-                        break;
-                    }
-                }
-                if denied {
-                    encode_error_response(
-                        ErrorResponseKind::Commit,
-                        ERR_AUTHZ_DENIED,
-                        "commit topic not authorized",
-                    )
-                } else {
-                    handle_commit(req, state).await
-                }
+                handle_commit(req, state).await
             }
         }
         ClientMessage::Auth(_) => encode_error_response(
@@ -770,12 +793,6 @@ async fn handle_message<S: ObjectStore + Send + Sync + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-
-    use flourine_common::ids::{Generation, PartitionId};
-    use flourine_wire::{STATUS_OK, reader};
-
-    use super::encoding::encode_server_message_vec;
 
     #[test]
     fn test_batched_broker_config_default() {
@@ -821,8 +838,6 @@ mod tests {
         assert!(!join_resp.success);
         assert_eq!(join_resp.error_code, 125);
         assert_eq!(join_resp.error_message, "join error");
-        assert_eq!(join_resp.generation.0, 0);
-        assert!(join_resp.assignments.is_empty());
 
         let commit = encode_error_response(ErrorResponseKind::Commit, 126, "commit error");
         let (commit_msg, commit_len) = flourine_wire::decode_server_message(&commit).unwrap();
@@ -834,42 +849,5 @@ mod tests {
         assert!(!commit_resp.success);
         assert_eq!(commit_resp.error_code, 126);
         assert_eq!(commit_resp.error_message, "commit error");
-    }
-
-    #[test]
-    fn test_large_join_response_encoding_does_not_panic() {
-        let assignment_count = 20_000u32;
-        let response = reader::JoinGroupResponse {
-            success: true,
-            error_code: STATUS_OK,
-            error_message: String::new(),
-            generation: Generation(7),
-            assignments: (0..assignment_count)
-                .map(|partition_id| reader::PartitionAssignment {
-                    topic_id: flourine_common::ids::TopicId(42),
-                    partition_id: PartitionId(partition_id),
-                    committed_offset: Offset(0),
-                })
-                .collect(),
-        };
-
-        let encoded = catch_unwind(AssertUnwindSafe(|| {
-            encode_server_message_vec(ServerMessage::JoinGroup(response), 8192)
-        }));
-        assert!(
-            encoded.is_ok(),
-            "large JoinGroup response encoding panicked"
-        );
-
-        let encoded = encoded.expect("expected encoded response bytes");
-        let (decoded, used) = flourine_wire::decode_server_message(&encoded).unwrap();
-        assert_eq!(used, encoded.len());
-        let join_resp = match decoded {
-            ServerMessage::JoinGroup(resp) => resp,
-            _ => panic!("expected join response"),
-        };
-        assert!(join_resp.success);
-        assert_eq!(join_resp.generation.0, 7);
-        assert_eq!(join_resp.assignments.len(), assignment_count as usize);
     }
 }

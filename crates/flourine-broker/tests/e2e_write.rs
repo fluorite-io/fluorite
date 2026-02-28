@@ -12,7 +12,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use flourine_common::ids::{AppendSeq, PartitionId, SchemaId, TopicId, WriterId};
+use flourine_common::ids::{AppendSeq, SchemaId, TopicId, WriterId};
 use flourine_common::types::{Record, RecordBatch};
 use flourine_wire::{ClientMessage, writer};
 
@@ -23,7 +23,7 @@ use common::ws_helpers::*;
 #[tokio::test]
 async fn test_produce_fetch_roundtrip() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("ws-test", 1).await;
+    let topic_id = db.create_topic("ws-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -48,7 +48,6 @@ async fn test_produce_fetch_roundtrip() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: records.clone(),
         }],
@@ -76,15 +75,9 @@ async fn test_produce_fetch_roundtrip() {
 
     // Now read the records
     let fetch_req = flourine_wire::reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: flourine_common::ids::Generation(0),
-        reads: vec![flourine_wire::reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
-            offset: flourine_common::ids::Offset(0),
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: flourine_common::ids::Offset(0),
+        max_bytes: 1024 * 1024,
     };
 
     let buf = encode_client_frame(ClientMessage::Read(fetch_req.clone()), 8192);
@@ -117,11 +110,11 @@ async fn test_produce_fetch_roundtrip() {
     ws.close(None).await.ok();
 }
 
-/// Test read response keeps schema IDs correct when partition contains mixed-schema batches.
+/// Test read response keeps schema IDs correct when topic contains mixed-schema batches.
 #[tokio::test]
-async fn test_fetch_returns_schema_homogeneous_partition_results() {
+async fn test_fetch_returns_schema_homogeneous_topic_results() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("ws-mixed-schema-read", 1).await;
+    let topic_id = db.create_topic("ws-mixed-schema-read").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -135,7 +128,6 @@ async fn test_fetch_returns_schema_homogeneous_partition_results() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("k-100")),
@@ -166,7 +158,6 @@ async fn test_fetch_returns_schema_homogeneous_partition_results() {
         append_seq: AppendSeq(2),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(101),
             records: vec![Record {
                 key: Some(Bytes::from("k-101")),
@@ -193,15 +184,9 @@ async fn test_fetch_returns_schema_homogeneous_partition_results() {
     assert!(second_resp.success);
 
     let fetch_req = flourine_wire::reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: flourine_common::ids::Generation(0),
-        reads: vec![flourine_wire::reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
-            offset: flourine_common::ids::Offset(0),
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: flourine_common::ids::Offset(0),
+        max_bytes: 1024 * 1024,
     };
     ws.send(Message::Binary(encode_client_frame(
         ClientMessage::Read(fetch_req),
@@ -224,7 +209,7 @@ async fn test_fetch_returns_schema_homogeneous_partition_results() {
     assert_eq!(
         fetch_resp.results.len(),
         2,
-        "expected one PartitionResult per schema in mixed-schema read"
+        "expected one TopicResult per schema in mixed-schema read"
     );
 
     let mut schemas: Vec<u32> = fetch_resp.results.iter().map(|r| r.schema_id.0).collect();
@@ -239,7 +224,7 @@ async fn test_fetch_returns_schema_homogeneous_partition_results() {
 #[tokio::test]
 async fn test_duplicate_seq_dedup_survives_broker_restart() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("dedup-restart-test", 1).await;
+    let topic_id = db.create_topic("dedup-restart-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr1, server_handle1) = start_server(db.pool.clone(), &temp_dir).await;
@@ -252,7 +237,6 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![
                 Record {
@@ -287,7 +271,7 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
     assert_eq!(first_resp.append_acks.len(), 1);
 
     let offset_after_first: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -295,7 +279,7 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
     .unwrap();
 
     let batch_count_after_first: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -349,7 +333,7 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
     assert_eq!(retry_resp.append_acks[0], first_resp.append_acks[0]);
 
     let offset_after_retry: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -358,7 +342,7 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
     assert_eq!(offset_after_retry, offset_after_first);
 
     let batch_count_after_retry: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -375,7 +359,7 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
 #[tokio::test]
 async fn test_produce_uuid_first_byte_collision_is_safe() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("unprefixed-collision", 1).await;
+    let topic_id = db.create_topic("unprefixed-collision").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -389,7 +373,6 @@ async fn test_produce_uuid_first_byte_collision_is_safe() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("k")),
@@ -421,7 +404,7 @@ async fn test_produce_uuid_first_byte_collision_is_safe() {
     assert_eq!(resp.append_acks.len(), 1);
 
     let next_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -436,7 +419,7 @@ async fn test_produce_uuid_first_byte_collision_is_safe() {
 #[tokio::test]
 async fn test_inflight_duplicate_seq_coalesced_single_commit() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("inflight-dup-coalesce", 1).await;
+    let topic_id = db.create_topic("inflight-dup-coalesce").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -450,7 +433,6 @@ async fn test_inflight_duplicate_seq_coalesced_single_commit() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("k")),
@@ -496,7 +478,7 @@ async fn test_inflight_duplicate_seq_coalesced_single_commit() {
     assert_eq!(r1.append_acks[0], r2.append_acks[0]);
 
     let next_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -508,11 +490,11 @@ async fn test_inflight_duplicate_seq_coalesced_single_commit() {
     ws2.close(None).await.ok();
 }
 
-/// Test multiple writers to same partition.
+/// Test multiple writers to same topic.
 #[tokio::test]
 async fn test_multiple_producers() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("multi-writer-test", 1).await;
+    let topic_id = db.create_topic("multi-writer-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -532,7 +514,6 @@ async fn test_multiple_producers() {
                 append_seq: AppendSeq(1),
                 batches: vec![RecordBatch {
                     topic_id: TopicId(topic_id as u32),
-                    partition_id: PartitionId(0),
                     schema_id: SchemaId(100),
                     records: vec![Record {
                         key: Some(Bytes::from(format!("writer-{}", i))),
@@ -571,7 +552,7 @@ async fn test_multiple_producers() {
     }
 
     let total_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -582,15 +563,9 @@ async fn test_multiple_producers() {
     // Read all records to verify
     let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
     let fetch_req = flourine_wire::reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: flourine_common::ids::Generation(0),
-        reads: vec![flourine_wire::reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
-            offset: flourine_common::ids::Offset(0),
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: flourine_common::ids::Offset(0),
+        max_bytes: 1024 * 1024,
     };
 
     let buf = encode_client_frame(ClientMessage::Read(fetch_req.clone()), 8192);
@@ -609,107 +584,8 @@ async fn test_multiple_producers() {
 
     let fetch_resp = decode_read_response(&data);
     assert!(fetch_resp.success);
-    assert_eq!(fetch_resp.results[0].records.len(), 5);
-
-    ws.close(None).await.ok();
-}
-
-/// Test producing to multiple partitions.
-#[tokio::test]
-async fn test_multi_partition_produce() {
-    let db = TestDb::new().await;
-    let topic_id = db.create_topic("multi-partition-test", 3).await;
-    let temp_dir = TempDir::new().unwrap();
-
-    let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
-    let url = format!("ws://{}", addr);
-
-    let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
-
-    let req = writer::AppendRequest {
-        writer_id: WriterId::new(),
-        append_seq: AppendSeq(1),
-        batches: vec![
-            RecordBatch {
-                topic_id: TopicId(topic_id as u32),
-                partition_id: PartitionId(0),
-                schema_id: SchemaId(100),
-                records: vec![
-                    Record {
-                        key: Some(Bytes::from("p0-k1")),
-                        value: Bytes::from("v1"),
-                    },
-                    Record {
-                        key: Some(Bytes::from("p0-k2")),
-                        value: Bytes::from("v2"),
-                    },
-                ],
-            },
-            RecordBatch {
-                topic_id: TopicId(topic_id as u32),
-                partition_id: PartitionId(1),
-                schema_id: SchemaId(100),
-                records: vec![Record {
-                    key: Some(Bytes::from("p1-k1")),
-                    value: Bytes::from("v1"),
-                }],
-            },
-            RecordBatch {
-                topic_id: TopicId(topic_id as u32),
-                partition_id: PartitionId(2),
-                schema_id: SchemaId(100),
-                records: vec![
-                    Record {
-                        key: Some(Bytes::from("p2-k1")),
-                        value: Bytes::from("v1"),
-                    },
-                    Record {
-                        key: Some(Bytes::from("p2-k2")),
-                        value: Bytes::from("v2"),
-                    },
-                    Record {
-                        key: Some(Bytes::from("p2-k3")),
-                        value: Bytes::from("v3"),
-                    },
-                ],
-            },
-        ],
-    };
-
-    let buf = encode_client_frame(ClientMessage::Append(req.clone()), 8192);
-    ws.send(Message::Binary(buf)).await.unwrap();
-
-    let response = tokio::time::timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("Timeout")
-        .expect("No response")
-        .expect("Error");
-
-    let data = match response {
-        Message::Binary(data) => data,
-        _ => panic!("Expected binary"),
-    };
-
-    let resp = decode_produce_response(&data);
-    assert!(resp.success);
-    assert_eq!(resp.append_acks.len(), 3);
-
-    for (partition_id, expected_offset) in [(0, 2), (1, 1), (2, 3)] {
-        let offset: i64 = sqlx::query_scalar(
-            "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
-        )
-        .bind(topic_id)
-        .bind(partition_id)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
-
-        assert_eq!(
-            offset, expected_offset,
-            "Partition {} should have offset {}",
-            partition_id, expected_offset
-        );
-    }
+    let total_records: usize = fetch_resp.results.iter().map(|r| r.records.len()).sum();
+    assert_eq!(total_records, 5);
 
     ws.close(None).await.ok();
 }
@@ -718,7 +594,7 @@ async fn test_multi_partition_produce() {
 #[tokio::test]
 async fn test_fetch_from_offset() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("read-offset-test", 1).await;
+    let topic_id = db.create_topic("read-offset-test").await;
     let temp_dir = TempDir::new().unwrap();
 
     let (addr, _server_handle) = start_server(db.pool.clone(), &temp_dir).await;
@@ -738,7 +614,6 @@ async fn test_fetch_from_offset() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records,
         }],
@@ -761,15 +636,9 @@ async fn test_fetch_from_offset() {
 
     // Read from offset 5 (should get records 5-9)
     let fetch_req = flourine_wire::reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: flourine_common::ids::Generation(0),
-        reads: vec![flourine_wire::reader::PartitionRead {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
-            offset: flourine_common::ids::Offset(5),
-            max_bytes: 1024 * 1024,
-        }],
+        topic_id: TopicId(topic_id as u32),
+        offset: flourine_common::ids::Offset(5),
+        max_bytes: 1024 * 1024,
     };
 
     let buf = encode_client_frame(ClientMessage::Read(fetch_req.clone()), 8192);

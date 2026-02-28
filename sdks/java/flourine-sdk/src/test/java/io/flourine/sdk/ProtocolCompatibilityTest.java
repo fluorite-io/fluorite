@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProtocolCompatibilityTest {
     private static final String APPEND_ENVELOPE_HEX =
-            "0a2c0a10000102030405060708090a0b0c0d0e0f10071a1608091002186422080a026b3112027631220412027632";
+            "0a2a0a10000102030405060708090a0b0c0d0e0f10071a140809186422080a026b3112027631220412027632";
     private static final String APPEND_RESPONSE_ENVELOPE_HEX =
-            "0a12080710012a0c08091002186420f40328f603";
+            "0a10080710012a0a0809186420f40328f603";
     private static final String JOIN_GROUP_ENVELOPE_HEX =
             "1a1f0a0c6f72646572732d67726f7570120a636f6e73756d65722d311a03010203";
 
@@ -41,7 +41,6 @@ class ProtocolCompatibilityTest {
                                 .addBatches(
                                         RecordBatch.newBuilder()
                                                 .setTopicId(9)
-                                                .setPartitionId(2)
                                                 .setSchemaId(100)
                                                 .addRecords(
                                                         Record.newBuilder()
@@ -89,7 +88,6 @@ class ProtocolCompatibilityTest {
                                 .addAppendAcks(
                                         BatchAck.newBuilder()
                                                 .setTopicId(9)
-                                                .setPartitionId(2)
                                                 .setSchemaId(100)
                                                 .setStartOffset(500)
                                                 .setEndOffset(502)

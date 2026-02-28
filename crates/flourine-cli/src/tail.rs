@@ -1,11 +1,11 @@
 //! Tail command — live-tail a topic via ratatui TUI or JSON output.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use apache_avro::Schema as AvroSchema;
 use apache_avro::from_avro_datum;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -15,7 +15,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use serde::Serialize;
 use tokio::sync::{Mutex, mpsc};
-use flourine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{SchemaId, TopicId};
 use flourine_sdk::reader::{Reader, ReaderConfig};
 
 use crate::client::FlourineClient;
@@ -41,31 +41,9 @@ impl std::fmt::Display for OutputFormat {
 /// A record ready for display or serialization.
 #[derive(Serialize)]
 pub struct TailRecord {
-    pub partition: u32,
     pub offset: u64,
     pub key: Option<String>,
     pub value: String,
-}
-
-/// Parse "partition:offset,partition:offset,..." into a map.
-pub fn parse_offsets(s: &str) -> Result<HashMap<u32, u64>> {
-    let mut map = HashMap::new();
-    for pair in s.split(',') {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let (p, o) = pair.split_once(':').ok_or_else(|| {
-            anyhow::anyhow!("invalid offset format '{}', expected partition:offset", pair)
-        })?;
-        let partition: u32 = p.parse().map_err(|_| anyhow::anyhow!("invalid partition '{}'", p))?;
-        let offset: u64 = o.parse().map_err(|_| anyhow::anyhow!("invalid offset '{}'", o))?;
-        map.insert(partition, offset);
-    }
-    if map.is_empty() {
-        bail!("no offsets specified");
-    }
-    Ok(map)
 }
 
 /// Cached schema decoder — fetches schemas from the admin API on first use.
@@ -114,13 +92,8 @@ pub async fn run(
     api_key: Option<&str>,
     client: &FlourineClient,
     topic_id: u32,
-    start: Option<&str>,
-    end: Option<&str>,
     output: OutputFormat,
 ) -> Result<()> {
-    let start_offsets = start.map(parse_offsets).transpose()?;
-    let end_offsets = end.map(parse_offsets).transpose()?;
-
     let (tx, rx) = mpsc::channel::<TailRecord>(1024);
 
     let group_id = format!("flourine-cli-tail-{}", uuid::Uuid::new_v4());
@@ -135,21 +108,13 @@ pub async fn run(
     let reader = Reader::join(config).await?;
     let _heartbeat = reader.start_heartbeat();
 
-    // Apply start offsets if specified
-    if let Some(ref starts) = start_offsets {
-        for (&partition, &offset) in starts {
-            reader.seek(PartitionId(partition), Offset(offset)).await;
-        }
-    }
-
     let cache = Arc::new(Mutex::new(SchemaCache::new(client.clone())));
 
     // Spawn reader task
     let reader_clone = reader.clone();
-    let end_clone = end_offsets.clone();
     let cache_clone = cache.clone();
     tokio::spawn(async move {
-        poll_loop_with_cache(reader_clone, tx, end_clone, Some(cache_clone)).await;
+        poll_loop_with_cache(reader_clone, tx, Some(cache_clone)).await;
     });
 
     let result = match output {
@@ -165,51 +130,25 @@ pub async fn run(
 pub async fn poll_loop(
     reader: Arc<Reader>,
     tx: mpsc::Sender<TailRecord>,
-    end_offsets: Option<HashMap<u32, u64>>,
 ) {
-    poll_loop_with_cache(reader, tx, end_offsets, None).await;
+    poll_loop_with_cache(reader, tx, None).await;
 }
 
 async fn poll_loop_with_cache(
     reader: Arc<Reader>,
     tx: mpsc::Sender<TailRecord>,
-    end_offsets: Option<HashMap<u32, u64>>,
     schema_cache: Option<Arc<Mutex<SchemaCache>>>,
 ) {
-    // Track which partitions have reached their end offset
-    let mut finished_partitions: HashSet<u32> = HashSet::new();
-
     loop {
         match reader.poll().await {
-            Ok(results) => {
-                for result in results {
-                    let pid = result.partition_id.0;
+            Ok(batch) => {
+                let mut record_offset = batch.start_offset.0;
+                for result in &batch.results {
                     let schema_id = result.schema_id;
 
-                    // Skip partitions that have reached their end
-                    if finished_partitions.contains(&pid) {
-                        continue;
-                    }
-
-                    let base_offset = result
-                        .high_watermark
-                        .0
-                        .saturating_sub(result.records.len() as u64);
-
-                    let record_count = result.records.len() as u64;
-
-                    for (i, record) in result.records.into_iter().enumerate() {
-                        let offset = base_offset + i as u64;
-
-                        // Check end offset
-                        if let Some(ref ends) = end_offsets {
-                            if let Some(&end_off) = ends.get(&pid) {
-                                if offset >= end_off {
-                                    finished_partitions.insert(pid);
-                                    break;
-                                }
-                            }
-                        }
+                    for record in result.records.iter() {
+                        let offset = record_offset;
+                        record_offset += 1;
 
                         let key = record
                             .key
@@ -224,7 +163,6 @@ async fn poll_loop_with_cache(
 
                         if tx
                             .send(TailRecord {
-                                partition: pid,
                                 offset,
                                 key,
                                 value,
@@ -235,24 +173,9 @@ async fn poll_loop_with_cache(
                             return;
                         }
                     }
-
-                    // Also mark finished if high_watermark reached end (no more data)
-                    if let Some(ref ends) = end_offsets {
-                        if let Some(&end_off) = ends.get(&pid) {
-                            let next_offset = base_offset + record_count;
-                            if next_offset >= end_off {
-                                finished_partitions.insert(pid);
-                            }
-                        }
-                    }
-
-                    // Check if all end-offset partitions are finished
-                    if let Some(ref ends) = end_offsets {
-                        if ends.keys().all(|p| finished_partitions.contains(p)) {
-                            return;
-                        }
-                    }
                 }
+                // Commit the batch after processing (tail is best-effort)
+                let _ = reader.commit(&batch).await;
             }
             Err(_) => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -287,28 +210,6 @@ impl TuiApp {
             self.records.drain(..self.records.len() - MAX_RECORDS);
         }
     }
-
-    fn unique_partitions(&self) -> usize {
-        let mut seen = HashSet::new();
-        for r in &self.records {
-            seen.insert(r.partition);
-        }
-        seen.len()
-    }
-}
-
-fn partition_color(pid: u32) -> Color {
-    const COLORS: [Color; 8] = [
-        Color::Cyan,
-        Color::Green,
-        Color::Yellow,
-        Color::Magenta,
-        Color::Blue,
-        Color::Red,
-        Color::LightCyan,
-        Color::LightGreen,
-    ];
-    COLORS[(pid as usize) % COLORS.len()]
 }
 
 async fn run_tui(mut rx: mpsc::Receiver<TailRecord>, topic_id: u32) -> Result<()> {
@@ -356,9 +257,7 @@ fn render(f: &mut Frame, app: &TuiApp) {
         .records
         .iter()
         .map(|r| {
-            let color = partition_color(r.partition);
             Row::new(vec![
-                Cell::from(format!("P{}", r.partition)).style(Style::default().fg(color)),
                 Cell::from(r.offset.to_string()),
                 Cell::from(r.key.as_deref().unwrap_or("")),
                 Cell::from(r.value.as_str()),
@@ -372,14 +271,12 @@ fn render(f: &mut Frame, app: &TuiApp) {
     let visible_rows: Vec<Row> = rows.into_iter().skip(skip).collect();
 
     let header = Row::new(vec![
-        Cell::from("Partition").style(Style::default().bold()),
         Cell::from("Offset").style(Style::default().bold()),
         Cell::from("Key").style(Style::default().bold()),
         Cell::from("Value").style(Style::default().bold()),
     ]);
 
     let widths = [
-        Constraint::Length(10),
         Constraint::Length(10),
         Constraint::Length(20),
         Constraint::Fill(1),
@@ -393,52 +290,9 @@ fn render(f: &mut Frame, app: &TuiApp) {
     f.render_widget(table, chunks[0]);
 
     let status = format!(
-        " Records: {} | Partitions: {} | Press q to quit ",
+        " Records: {} | Press q to quit ",
         total,
-        app.unique_partitions(),
     );
     let status_bar = Paragraph::new(status).style(Style::default().fg(Color::DarkGray));
     f.render_widget(status_bar, chunks[1]);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_offsets_single() {
-        let offsets = parse_offsets("0:100").unwrap();
-        assert_eq!(offsets[&0], 100);
-    }
-
-    #[test]
-    fn test_parse_offsets_multiple() {
-        let offsets = parse_offsets("0:100,1:200,2:50").unwrap();
-        assert_eq!(offsets.len(), 3);
-        assert_eq!(offsets[&0], 100);
-        assert_eq!(offsets[&1], 200);
-        assert_eq!(offsets[&2], 50);
-    }
-
-    #[test]
-    fn test_parse_offsets_with_spaces() {
-        let offsets = parse_offsets("0:100, 1:200").unwrap();
-        assert_eq!(offsets.len(), 2);
-    }
-
-    #[test]
-    fn test_parse_offsets_invalid_format() {
-        assert!(parse_offsets("0-100").is_err());
-    }
-
-    #[test]
-    fn test_parse_offsets_empty() {
-        assert!(parse_offsets("").is_err());
-    }
-
-    #[test]
-    fn test_parse_offsets_invalid_number() {
-        assert!(parse_offsets("abc:100").is_err());
-        assert!(parse_offsets("0:abc").is_err());
-    }
 }

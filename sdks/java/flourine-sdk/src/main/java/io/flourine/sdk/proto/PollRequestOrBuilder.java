@@ -6,8 +6,8 @@
 package io.flourine.sdk.proto;
 
 @com.google.protobuf.Generated
-public interface RejoinRequestOrBuilder extends
-    // @@protoc_insertion_point(interface_extends:flourine.wire.RejoinRequest)
+public interface PollRequestOrBuilder extends
+    // @@protoc_insertion_point(interface_extends:flourine.wire.PollRequest)
     com.google.protobuf.MessageOrBuilder {
 
   /**
@@ -41,8 +41,8 @@ public interface RejoinRequestOrBuilder extends
       getReaderIdBytes();
 
   /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
+   * <code>uint32 max_bytes = 4;</code>
+   * @return The maxBytes.
    */
-  long getGeneration();
+  int getMaxBytes();
 }

@@ -2,7 +2,7 @@ package io.flourine.sdk;
 
 import com.google.protobuf.ByteString;
 import io.flourine.sdk.proto.BatchAck;
-import io.flourine.sdk.proto.PartitionResult;
+import io.flourine.sdk.proto.TopicResult;
 import io.flourine.sdk.proto.Record;
 import io.flourine.sdk.proto.RecordBatch;
 import io.flourine.sdk.schema.FlourineSchema;
@@ -10,18 +10,15 @@ import io.flourine.sdk.schema.Schemas;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
  * High-level typed client. Handles schema registration, serialization,
- * topic resolution, and partitioning automatically.
+ * and topic resolution automatically.
  *
  * <pre>{@code
  * try (FlourineClient client = FlourineClient.connect(new ClientConfig().apiKey("tb_..."))) {
@@ -38,19 +35,8 @@ public class FlourineClient implements AutoCloseable {
     private final Writer writer;
     private final AdminClient admin;
     private final ClientConfig config;
-    private final ConcurrentHashMap<String, TopicInfo> topicCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> topicCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Class<?>, Integer> schemaCache = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, AtomicInteger> rrCounters = new ConcurrentHashMap<>();
-
-    private static class TopicInfo {
-        final int topicId;
-        final int partitionCount;
-
-        TopicInfo(int topicId, int partitionCount) {
-            this.topicId = topicId;
-            this.partitionCount = partitionCount;
-        }
-    }
 
     private FlourineClient(Writer writer, AdminClient admin, ClientConfig config) {
         this.writer = writer;
@@ -71,38 +57,31 @@ public class FlourineClient implements AutoCloseable {
 
     /** Send a single typed object. Topic resolved from @FlourineSchema annotation. */
     public BatchAck send(Object obj) throws FlourineException {
-        return send(obj, (byte[]) null, null, null);
+        return send(obj, (byte[]) null, null);
     }
 
-    /** Send with key-based partitioning. */
+    /** Send with key-based routing. */
     public BatchAck send(Object obj, byte[] key) throws FlourineException {
-        return send(obj, key, null, null);
-    }
-
-    /** Send with explicit partition. */
-    public BatchAck send(Object obj, int partition) throws FlourineException {
-        return send(obj, null, partition, null);
+        return send(obj, key, null);
     }
 
     /** Send with topic override. */
     public BatchAck sendToTopic(Object obj, String topic) throws FlourineException {
-        return send(obj, null, null, topic);
+        return send(obj, null, topic);
     }
 
     /**
      * Send a single typed object with full control over routing.
      *
-     * @param obj       the object to send (must be annotated with @FlourineSchema)
-     * @param key       optional partition key (hash-based routing)
-     * @param partition optional explicit partition number
-     * @param topic     optional topic name override
+     * @param obj   the object to send (must be annotated with @FlourineSchema)
+     * @param key   optional record key
+     * @param topic optional topic name override
      */
-    public BatchAck send(Object obj, byte[] key, Integer partition, String topic) throws FlourineException {
+    public BatchAck send(Object obj, byte[] key, String topic) throws FlourineException {
         Class<?> cls = obj.getClass();
         String topicName = resolveTopic(cls, topic);
-        TopicInfo info = resolveTopicInfo(topicName);
-        int schemaId = resolveSchemaId(cls, info.topicId);
-        int partitionId = pickPartition(topicName, info.partitionCount, key, partition);
+        int topicId = resolveTopicInfo(topicName);
+        int schemaId = resolveSchemaId(cls, topicId);
 
         byte[] value = Schemas.toBytes(obj);
         Record.Builder recordBuilder = Record.newBuilder().setValue(ByteString.copyFrom(value));
@@ -110,15 +89,15 @@ public class FlourineClient implements AutoCloseable {
             recordBuilder.setKey(ByteString.copyFrom(key));
         }
 
-        return writer.send(info.topicId, partitionId, schemaId, List.of(recordBuilder.build()));
+        return writer.send(topicId, schemaId, List.of(recordBuilder.build()));
     }
 
     /** Send a batch of typed objects (all same type). */
     public List<BatchAck> sendBatch(List<?> objects) throws FlourineException {
-        return sendBatch(objects, null, null, null);
+        return sendBatch(objects, null, null);
     }
 
-    public List<BatchAck> sendBatch(List<?> objects, byte[] key, Integer partition, String topic)
+    public List<BatchAck> sendBatch(List<?> objects, byte[] key, String topic)
             throws FlourineException {
         if (objects.isEmpty()) {
             return List.of();
@@ -126,9 +105,8 @@ public class FlourineClient implements AutoCloseable {
 
         Class<?> cls = objects.get(0).getClass();
         String topicName = resolveTopic(cls, topic);
-        TopicInfo info = resolveTopicInfo(topicName);
-        int schemaId = resolveSchemaId(cls, info.topicId);
-        int partitionId = pickPartition(topicName, info.partitionCount, key, partition);
+        int topicId = resolveTopicInfo(topicName);
+        int schemaId = resolveSchemaId(cls, topicId);
 
         List<Record> records = new ArrayList<>(objects.size());
         for (Object obj : objects) {
@@ -140,8 +118,7 @@ public class FlourineClient implements AutoCloseable {
         }
 
         RecordBatch batch = RecordBatch.newBuilder()
-                .setTopicId(info.topicId)
-                .setPartitionId(partitionId)
+                .setTopicId(topicId)
                 .setSchemaId(schemaId)
                 .addAllRecords(records)
                 .build();
@@ -162,27 +139,29 @@ public class FlourineClient implements AutoCloseable {
     public <T> void consume(Class<T> cls, String groupId, String topic, Consumer<T> callback)
             throws FlourineException {
         String topicName = resolveTopic(cls, topic);
-        TopicInfo info = resolveTopicInfo(topicName);
+        int topicId = resolveTopicInfo(topicName);
 
         ReaderConfig readerConfig = new ReaderConfig()
                 .url(config.getWsUrl())
                 .apiKey(config.getApiKey())
                 .groupId(groupId)
-                .topicId(info.topicId)
+                .topicId(topicId)
                 .timeout(config.getTimeout());
 
         try (GroupReader reader = GroupReader.join(readerConfig)) {
             reader.startHeartbeat();
             while (true) {
-                List<PartitionResult> results = reader.poll();
-                for (PartitionResult pr : results) {
+                GroupReader.PollBatch batch = reader.poll();
+                for (TopicResult pr : batch.getResults()) {
                     for (io.flourine.sdk.proto.Record record : pr.getRecordsList()) {
                         T obj = Schemas.fromBytes(cls, record.getValue().toByteArray());
                         callback.accept(obj);
                     }
                 }
-                if (results.isEmpty()) {
+                if (batch.getResults().isEmpty()) {
                     Thread.sleep(100);
+                } else {
+                    reader.commit(batch);
                 }
             }
         } catch (InterruptedException e) {
@@ -203,8 +182,8 @@ public class FlourineClient implements AutoCloseable {
         return ann.topic();
     }
 
-    private TopicInfo resolveTopicInfo(String name) throws FlourineException {
-        TopicInfo cached = topicCache.get(name);
+    private int resolveTopicInfo(String name) throws FlourineException {
+        Integer cached = topicCache.get(name);
         if (cached != null) {
             return cached;
         }
@@ -213,15 +192,14 @@ public class FlourineClient implements AutoCloseable {
         for (Map<String, Object> t : topics) {
             String tName = (String) t.get("name");
             int tId = ((Number) t.get("topic_id")).intValue();
-            int tPartitions = ((Number) t.get("partition_count")).intValue();
-            topicCache.put(tName, new TopicInfo(tId, tPartitions));
+            topicCache.put(tName, tId);
         }
 
-        TopicInfo info = topicCache.get(name);
-        if (info == null) {
+        Integer topicId = topicCache.get(name);
+        if (topicId == null) {
             throw new FlourineException("Topic not found: " + name);
         }
-        return info;
+        return topicId;
     }
 
     private int resolveSchemaId(Class<?> cls, int topicId) throws FlourineException {
@@ -232,31 +210,6 @@ public class FlourineClient implements AutoCloseable {
         int schemaId = admin.registerSchema(topicId, Schemas.schema(cls));
         schemaCache.put(cls, schemaId);
         return schemaId;
-    }
-
-    private int pickPartition(String topicName, int partitionCount, byte[] key, Integer explicit)
-            throws FlourineException {
-        if (explicit != null) {
-            if (explicit < 0 || explicit >= partitionCount) {
-                throw new FlourineException(
-                        "Partition " + explicit + " out of range [0, " + partitionCount + ")"
-                );
-            }
-            return explicit;
-        }
-        if (key != null) {
-            try {
-                MessageDigest md = MessageDigest.getInstance("MD5");
-                byte[] hash = md.digest(key);
-                int h = ((hash[0] & 0xFF) << 24) | ((hash[1] & 0xFF) << 16)
-                        | ((hash[2] & 0xFF) << 8) | (hash[3] & 0xFF);
-                return Math.abs(h) % partitionCount;
-            } catch (NoSuchAlgorithmException e) {
-                throw new FlourineException("MD5 not available", e);
-            }
-        }
-        AtomicInteger counter = rrCounters.computeIfAbsent(topicName, k -> new AtomicInteger(0));
-        return Math.abs(counter.getAndIncrement()) % partitionCount;
     }
 
     @Override

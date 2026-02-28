@@ -45,8 +45,6 @@ enum Command {
         /// Topic name or numeric ID
         #[arg(long)]
         topic: String,
-        #[arg(long, default_value = "0")]
-        partition_id: u32,
         /// Schema ID (uses latest for the topic if omitted)
         #[arg(long)]
         schema_id: Option<u32>,
@@ -61,12 +59,6 @@ enum Command {
         /// Topic name or numeric ID
         #[arg(long)]
         topic: String,
-        /// Start offsets: partition:offset,... (e.g. 0:100,1:200)
-        #[arg(long)]
-        start: Option<String>,
-        /// End offsets: partition:offset,... — exit when all reached
-        #[arg(long)]
-        end: Option<String>,
         /// Output format
         #[arg(long, default_value = "tui")]
         output: tail::OutputFormat,
@@ -88,7 +80,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Schema { action } => schema::run(action, &client).await,
         Command::Write {
             topic,
-            partition_id,
             schema_id,
             key,
             value,
@@ -98,35 +89,11 @@ async fn main() -> anyhow::Result<()> {
                 Some(id) => id,
                 None => client.get_latest_schema(topic_id).await?.schema_id,
             };
-            write::run(
-                &cli.ws_url,
-                None,
-                &client,
-                topic_id,
-                partition_id,
-                schema_id,
-                key,
-                value,
-            )
-            .await
+            write::run(&cli.ws_url, None, &client, topic_id, schema_id, key, value).await
         }
-        Command::Tail {
-            topic,
-            start,
-            end,
-            output,
-        } => {
+        Command::Tail { topic, output } => {
             let topic_id = client.resolve_topic_id(&topic).await?;
-            tail::run(
-                &cli.ws_url,
-                None,
-                &client,
-                topic_id,
-                start.as_deref(),
-                end.as_deref(),
-                output,
-            )
-            .await
+            tail::run(&cli.ws_url, None, &client, topic_id, output).await
         }
     }
 }

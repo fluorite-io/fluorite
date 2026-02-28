@@ -22,6 +22,9 @@ pub enum BrokerError {
 
     #[error("Wire protocol error: {0}")]
     Wire(String),
+
+    #[error("Max inflight ranges exceeded")]
+    MaxInflight,
 }
 
 impl From<crate::object_store::ObjectStoreError> for BrokerError {

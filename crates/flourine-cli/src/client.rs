@@ -15,7 +15,6 @@ pub struct FlourineClient {
 pub struct TopicInfo {
     pub topic_id: i32,
     pub name: String,
-    pub partition_count: i32,
     pub retention_hours: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -23,7 +22,6 @@ pub struct TopicInfo {
 #[derive(Debug, Serialize)]
 pub struct CreateTopicRequest {
     pub name: String,
-    pub partition_count: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention_hours: Option<i32>,
 }
@@ -122,7 +120,6 @@ impl FlourineClient {
     pub async fn create_topic(
         &self,
         name: &str,
-        partitions: i32,
         retention_hours: Option<i32>,
     ) -> Result<CreateTopicResponse> {
         let resp = self
@@ -130,7 +127,6 @@ impl FlourineClient {
             .post(format!("{}/topics", self.admin_url))
             .json(&CreateTopicRequest {
                 name: name.to_string(),
-                partition_count: partitions,
                 retention_hours,
             })
             .send()

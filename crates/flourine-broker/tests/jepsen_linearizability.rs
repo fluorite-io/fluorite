@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 use flourine_broker::{LocalFsStore, ObjectStore, FlReader};
-use flourine_common::ids::{Offset, PartitionId, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 use flourine_common::types::Record;
 
 use common::{FaultyObjectStore, TestBrokerConfig, TestBrokerState, TestDb, produce_records};
@@ -23,11 +23,9 @@ use common::{FaultyObjectStore, TestBrokerConfig, TestBrokerState, TestDb, produ
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Read all records from offset 0.
-/// Returns (records, watermark) where watermark is computed from the batches we actually read.
 async fn fetch_all_records<S: ObjectStore + Send + Sync>(
     state: &TestBrokerState<S>,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> TestResult<(Vec<Record>, Offset)> {
     // Get all batches and watermark in a single transaction to ensure consistency
     let mut tx = state.pool.begin().await?;
@@ -36,20 +34,18 @@ async fn fetch_all_records<S: ObjectStore + Send + Sync>(
         r#"
         SELECT start_offset, end_offset, s3_key
         FROM topic_batches
-        WHERE topic_id = $1 AND partition_id = $2
+        WHERE topic_id = $1
         ORDER BY start_offset
         "#,
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_all(&mut *tx)
     .await?;
 
     let high_watermark: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM partition_offsets WHERE topic_id = $1 AND partition_id = $2",
+        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id.0 as i32)
-    .bind(partition_id.0 as i32)
     .fetch_optional(&mut *tx)
     .await?
     .unwrap_or(0);
@@ -63,7 +59,7 @@ async fn fetch_all_records<S: ObjectStore + Send + Sync>(
         let segment_metas = FlReader::read_footer(&data)?;
 
         for seg_meta in &segment_metas {
-            if seg_meta.topic_id == topic_id && seg_meta.partition_id == partition_id {
+            if seg_meta.topic_id == topic_id {
                 let records = FlReader::read_segment(&data, seg_meta, true)?;
                 all_records.extend(records);
             }
@@ -86,8 +82,7 @@ async fn test_all_acknowledged_writes_visible() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("ack-visible-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("ack-visible-test").await as u32);
 
     // Track all acknowledged writes
     let acked_values: Arc<Mutex<Vec<Bytes>>> = Arc::new(Mutex::new(vec![]));
@@ -105,7 +100,7 @@ async fn test_all_acknowledged_writes_visible() {
                     value: value.clone(),
                 }];
 
-                let result = produce_records(&state_clone, topic_id, partition_id, records).await;
+                let result = produce_records(&state_clone, topic_id, records).await;
                 if result.is_ok() {
                     acked_clone.lock().await.push(value);
                 }
@@ -119,7 +114,7 @@ async fn test_all_acknowledged_writes_visible() {
     }
 
     // Final read from offset 0
-    let (records, _watermark) = fetch_all_records(&state, topic_id, partition_id)
+    let (records, _watermark) = fetch_all_records(&state, topic_id)
         .await
         .expect("Read should succeed");
 
@@ -149,8 +144,7 @@ async fn test_offset_assignment_unique() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("unique-offset-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("unique-offset-test").await as u32);
 
     let all_offsets: Arc<Mutex<Vec<Offset>>> = Arc::new(Mutex::new(vec![]));
 
@@ -167,7 +161,7 @@ async fn test_offset_assignment_unique() {
                 }];
 
                 if let Ok((start, end)) =
-                    produce_records(&state_clone, topic_id, partition_id, records).await
+                    produce_records(&state_clone, topic_id, records).await
                 {
                     // Collect all individual offsets in the range
                     let offsets: Vec<Offset> = (start.0..end.0).map(Offset).collect();
@@ -207,8 +201,7 @@ async fn test_final_read_completeness() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("completeness-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("completeness-test").await as u32);
 
     // Track expected record count
     let expected_count = Arc::new(AtomicU64::new(0));
@@ -227,7 +220,7 @@ async fn test_final_read_completeness() {
                 })
                 .collect();
 
-            if produce_records(&state_clone, topic_id, partition_id, records)
+            if produce_records(&state_clone, topic_id, records)
                 .await
                 .is_ok()
             {
@@ -241,7 +234,7 @@ async fn test_final_read_completeness() {
     }
 
     // Final read should see exactly expected_count records
-    let (records, watermark) = fetch_all_records(&state, topic_id, partition_id)
+    let (records, watermark) = fetch_all_records(&state, topic_id)
         .await
         .expect("Read should succeed");
 
@@ -275,8 +268,7 @@ async fn test_read_write_consistency() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store, config));
 
-    let topic_id = TopicId(db.create_topic("rw-consistency-test", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("rw-consistency-test").await as u32);
 
     // Writer task
     let state_writer = state.clone();
@@ -286,7 +278,7 @@ async fn test_read_write_consistency() {
                 key: Some(Bytes::from(format!("key-{}", i))),
                 value: Bytes::from(format!("value-{}", i)),
             }];
-            let _ = produce_records(&state_writer, topic_id, partition_id, records).await;
+            let _ = produce_records(&state_writer, topic_id, records).await;
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
     });
@@ -296,10 +288,9 @@ async fn test_read_write_consistency() {
     let reader_handle = tokio::spawn(async move {
         let mut watermarks = vec![];
         for _ in 0..10 {
-            let result = fetch_all_records(&state_reader, topic_id, partition_id).await;
+            let result = fetch_all_records(&state_reader, topic_id).await;
             if let Ok((records, watermark)) = result {
                 // Count comparison: records visible should be <= watermark
-                // This is valid because offsets start at 0 and are contiguous
                 assert!(
                     records.len() as u64 <= watermark.0,
                     "Records visible ({}) should not exceed watermark ({})",
@@ -308,7 +299,6 @@ async fn test_read_write_consistency() {
                 );
 
                 // Contiguity check: verify records are in sequential order with no gaps
-                // Records have keys like "key-0", "key-1", etc.
                 for (i, record) in records.iter().enumerate() {
                     if let Some(ref key) = record.key {
                         let key_str = String::from_utf8_lossy(key);
@@ -355,8 +345,7 @@ async fn test_acknowledged_writes_visible_under_s3_faults() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store.clone(), config));
 
-    let topic_id = TopicId(db.create_topic("ack-visible-s3-fault", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("ack-visible-s3-fault").await as u32);
     let acked_values: Arc<Mutex<Vec<Bytes>>> = Arc::new(Mutex::new(vec![]));
 
     // Fault injector: periodically fail S3 puts.
@@ -379,7 +368,7 @@ async fn test_acknowledged_writes_visible_under_s3_faults() {
                     key: Some(Bytes::from(format!("key-{}-{}", producer_idx, i))),
                     value: value.clone(),
                 }];
-                let result = produce_records(&state_clone, topic_id, partition_id, records).await;
+                let result = produce_records(&state_clone, topic_id, records).await;
                 if result.is_ok() {
                     acked_clone.lock().await.push(value);
                 }
@@ -392,7 +381,7 @@ async fn test_acknowledged_writes_visible_under_s3_faults() {
     }
     fault_handle.await.unwrap();
 
-    let (records, _watermark) = fetch_all_records(&state, topic_id, partition_id)
+    let (records, _watermark) = fetch_all_records(&state, topic_id)
         .await
         .expect("Read should succeed");
 
@@ -421,8 +410,7 @@ async fn test_offset_uniqueness_under_s3_faults() {
     };
     let state = Arc::new(TestBrokerState::new(db.pool.clone(), store.clone(), config));
 
-    let topic_id = TopicId(db.create_topic("unique-offset-s3-fault", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("unique-offset-s3-fault").await as u32);
     let all_offsets: Arc<Mutex<Vec<Offset>>> = Arc::new(Mutex::new(vec![]));
 
     // Periodic S3 failures.
@@ -445,7 +433,7 @@ async fn test_offset_uniqueness_under_s3_faults() {
                     value: Bytes::from(format!("value-{}-{}", producer_idx, i)),
                 }];
                 if let Ok((start, end)) =
-                    produce_records(&state_clone, topic_id, partition_id, records).await
+                    produce_records(&state_clone, topic_id, records).await
                 {
                     let offsets: Vec<Offset> = (start.0..end.0).map(Offset).collect();
                     offsets_clone.lock().await.extend(offsets);

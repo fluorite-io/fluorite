@@ -108,41 +108,41 @@ private static final long serialVersionUID = 0L;
 
   public static final int RESULTS_FIELD_NUMBER = 4;
   @SuppressWarnings("serial")
-  private java.util.List<io.flourine.sdk.proto.PartitionResult> results_;
+  private java.util.List<io.flourine.sdk.proto.TopicResult> results_;
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
   @java.lang.Override
-  public java.util.List<io.flourine.sdk.proto.PartitionResult> getResultsList() {
+  public java.util.List<io.flourine.sdk.proto.TopicResult> getResultsList() {
     return results_;
   }
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
   @java.lang.Override
-  public java.util.List<? extends io.flourine.sdk.proto.PartitionResultOrBuilder> 
+  public java.util.List<? extends io.flourine.sdk.proto.TopicResultOrBuilder> 
       getResultsOrBuilderList() {
     return results_;
   }
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
   @java.lang.Override
   public int getResultsCount() {
     return results_.size();
   }
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
   @java.lang.Override
-  public io.flourine.sdk.proto.PartitionResult getResults(int index) {
+  public io.flourine.sdk.proto.TopicResult getResults(int index) {
     return results_.get(index);
   }
   /**
-   * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+   * <code>repeated .flourine.wire.TopicResult results = 4;</code>
    */
   @java.lang.Override
-  public io.flourine.sdk.proto.PartitionResultOrBuilder getResultsOrBuilder(
+  public io.flourine.sdk.proto.TopicResultOrBuilder getResultsOrBuilder(
       int index) {
     return results_.get(index);
   }
@@ -531,9 +531,9 @@ private static final long serialVersionUID = 0L;
               break;
             } // case 26
             case 34: {
-              io.flourine.sdk.proto.PartitionResult m =
+              io.flourine.sdk.proto.TopicResult m =
                   input.readMessage(
-                      io.flourine.sdk.proto.PartitionResult.parser(),
+                      io.flourine.sdk.proto.TopicResult.parser(),
                       extensionRegistry);
               if (resultsBuilder_ == null) {
                 ensureResultsIsMutable();
@@ -696,22 +696,22 @@ private static final long serialVersionUID = 0L;
       return this;
     }
 
-    private java.util.List<io.flourine.sdk.proto.PartitionResult> results_ =
+    private java.util.List<io.flourine.sdk.proto.TopicResult> results_ =
       java.util.Collections.emptyList();
     private void ensureResultsIsMutable() {
       if (!((bitField0_ & 0x00000008) != 0)) {
-        results_ = new java.util.ArrayList<io.flourine.sdk.proto.PartitionResult>(results_);
+        results_ = new java.util.ArrayList<io.flourine.sdk.proto.TopicResult>(results_);
         bitField0_ |= 0x00000008;
        }
     }
 
     private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionResult, io.flourine.sdk.proto.PartitionResult.Builder, io.flourine.sdk.proto.PartitionResultOrBuilder> resultsBuilder_;
+        io.flourine.sdk.proto.TopicResult, io.flourine.sdk.proto.TopicResult.Builder, io.flourine.sdk.proto.TopicResultOrBuilder> resultsBuilder_;
 
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public java.util.List<io.flourine.sdk.proto.PartitionResult> getResultsList() {
+    public java.util.List<io.flourine.sdk.proto.TopicResult> getResultsList() {
       if (resultsBuilder_ == null) {
         return java.util.Collections.unmodifiableList(results_);
       } else {
@@ -719,7 +719,7 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public int getResultsCount() {
       if (resultsBuilder_ == null) {
@@ -729,9 +729,9 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public io.flourine.sdk.proto.PartitionResult getResults(int index) {
+    public io.flourine.sdk.proto.TopicResult getResults(int index) {
       if (resultsBuilder_ == null) {
         return results_.get(index);
       } else {
@@ -739,10 +739,10 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder setResults(
-        int index, io.flourine.sdk.proto.PartitionResult value) {
+        int index, io.flourine.sdk.proto.TopicResult value) {
       if (resultsBuilder_ == null) {
         if (value == null) {
           throw new NullPointerException();
@@ -756,10 +756,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder setResults(
-        int index, io.flourine.sdk.proto.PartitionResult.Builder builderForValue) {
+        int index, io.flourine.sdk.proto.TopicResult.Builder builderForValue) {
       if (resultsBuilder_ == null) {
         ensureResultsIsMutable();
         results_.set(index, builderForValue.build());
@@ -770,9 +770,9 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public Builder addResults(io.flourine.sdk.proto.PartitionResult value) {
+    public Builder addResults(io.flourine.sdk.proto.TopicResult value) {
       if (resultsBuilder_ == null) {
         if (value == null) {
           throw new NullPointerException();
@@ -786,10 +786,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder addResults(
-        int index, io.flourine.sdk.proto.PartitionResult value) {
+        int index, io.flourine.sdk.proto.TopicResult value) {
       if (resultsBuilder_ == null) {
         if (value == null) {
           throw new NullPointerException();
@@ -803,10 +803,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder addResults(
-        io.flourine.sdk.proto.PartitionResult.Builder builderForValue) {
+        io.flourine.sdk.proto.TopicResult.Builder builderForValue) {
       if (resultsBuilder_ == null) {
         ensureResultsIsMutable();
         results_.add(builderForValue.build());
@@ -817,10 +817,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder addResults(
-        int index, io.flourine.sdk.proto.PartitionResult.Builder builderForValue) {
+        int index, io.flourine.sdk.proto.TopicResult.Builder builderForValue) {
       if (resultsBuilder_ == null) {
         ensureResultsIsMutable();
         results_.add(index, builderForValue.build());
@@ -831,10 +831,10 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder addAllResults(
-        java.lang.Iterable<? extends io.flourine.sdk.proto.PartitionResult> values) {
+        java.lang.Iterable<? extends io.flourine.sdk.proto.TopicResult> values) {
       if (resultsBuilder_ == null) {
         ensureResultsIsMutable();
         com.google.protobuf.AbstractMessageLite.Builder.addAll(
@@ -846,7 +846,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder clearResults() {
       if (resultsBuilder_ == null) {
@@ -859,7 +859,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
     public Builder removeResults(int index) {
       if (resultsBuilder_ == null) {
@@ -872,16 +872,16 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public io.flourine.sdk.proto.PartitionResult.Builder getResultsBuilder(
+    public io.flourine.sdk.proto.TopicResult.Builder getResultsBuilder(
         int index) {
       return internalGetResultsFieldBuilder().getBuilder(index);
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public io.flourine.sdk.proto.PartitionResultOrBuilder getResultsOrBuilder(
+    public io.flourine.sdk.proto.TopicResultOrBuilder getResultsOrBuilder(
         int index) {
       if (resultsBuilder_ == null) {
         return results_.get(index);  } else {
@@ -889,9 +889,9 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public java.util.List<? extends io.flourine.sdk.proto.PartitionResultOrBuilder> 
+    public java.util.List<? extends io.flourine.sdk.proto.TopicResultOrBuilder> 
          getResultsOrBuilderList() {
       if (resultsBuilder_ != null) {
         return resultsBuilder_.getMessageOrBuilderList();
@@ -900,33 +900,33 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public io.flourine.sdk.proto.PartitionResult.Builder addResultsBuilder() {
+    public io.flourine.sdk.proto.TopicResult.Builder addResultsBuilder() {
       return internalGetResultsFieldBuilder().addBuilder(
-          io.flourine.sdk.proto.PartitionResult.getDefaultInstance());
+          io.flourine.sdk.proto.TopicResult.getDefaultInstance());
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public io.flourine.sdk.proto.PartitionResult.Builder addResultsBuilder(
+    public io.flourine.sdk.proto.TopicResult.Builder addResultsBuilder(
         int index) {
       return internalGetResultsFieldBuilder().addBuilder(
-          index, io.flourine.sdk.proto.PartitionResult.getDefaultInstance());
+          index, io.flourine.sdk.proto.TopicResult.getDefaultInstance());
     }
     /**
-     * <code>repeated .flourine.wire.PartitionResult results = 4;</code>
+     * <code>repeated .flourine.wire.TopicResult results = 4;</code>
      */
-    public java.util.List<io.flourine.sdk.proto.PartitionResult.Builder> 
+    public java.util.List<io.flourine.sdk.proto.TopicResult.Builder> 
          getResultsBuilderList() {
       return internalGetResultsFieldBuilder().getBuilderList();
     }
     private com.google.protobuf.RepeatedFieldBuilder<
-        io.flourine.sdk.proto.PartitionResult, io.flourine.sdk.proto.PartitionResult.Builder, io.flourine.sdk.proto.PartitionResultOrBuilder> 
+        io.flourine.sdk.proto.TopicResult, io.flourine.sdk.proto.TopicResult.Builder, io.flourine.sdk.proto.TopicResultOrBuilder> 
         internalGetResultsFieldBuilder() {
       if (resultsBuilder_ == null) {
         resultsBuilder_ = new com.google.protobuf.RepeatedFieldBuilder<
-            io.flourine.sdk.proto.PartitionResult, io.flourine.sdk.proto.PartitionResult.Builder, io.flourine.sdk.proto.PartitionResultOrBuilder>(
+            io.flourine.sdk.proto.TopicResult, io.flourine.sdk.proto.TopicResult.Builder, io.flourine.sdk.proto.TopicResultOrBuilder>(
                 results_,
                 ((bitField0_ & 0x00000008) != 0),
                 getParentForChildren(),

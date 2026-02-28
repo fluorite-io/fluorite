@@ -54,21 +54,10 @@ private static final long serialVersionUID = 0L;
     return topicId_;
   }
 
-  public static final int PARTITION_ID_FIELD_NUMBER = 2;
-  private int partitionId_ = 0;
-  /**
-   * <code>uint32 partition_id = 2;</code>
-   * @return The partitionId.
-   */
-  @java.lang.Override
-  public int getPartitionId() {
-    return partitionId_;
-  }
-
-  public static final int SCHEMA_ID_FIELD_NUMBER = 3;
+  public static final int SCHEMA_ID_FIELD_NUMBER = 2;
   private int schemaId_ = 0;
   /**
-   * <code>uint32 schema_id = 3;</code>
+   * <code>uint32 schema_id = 2;</code>
    * @return The schemaId.
    */
   @java.lang.Override
@@ -76,10 +65,10 @@ private static final long serialVersionUID = 0L;
     return schemaId_;
   }
 
-  public static final int START_OFFSET_FIELD_NUMBER = 4;
+  public static final int START_OFFSET_FIELD_NUMBER = 3;
   private long startOffset_ = 0L;
   /**
-   * <code>uint64 start_offset = 4;</code>
+   * <code>uint64 start_offset = 3;</code>
    * @return The startOffset.
    */
   @java.lang.Override
@@ -87,10 +76,10 @@ private static final long serialVersionUID = 0L;
     return startOffset_;
   }
 
-  public static final int END_OFFSET_FIELD_NUMBER = 5;
+  public static final int END_OFFSET_FIELD_NUMBER = 4;
   private long endOffset_ = 0L;
   /**
-   * <code>uint64 end_offset = 5;</code>
+   * <code>uint64 end_offset = 4;</code>
    * @return The endOffset.
    */
   @java.lang.Override
@@ -115,17 +104,14 @@ private static final long serialVersionUID = 0L;
     if (topicId_ != 0) {
       output.writeUInt32(1, topicId_);
     }
-    if (partitionId_ != 0) {
-      output.writeUInt32(2, partitionId_);
-    }
     if (schemaId_ != 0) {
-      output.writeUInt32(3, schemaId_);
+      output.writeUInt32(2, schemaId_);
     }
     if (startOffset_ != 0L) {
-      output.writeUInt64(4, startOffset_);
+      output.writeUInt64(3, startOffset_);
     }
     if (endOffset_ != 0L) {
-      output.writeUInt64(5, endOffset_);
+      output.writeUInt64(4, endOffset_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -140,21 +126,17 @@ private static final long serialVersionUID = 0L;
       size += com.google.protobuf.CodedOutputStream
         .computeUInt32Size(1, topicId_);
     }
-    if (partitionId_ != 0) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeUInt32Size(2, partitionId_);
-    }
     if (schemaId_ != 0) {
       size += com.google.protobuf.CodedOutputStream
-        .computeUInt32Size(3, schemaId_);
+        .computeUInt32Size(2, schemaId_);
     }
     if (startOffset_ != 0L) {
       size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(4, startOffset_);
+        .computeUInt64Size(3, startOffset_);
     }
     if (endOffset_ != 0L) {
       size += com.google.protobuf.CodedOutputStream
-        .computeUInt64Size(5, endOffset_);
+        .computeUInt64Size(4, endOffset_);
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -173,8 +155,6 @@ private static final long serialVersionUID = 0L;
 
     if (getTopicId()
         != other.getTopicId()) return false;
-    if (getPartitionId()
-        != other.getPartitionId()) return false;
     if (getSchemaId()
         != other.getSchemaId()) return false;
     if (getStartOffset()
@@ -194,8 +174,6 @@ private static final long serialVersionUID = 0L;
     hash = (19 * hash) + getDescriptor().hashCode();
     hash = (37 * hash) + TOPIC_ID_FIELD_NUMBER;
     hash = (53 * hash) + getTopicId();
-    hash = (37 * hash) + PARTITION_ID_FIELD_NUMBER;
-    hash = (53 * hash) + getPartitionId();
     hash = (37 * hash) + SCHEMA_ID_FIELD_NUMBER;
     hash = (53 * hash) + getSchemaId();
     hash = (37 * hash) + START_OFFSET_FIELD_NUMBER;
@@ -336,7 +314,6 @@ private static final long serialVersionUID = 0L;
       super.clear();
       bitField0_ = 0;
       topicId_ = 0;
-      partitionId_ = 0;
       schemaId_ = 0;
       startOffset_ = 0L;
       endOffset_ = 0L;
@@ -377,15 +354,12 @@ private static final long serialVersionUID = 0L;
         result.topicId_ = topicId_;
       }
       if (((from_bitField0_ & 0x00000002) != 0)) {
-        result.partitionId_ = partitionId_;
-      }
-      if (((from_bitField0_ & 0x00000004) != 0)) {
         result.schemaId_ = schemaId_;
       }
-      if (((from_bitField0_ & 0x00000008) != 0)) {
+      if (((from_bitField0_ & 0x00000004) != 0)) {
         result.startOffset_ = startOffset_;
       }
-      if (((from_bitField0_ & 0x00000010) != 0)) {
+      if (((from_bitField0_ & 0x00000008) != 0)) {
         result.endOffset_ = endOffset_;
       }
     }
@@ -404,9 +378,6 @@ private static final long serialVersionUID = 0L;
       if (other == io.flourine.sdk.proto.BatchAck.getDefaultInstance()) return this;
       if (other.getTopicId() != 0) {
         setTopicId(other.getTopicId());
-      }
-      if (other.getPartitionId() != 0) {
-        setPartitionId(other.getPartitionId());
       }
       if (other.getSchemaId() != 0) {
         setSchemaId(other.getSchemaId());
@@ -449,25 +420,20 @@ private static final long serialVersionUID = 0L;
               break;
             } // case 8
             case 16: {
-              partitionId_ = input.readUInt32();
+              schemaId_ = input.readUInt32();
               bitField0_ |= 0x00000002;
               break;
             } // case 16
             case 24: {
-              schemaId_ = input.readUInt32();
+              startOffset_ = input.readUInt64();
               bitField0_ |= 0x00000004;
               break;
             } // case 24
             case 32: {
-              startOffset_ = input.readUInt64();
+              endOffset_ = input.readUInt64();
               bitField0_ |= 0x00000008;
               break;
             } // case 32
-            case 40: {
-              endOffset_ = input.readUInt64();
-              bitField0_ |= 0x00000010;
-              break;
-            } // case 40
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -517,41 +483,9 @@ private static final long serialVersionUID = 0L;
       return this;
     }
 
-    private int partitionId_ ;
-    /**
-     * <code>uint32 partition_id = 2;</code>
-     * @return The partitionId.
-     */
-    @java.lang.Override
-    public int getPartitionId() {
-      return partitionId_;
-    }
-    /**
-     * <code>uint32 partition_id = 2;</code>
-     * @param value The partitionId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setPartitionId(int value) {
-
-      partitionId_ = value;
-      bitField0_ |= 0x00000002;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>uint32 partition_id = 2;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearPartitionId() {
-      bitField0_ = (bitField0_ & ~0x00000002);
-      partitionId_ = 0;
-      onChanged();
-      return this;
-    }
-
     private int schemaId_ ;
     /**
-     * <code>uint32 schema_id = 3;</code>
+     * <code>uint32 schema_id = 2;</code>
      * @return The schemaId.
      */
     @java.lang.Override
@@ -559,23 +493,23 @@ private static final long serialVersionUID = 0L;
       return schemaId_;
     }
     /**
-     * <code>uint32 schema_id = 3;</code>
+     * <code>uint32 schema_id = 2;</code>
      * @param value The schemaId to set.
      * @return This builder for chaining.
      */
     public Builder setSchemaId(int value) {
 
       schemaId_ = value;
-      bitField0_ |= 0x00000004;
+      bitField0_ |= 0x00000002;
       onChanged();
       return this;
     }
     /**
-     * <code>uint32 schema_id = 3;</code>
+     * <code>uint32 schema_id = 2;</code>
      * @return This builder for chaining.
      */
     public Builder clearSchemaId() {
-      bitField0_ = (bitField0_ & ~0x00000004);
+      bitField0_ = (bitField0_ & ~0x00000002);
       schemaId_ = 0;
       onChanged();
       return this;
@@ -583,7 +517,7 @@ private static final long serialVersionUID = 0L;
 
     private long startOffset_ ;
     /**
-     * <code>uint64 start_offset = 4;</code>
+     * <code>uint64 start_offset = 3;</code>
      * @return The startOffset.
      */
     @java.lang.Override
@@ -591,23 +525,23 @@ private static final long serialVersionUID = 0L;
       return startOffset_;
     }
     /**
-     * <code>uint64 start_offset = 4;</code>
+     * <code>uint64 start_offset = 3;</code>
      * @param value The startOffset to set.
      * @return This builder for chaining.
      */
     public Builder setStartOffset(long value) {
 
       startOffset_ = value;
-      bitField0_ |= 0x00000008;
+      bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }
     /**
-     * <code>uint64 start_offset = 4;</code>
+     * <code>uint64 start_offset = 3;</code>
      * @return This builder for chaining.
      */
     public Builder clearStartOffset() {
-      bitField0_ = (bitField0_ & ~0x00000008);
+      bitField0_ = (bitField0_ & ~0x00000004);
       startOffset_ = 0L;
       onChanged();
       return this;
@@ -615,7 +549,7 @@ private static final long serialVersionUID = 0L;
 
     private long endOffset_ ;
     /**
-     * <code>uint64 end_offset = 5;</code>
+     * <code>uint64 end_offset = 4;</code>
      * @return The endOffset.
      */
     @java.lang.Override
@@ -623,23 +557,23 @@ private static final long serialVersionUID = 0L;
       return endOffset_;
     }
     /**
-     * <code>uint64 end_offset = 5;</code>
+     * <code>uint64 end_offset = 4;</code>
      * @param value The endOffset to set.
      * @return This builder for chaining.
      */
     public Builder setEndOffset(long value) {
 
       endOffset_ = value;
-      bitField0_ |= 0x00000010;
+      bitField0_ |= 0x00000008;
       onChanged();
       return this;
     }
     /**
-     * <code>uint64 end_offset = 5;</code>
+     * <code>uint64 end_offset = 4;</code>
      * @return This builder for chaining.
      */
     public Builder clearEndOffset() {
-      bitField0_ = (bitField0_ & ~0x00000010);
+      bitField0_ = (bitField0_ & ~0x00000008);
       endOffset_ = 0L;
       onChanged();
       return this;

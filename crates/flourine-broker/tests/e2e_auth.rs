@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use flourine_broker::{AclChecker, ApiKeyValidator, Operation, ResourceType};
-use flourine_common::ids::{AppendSeq, Offset, PartitionId, SchemaId, TopicId, WriterId};
+use flourine_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
 use flourine_common::types::{Record, RecordBatch};
 use flourine_wire::{ClientMessage, ERR_AUTHZ_DENIED, ERR_DECODE_ERROR, reader, writer};
 
@@ -24,7 +24,7 @@ use common::ws_helpers::*;
 #[tokio::test]
 async fn test_unprefixed_produce_acl_enforced_with_auth() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("unprefixed-append-authz", 1).await;
+    let topic_id = db.create_topic("unprefixed-append-authz").await;
     let temp_dir = TempDir::new().unwrap();
 
     let validator = ApiKeyValidator::new(db.pool.clone());
@@ -62,7 +62,6 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("deny")),
@@ -91,7 +90,7 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
     assert!(deny_resp.append_acks.is_empty());
 
     let offset_after_deny: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -109,7 +108,6 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: Some(Bytes::from("allow")),
@@ -137,7 +135,7 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
     assert_eq!(allow_resp.append_acks.len(), 1);
 
     let offset_after_allow: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM partition_offsets WHERE topic_id = $1 AND partition_id = 0",
+        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
     )
     .bind(topic_id)
     .fetch_one(&db.pool)
@@ -154,7 +152,7 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
 #[tokio::test]
 async fn test_prefixed_join_acl_denied_returns_typed_error_response() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("prefixed-join-authz", 1).await;
+    let topic_id = db.create_topic("prefixed-join-authz").await;
     let temp_dir = TempDir::new().unwrap();
 
     let validator = ApiKeyValidator::new(db.pool.clone());
@@ -201,8 +199,6 @@ async fn test_prefixed_join_acl_denied_returns_typed_error_response() {
     let join_resp = decode_join_response(&data);
     assert!(!join_resp.success);
     assert_eq!(join_resp.error_code, ERR_AUTHZ_DENIED);
-    assert_eq!(join_resp.generation.0, 0);
-    assert!(join_resp.assignments.is_empty());
 
     ws.close(None).await.ok();
     server_handle.abort();
@@ -213,7 +209,7 @@ async fn test_prefixed_join_acl_denied_returns_typed_error_response() {
 #[tokio::test]
 async fn test_prefixed_commit_requires_topic_acl() {
     let db = TestDb::new().await;
-    let topic_id = db.create_topic("prefixed-commit-authz", 1).await;
+    let topic_id = db.create_topic("prefixed-commit-authz").await;
     let temp_dir = TempDir::new().unwrap();
 
     let validator = ApiKeyValidator::new(db.pool.clone());
@@ -242,12 +238,9 @@ async fn test_prefixed_commit_requires_topic_acl() {
     let req = reader::CommitRequest {
         group_id: "commit-authz-group".to_string(),
         reader_id: "reader-1".to_string(),
-        generation: flourine_common::ids::Generation(1),
-        commits: vec![reader::PartitionCommit {
-            topic_id: TopicId(topic_id as u32),
-            partition_id: PartitionId(0),
-            offset: Offset(1),
-        }],
+        topic_id: TopicId(topic_id as u32),
+        start_offset: Offset(0),
+        end_offset: Offset(1),
     };
 
     let buf = encode_client_frame(ClientMessage::Commit(req.clone()), 1024);
@@ -298,8 +291,6 @@ async fn test_prefixed_join_decode_failure_returns_typed_error_response() {
     let join_resp = decode_join_response(&data);
     assert!(!join_resp.success);
     assert_eq!(join_resp.error_code, ERR_DECODE_ERROR);
-    assert_eq!(join_resp.generation.0, 0);
-    assert!(join_resp.assignments.is_empty());
 
     ws.close(None).await.ok();
     server_handle.abort();

@@ -242,12 +242,11 @@ pub struct CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flourine_common::ids::{Offset, PartitionId, SchemaId, TopicId};
+    use flourine_common::ids::{Offset, SchemaId, TopicId};
 
     fn make_ack() -> BatchAck {
         BatchAck {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             start_offset: Offset(0),
             end_offset: Offset(10),

@@ -6,7 +6,7 @@ Example usage:
 
     # Writer
     async with Writer.connect("ws://localhost:9000") as writer:
-        await writer.send(topic_id=1, partition_id=0, schema_id=100, records=[
+        await writer.send(topic_id=1, schema_id=100, records=[
             {"key": b"key1", "value": b"value1"},
         ])
 
@@ -19,7 +19,7 @@ Example usage:
 """
 
 from .writer import Writer, WriterConfig
-from .reader import GroupReader, ReaderConfig
+from .reader import GroupReader, ReaderConfig, PollBatch
 from .client import FlourineClient, ClientConfig
 from .proto import flourine_wire_pb2
 from ._schema import schema, Int32, Float32, NonNull
@@ -38,6 +38,7 @@ __all__ = [
     "WriterConfig",
     "GroupReader",
     "ReaderConfig",
+    "PollBatch",
     "FlourineClient",
     "ClientConfig",
     "flourine_wire_pb2",

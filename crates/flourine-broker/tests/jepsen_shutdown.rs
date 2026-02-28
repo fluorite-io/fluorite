@@ -32,8 +32,7 @@ async fn ws_connect(addr: std::net::SocketAddr) -> Ws {
 #[tokio::test]
 async fn test_shutdown_completes_inflight_append() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("shutdown-inflight", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("shutdown-inflight").await as u32);
 
     let mut broker = CrashableWsBroker::start_with_shutdown(db.pool.clone()).await;
 
@@ -49,7 +48,6 @@ async fn test_shutdown_completes_inflight_append() {
         append_seq: AppendSeq(1),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,

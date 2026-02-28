@@ -1,7 +1,7 @@
 //! Jepsen-inspired partial commit tests.
 //!
-//! Verifies that partial failures across partitions don't create cross-partition
-//! inconsistency. When a flush fails for one partition, other partitions that
+//! Verifies that partial failures across topics don't create cross-topic
+//! inconsistency. When a flush fails for one topic, other topics that
 //! already succeeded remain consistent.
 
 mod common;
@@ -34,7 +34,6 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
     let req = writer::AppendRequest {
@@ -42,7 +41,6 @@ async fn ws_produce(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -74,7 +72,6 @@ async fn ws_produce(
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
@@ -82,15 +79,9 @@ async fn ws_read_all(
 
     loop {
         let req = reader::ReadRequest {
-            group_id: String::new(),
-            reader_id: String::new(),
-            generation: Generation(0),
-            reads: vec![reader::PartitionRead {
-                topic_id,
-                partition_id,
-                offset: next_offset,
-                max_bytes: 10 * 1024 * 1024,
-            }],
+            topic_id,
+            offset: next_offset,
+            max_bytes: 10 * 1024 * 1024,
         };
         let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
         ws.send(Message::Binary(buf))
@@ -134,14 +125,16 @@ async fn ws_read_all(
     Ok((all_values, hwm))
 }
 
-/// Write to partitions 0, 1, 2 in quick succession. Inject fail_on_put_n(2) so
-/// the second flush fails. Verify: partition 0 data is readable if acked,
-/// partitions 1/2 writes are not acked, offsets are consistent.
-/// Invariant: partial failures across partitions don't create cross-partition inconsistency.
+/// Write to topics 0, 1, 2 in quick succession. Inject fail_on_put_n(2) so
+/// the second flush fails. Verify: topic 0 data is readable if acked,
+/// topics 1/2 writes are not acked, offsets are consistent.
+/// Invariant: partial failures across topics don't create cross-topic inconsistency.
 #[tokio::test]
-async fn test_multi_partition_partial_commit() {
+async fn test_multi_topic_partial_commit() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("partial-commit", 3).await as u32);
+    let topic_id_0 = TopicId(db.create_topic("partial-commit-0").await as u32);
+    let topic_id_1 = TopicId(db.create_topic("partial-commit-1").await as u32);
+    let topic_id_2 = TopicId(db.create_topic("partial-commit-2").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
@@ -149,119 +142,118 @@ async fn test_multi_partition_partial_commit() {
     // Fail from the 2nd S3 put onward
     broker.faulty_store().fail_on_put_n(2);
 
-    // Write to partition 0 — first put succeeds
+    // Write to topic 0 — first put succeeds
     let mut ws0 = ws_connect(addr).await;
     let w0 = WriterId::new();
-    let resp0 = ws_produce(&mut ws0, w0, 1, topic_id, PartitionId(0), "p0-val").await;
+    let resp0 = ws_produce(&mut ws0, w0, 1, topic_id_0, "t0-val").await;
 
-    // Write to partition 1 — second put fails
+    // Write to topic 1 — second put fails
     let mut ws1 = ws_connect(addr).await;
     let w1 = WriterId::new();
-    let resp1 = ws_produce(&mut ws1, w1, 1, topic_id, PartitionId(1), "p1-val").await;
+    let resp1 = ws_produce(&mut ws1, w1, 1, topic_id_1, "t1-val").await;
 
-    // Write to partition 2 — also fails
+    // Write to topic 2 — also fails
     let mut ws2 = ws_connect(addr).await;
     let w2 = WriterId::new();
-    let resp2 = ws_produce(&mut ws2, w2, 1, topic_id, PartitionId(2), "p2-val").await;
+    let resp2 = ws_produce(&mut ws2, w2, 1, topic_id_2, "t2-val").await;
 
     // Reset faults for reads
     broker.faulty_store().reset();
 
-    // Partition 0 should have succeeded
-    let p0_acked = resp0.as_ref().map(|r| r.success).unwrap_or(false);
+    // Topic 0 should have succeeded
+    let t0_acked = resp0.as_ref().map(|r| r.success).unwrap_or(false);
 
-    // Partitions 1 and 2 should have failed
-    let p1_failed = resp1.is_err() || !resp1.as_ref().unwrap().success;
-    let p2_failed = resp2.is_err() || !resp2.as_ref().unwrap().success;
-    assert!(p1_failed, "partition 1 write should fail (2nd S3 put fails)");
-    assert!(p2_failed, "partition 2 write should fail (3rd S3 put fails)");
+    // Topics 1 and 2 should have failed
+    let t1_failed = resp1.is_err() || !resp1.as_ref().unwrap().success;
+    let t2_failed = resp2.is_err() || !resp2.as_ref().unwrap().success;
+    assert!(t1_failed, "topic 1 write should fail (2nd S3 put fails)");
+    assert!(t2_failed, "topic 2 write should fail (3rd S3 put fails)");
 
-    // If partition 0 was acked, verify it's readable
-    if p0_acked {
+    // If topic 0 was acked, verify it's readable
+    if t0_acked {
         let mut ws = ws_connect(addr).await;
-        let (values, hwm) = ws_read_all(&mut ws, topic_id, PartitionId(0))
+        let (values, hwm) = ws_read_all(&mut ws, topic_id_0)
             .await
-            .expect("partition 0 read should succeed");
+            .expect("topic 0 read should succeed");
         assert!(
-            values.contains(&Bytes::from("p0-val")),
-            "partition 0 acked value should be readable"
+            values.contains(&Bytes::from("t0-val")),
+            "topic 0 acked value should be readable"
         );
-        assert_eq!(hwm.0, values.len() as u64, "partition 0 offsets should be consistent");
+        assert_eq!(hwm.0, values.len() as u64, "topic 0 offsets should be consistent");
     }
 
-    // Verify partitions 1 and 2 have no committed data (or empty)
-    for p in 1..3 {
+    // Verify topics 1 and 2 have no committed data (or empty)
+    for (idx, tid) in [(1, topic_id_1), (2, topic_id_2)] {
         let watermark: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(next_offset, 0) FROM partition_offsets \
-             WHERE topic_id = $1 AND partition_id = $2",
+            "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
         )
-        .bind(topic_id.0 as i32)
-        .bind(p)
+        .bind(tid.0 as i32)
         .fetch_optional(&db.pool)
         .await
         .expect("query watermark")
         .unwrap_or(0);
         assert_eq!(
             watermark, 0,
-            "partition {} watermark should be 0 (write failed)",
-            p
+            "topic {} watermark should be 0 (write failed)",
+            idx
         );
     }
 
-    // New writes to all partitions should succeed after fault reset
+    // New writes to all topics should succeed after fault reset
     let mut ws = ws_connect(addr).await;
-    for p in 0..3u32 {
+    for (idx, tid) in [(0, topic_id_0), (1, topic_id_1), (2, topic_id_2)] {
         let w = WriterId::new();
         let resp = ws_produce(
-            &mut ws, w, 1, topic_id, PartitionId(p),
-            &format!("recover-p{}", p),
+            &mut ws, w, 1, tid,
+            &format!("recover-t{}", idx),
         )
         .await
         .expect("recovery write should succeed");
-        assert!(resp.success, "partition {} write should succeed after reset", p);
+        assert!(resp.success, "topic {} write should succeed after reset", idx);
     }
 }
 
-/// Write to multiple partitions. One partition's flush fails.
-/// Verify the successful partition's offsets are contiguous and consistent.
+/// Write to two topics. One topic's flush fails.
+/// Verify the successful topic's offsets are contiguous and consistent.
 #[tokio::test]
 async fn test_partial_commit_offset_consistency() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("partial-offset", 2).await as u32);
+    let topic_id_0 = TopicId(db.create_topic("partial-offset-0").await as u32);
+    let topic_id_1 = TopicId(db.create_topic("partial-offset-1").await as u32);
 
     let broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = broker.addr();
 
-    // Write 5 records to partition 0 (all should succeed)
+    // Write 5 records to topic 0 (all should succeed)
     let mut ws = ws_connect(addr).await;
     let w0 = WriterId::new();
     for i in 0..5 {
         let resp = ws_produce(
-            &mut ws, w0, i + 1, topic_id, PartitionId(0),
-            &format!("p0-{}", i),
+            &mut ws, w0, i + 1, topic_id_0,
+            &format!("t0-{}", i),
         )
         .await
-        .expect("p0 write should succeed");
+        .expect("t0 write should succeed");
         assert!(resp.success);
     }
 
-    // Now fail S3 and write to partition 1
+    // Now fail S3 and write to topic 1
     broker.faulty_store().fail_on_put_n(1);
     let w1 = WriterId::new();
-    let resp = ws_produce(&mut ws, w1, 1, topic_id, PartitionId(1), "p1-fail").await;
-    let p1_failed = resp.is_err() || !resp.as_ref().unwrap().success;
-    assert!(p1_failed, "partition 1 should fail with S3 fault");
+    let resp = ws_produce(&mut ws, w1, 1, topic_id_1, "t1-fail").await;
+    let t1_failed = resp.is_err() || !resp.as_ref().unwrap().success;
+    assert!(t1_failed, "topic 1 should fail with S3 fault");
 
-    // Reset and verify partition 0 is fully consistent
+    // Reset and verify topic 0 is fully consistent
     broker.faulty_store().reset();
     let mut ws = ws_connect(addr).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, PartitionId(0))
+    let (values, hwm) = ws_read_all(&mut ws, topic_id_0)
         .await
-        .expect("p0 read should succeed");
-    assert_eq!(values.len(), 5, "partition 0 should have all 5 records");
-    assert_eq!(hwm.0, 5, "partition 0 watermark should be 5");
+        .expect("t0 read should succeed");
+    assert_eq!(values.len(), 5, "topic 0 should have all 5 records");
+    assert_eq!(hwm.0, 5, "topic 0 watermark should be 5");
 
-    // Partition 1 failure should not have affected partition 0's consistency
+    // Topic 1 failure should not have affected topic 0's consistency
     let unique: std::collections::HashSet<&Bytes> = values.iter().collect();
-    assert_eq!(values.len(), unique.len(), "no duplicates in partition 0");
+    assert_eq!(values.len(), unique.len(), "no duplicates in topic 0");
 }

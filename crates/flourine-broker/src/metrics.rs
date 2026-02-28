@@ -131,7 +131,7 @@ lazy_static! {
     pub static ref DB_COMMIT_OFFSETS_SECONDS: Histogram = Histogram::with_opts(
         HistogramOpts::new(
             "flourine_db_commit_offsets_seconds",
-            "Time spent updating partition offsets in commit_batch"
+            "Time spent updating topic offsets in commit_batch"
         )
             .buckets(vec![0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
     ).unwrap();
@@ -263,10 +263,6 @@ lazy_static! {
         Opts::new("flourine_reader_groups_active", "Number of active readers per group"),
         &["group"]
     ).unwrap();
-
-    pub static ref REBALANCES_TOTAL: Counter = Counter::with_opts(
-        Opts::new("flourine_rebalances_total", "Total number of reader group rebalances")
-    ).unwrap();
 }
 
 macro_rules! register_all {
@@ -315,7 +311,6 @@ pub fn register_metrics() {
         DEDUP_RESULT_TOTAL,
         BACKPRESSURE_ACTIVE,
         READER_GROUPS_ACTIVE,
-        REBALANCES_TOTAL,
     );
 }
 

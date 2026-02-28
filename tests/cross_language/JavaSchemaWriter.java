@@ -13,7 +13,7 @@ import java.util.*;
  * Cross-language schema E2E test: Java writer with Avro-encoded values.
  *
  * Usage:
- *     java -cp <classpath> io.flourine.test.JavaSchemaWriter <url> <topic_id> <partition_id>
+ *     java -cp <classpath> io.flourine.test.JavaSchemaWriter <url> <topic_id>
  */
 public class JavaSchemaWriter {
 
@@ -28,14 +28,13 @@ public class JavaSchemaWriter {
     }
 
     public static void main(String[] args) {
-        if (args.length != 3) {
-            System.err.println("Usage: JavaSchemaWriter <url> <topic_id> <partition_id>");
+        if (args.length != 2) {
+            System.err.println("Usage: JavaSchemaWriter <url> <topic_id>");
             System.exit(1);
         }
 
         String url = args[0];
         int topicId = Integer.parseInt(args[1]);
-        int partitionId = Integer.parseInt(args[2]);
 
         try {
             TestOrder order = new TestOrder();
@@ -53,13 +52,12 @@ public class JavaSchemaWriter {
                         .setValue(ByteString.copyFrom(valueBytes))
                         .build();
 
-                BatchAck ack = writer.send(topicId, partitionId, 100, List.of(record));
+                BatchAck ack = writer.send(topicId, 100, List.of(record));
 
                 Gson gson = new Gson();
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("writer", "java");
                 result.put("topic_id", topicId);
-                result.put("partition_id", partitionId);
                 result.put("start_offset", ack.getStartOffset());
                 result.put("end_offset", ack.getEndOffset());
                 result.put("record_count", 1);

@@ -39,10 +39,4 @@ public interface HeartbeatRequestOrBuilder extends
    */
   com.google.protobuf.ByteString
       getReaderIdBytes();
-
-  /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
-   */
-  long getGeneration();
 }

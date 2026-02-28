@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use flourine_common::ids::{AppendSeq, Generation};
+use flourine_common::ids::AppendSeq;
 use flourine_common::types::BatchAck;
 use flourine_wire::{
     ClientMessage, ServerMessage, encode_server_message, reader, writer,
@@ -12,7 +12,6 @@ use crate::metrics::{WS_ENCODE_SERVER_SECONDS};
 
 pub(crate) const RESPONSE_CAPACITY_SMALL: usize = 512;
 pub(crate) const RESPONSE_CAPACITY_PRODUCE: usize = 1024;
-pub(crate) const RESPONSE_CAPACITY_LARGE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorResponseKind {
@@ -20,7 +19,7 @@ pub(crate) enum ErrorResponseKind {
     Read,
     JoinGroup,
     Heartbeat,
-    Rejoin,
+    Poll,
     LeaveGroup,
     Commit,
     Unknown,
@@ -32,7 +31,7 @@ pub(crate) fn server_message_kind(msg: &ServerMessage) -> &'static str {
         ServerMessage::Read(_) => "read",
         ServerMessage::JoinGroup(_) => "join_group",
         ServerMessage::Heartbeat(_) => "heartbeat",
-        ServerMessage::Rejoin(_) => "rejoin",
+        ServerMessage::Poll(_) => "poll",
         ServerMessage::LeaveGroup(_) => "leave_group",
         ServerMessage::Commit(_) => "commit",
         ServerMessage::Auth(_) => "auth",
@@ -45,7 +44,7 @@ pub(crate) fn client_message_kind(msg: &ClientMessage) -> &'static str {
         ClientMessage::Read(_) => "read",
         ClientMessage::JoinGroup(_) => "join_group",
         ClientMessage::Heartbeat(_) => "heartbeat",
-        ClientMessage::Rejoin(_) => "rejoin",
+        ClientMessage::Poll(_) => "poll",
         ClientMessage::LeaveGroup(_) => "leave_group",
         ClientMessage::Commit(_) => "commit",
         ClientMessage::Auth(_) => "auth",
@@ -58,7 +57,7 @@ pub(crate) fn error_kind_label(kind: ErrorResponseKind) -> &'static str {
         ErrorResponseKind::Read => "read",
         ErrorResponseKind::JoinGroup => "join_group",
         ErrorResponseKind::Heartbeat => "heartbeat",
-        ErrorResponseKind::Rejoin => "rejoin",
+        ErrorResponseKind::Poll => "poll",
         ErrorResponseKind::LeaveGroup => "leave_group",
         ErrorResponseKind::Commit => "commit",
         ErrorResponseKind::Unknown => "unknown",
@@ -128,8 +127,6 @@ pub(crate) fn encode_error_response(
                 success: false,
                 error_code,
                 error_message: error_message.to_string(),
-                generation: Generation(0),
-                assignments: vec![],
             };
             encode_server_message_vec(ServerMessage::JoinGroup(error_resp), small_capacity)
         }
@@ -138,21 +135,21 @@ pub(crate) fn encode_error_response(
                 success: false,
                 error_code,
                 error_message: error_message.to_string(),
-                generation: Generation(0),
                 status: reader::HeartbeatStatus::UnknownMember,
             };
             encode_server_message_vec(ServerMessage::Heartbeat(error_resp), small_capacity)
         }
-        ErrorResponseKind::Rejoin => {
-            let error_resp = reader::RejoinResponse {
+        ErrorResponseKind::Poll => {
+            let error_resp = reader::PollResponse {
                 success: false,
                 error_code,
                 error_message: error_message.to_string(),
-                generation: Generation(0),
-                status: reader::RejoinStatus::RebalanceNeeded,
-                assignments: vec![],
+                results: vec![],
+                start_offset: flourine_common::ids::Offset(0),
+                end_offset: flourine_common::ids::Offset(0),
+                lease_deadline_ms: 0,
             };
-            encode_server_message_vec(ServerMessage::Rejoin(error_resp), small_capacity)
+            encode_server_message_vec(ServerMessage::Poll(error_resp), small_capacity)
         }
         ErrorResponseKind::LeaveGroup => {
             let error_resp = reader::LeaveGroupResponse {

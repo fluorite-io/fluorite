@@ -7,7 +7,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use tokio::sync::Mutex;
 
-use flourine_common::ids::{Offset, WriterId};
+use flourine_common::ids::{Offset, TopicId, WriterId};
 
 /// Thread-safe wrapper for OperationHistory.
 pub type SharedHistory = Arc<Mutex<OperationHistory>>;
@@ -16,7 +16,7 @@ pub type SharedHistory = Arc<Mutex<OperationHistory>>;
 #[derive(Debug, Clone)]
 pub struct WriteOp {
     pub writer_id: WriterId,
-    pub partition_id: u32,
+    pub topic_id: TopicId,
     pub offset: Option<Offset>,
     pub value: Bytes,
     pub start_time: Instant,
@@ -27,7 +27,7 @@ pub struct WriteOp {
 /// A read operation for linearizability tracking.
 #[derive(Debug, Clone)]
 pub struct ReadOp {
-    pub partition_id: u32,
+    pub topic_id: TopicId,
     pub reader_id: String,
     pub requested_offset: Offset,
     pub returned_values: Vec<Bytes>,
@@ -55,19 +55,19 @@ impl OperationHistory {
     }
 
     pub fn record_write_start(&mut self, writer_id: WriterId, value: Bytes) -> usize {
-        self.record_write(writer_id, 0, value)
+        self.record_write(writer_id, TopicId(0), value)
     }
 
     pub fn record_write(
         &mut self,
         writer_id: WriterId,
-        partition_id: u32,
+        topic_id: TopicId,
         value: Bytes,
     ) -> usize {
         let idx = self.writes.len();
         self.writes.push(WriteOp {
             writer_id,
-            partition_id,
+            topic_id,
             offset: None,
             value,
             start_time: Instant::now(),
@@ -86,18 +86,18 @@ impl OperationHistory {
     }
 
     pub fn record_read_start(&mut self, offset: Offset) -> usize {
-        self.record_read(0, String::new(), offset)
+        self.record_read(TopicId(0), String::new(), offset)
     }
 
     pub fn record_read(
         &mut self,
-        partition_id: u32,
+        topic_id: TopicId,
         reader_id: String,
         offset: Offset,
     ) -> usize {
         let idx = self.reads.len();
         self.reads.push(ReadOp {
-            partition_id,
+            topic_id,
             reader_id,
             requested_offset: offset,
             returned_values: vec![],
@@ -127,8 +127,7 @@ impl OperationHistory {
     /// Check that all acknowledged writes are eventually visible.
     ///
     /// A write is "visible" if its value appears in any successful read whose
-    /// offset range covers the write's offset. This handles paginated reads and
-    /// consumers that start from non-zero offsets.
+    /// offset range covers the write's offset.
     pub fn verify_acknowledged_writes_visible(&self) -> Result<(), String> {
         let successful_writes: Vec<_> = self
             .writes
@@ -173,9 +172,9 @@ impl OperationHistory {
                 if write_end_time < latest_read_start && offset.0 < max_watermark {
                     if !all_observed.contains(write.value.as_ref()) {
                         return Err(format!(
-                            "Acknowledged write at offset {} (partition {}) with value {:?} \
+                            "Acknowledged write at offset {} (topic {}) with value {:?} \
                              not visible in any read (max watermark {})",
-                            offset.0, write.partition_id, write.value, max_watermark
+                            offset.0, write.topic_id.0, write.value, max_watermark
                         ));
                     }
                 }
@@ -185,16 +184,16 @@ impl OperationHistory {
         Ok(())
     }
 
-    /// Check that offsets are unique per partition (no two writes got the same offset).
+    /// Check that offsets are unique per topic (no two writes got the same offset).
     pub fn verify_unique_offsets(&self) -> Result<(), String> {
         let mut seen: HashSet<(u32, u64)> = HashSet::new();
         for write in &self.writes {
             if write.success {
                 if let Some(offset) = write.offset {
-                    if !seen.insert((write.partition_id, offset.0)) {
+                    if !seen.insert((write.topic_id.0, offset.0)) {
                         return Err(format!(
-                            "Duplicate offset {} in partition {} assigned to multiple writes",
-                            offset.0, write.partition_id
+                            "Duplicate offset {} in topic {} assigned to multiple writes",
+                            offset.0, write.topic_id.0
                         ));
                     }
                 }
@@ -204,26 +203,25 @@ impl OperationHistory {
     }
 
     /// Check that watermark never regresses across reads for the same
-    /// (reader_id, partition_id). Different readers or partitions are
-    /// independent and may observe different watermarks.
+    /// (reader_id, topic_id).
     pub fn verify_watermark_monotonic(&self) -> Result<(), String> {
         let mut reads_by_stream: HashMap<(&str, u32), Vec<&ReadOp>> = HashMap::new();
         for read in &self.reads {
             if read.success {
                 reads_by_stream
-                    .entry((&read.reader_id, read.partition_id))
+                    .entry((&read.reader_id, read.topic_id.0))
                     .or_default()
                     .push(read);
             }
         }
 
-        for ((reader_id, partition_id), reads) in &reads_by_stream {
+        for ((reader_id, topic_id), reads) in &reads_by_stream {
             for window in reads.windows(2) {
                 let (prev, curr) = (&window[0], &window[1]);
                 if curr.high_watermark.0 < prev.high_watermark.0 {
                     return Err(format!(
-                        "Watermark regressed from {} to {} for reader '{}' partition {}",
-                        prev.high_watermark.0, curr.high_watermark.0, reader_id, partition_id
+                        "Watermark regressed from {} to {} for reader '{}' topic {}",
+                        prev.high_watermark.0, curr.high_watermark.0, reader_id, topic_id
                     ));
                 }
             }
@@ -231,13 +229,13 @@ impl OperationHistory {
         Ok(())
     }
 
-    /// Each value appears at exactly one (partition, offset). No duplicate writes.
+    /// Each value appears at exactly one (topic, offset). No duplicate writes.
     pub fn verify_no_duplicates(&self) -> Result<(), String> {
         let mut value_to_location: HashMap<&[u8], (u32, u64)> = HashMap::new();
         for write in &self.writes {
             if write.success {
                 if let Some(offset) = write.offset {
-                    let location = (write.partition_id, offset.0);
+                    let location = (write.topic_id.0, offset.0);
                     if let Some(&prev) = value_to_location.get(write.value.as_ref()) {
                         if prev != location {
                             return Err(format!(
@@ -254,19 +252,19 @@ impl OperationHistory {
         Ok(())
     }
 
-    /// Sequential reads by same consumer on a partition don't skip offsets.
+    /// Sequential reads by same consumer on a topic don't skip offsets.
     pub fn verify_poll_contiguity(&self) -> Result<(), String> {
         let mut reads_by_reader: HashMap<(&str, u32), Vec<&ReadOp>> = HashMap::new();
         for read in &self.reads {
             if read.success && !read.returned_values.is_empty() {
                 reads_by_reader
-                    .entry((&read.reader_id, read.partition_id))
+                    .entry((&read.reader_id, read.topic_id.0))
                     .or_default()
                     .push(read);
             }
         }
 
-        for ((reader_id, partition_id), reads) in &reads_by_reader {
+        for ((reader_id, topic_id), reads) in &reads_by_reader {
             for window in reads.windows(2) {
                 let prev = &window[0];
                 let curr = &window[1];
@@ -274,9 +272,9 @@ impl OperationHistory {
                     prev.requested_offset.0 + prev.returned_values.len() as u64;
                 if curr.requested_offset.0 != expected_next {
                     return Err(format!(
-                        "Poll contiguity violation for reader '{}' partition {}: \
+                        "Poll contiguity violation for reader '{}' topic {}: \
                          expected offset {} but got {}",
-                        reader_id, partition_id, expected_next, curr.requested_offset.0
+                        reader_id, topic_id, expected_next, curr.requested_offset.0
                     ));
                 }
             }
@@ -285,7 +283,7 @@ impl OperationHistory {
     }
 
     /// If write A completed (acked) before write B was invoked (sent),
-    /// and both are on the same partition, then A.offset < B.offset.
+    /// and both are on the same topic, then A.offset < B.offset.
     pub fn verify_write_write_causal(&self) -> Result<(), String> {
         let successful: Vec<_> = self
             .writes
@@ -293,12 +291,12 @@ impl OperationHistory {
             .filter(|w| w.success && w.offset.is_some() && w.end_time.is_some())
             .collect();
 
-        let mut by_partition: HashMap<u32, Vec<&WriteOp>> = HashMap::new();
+        let mut by_topic: HashMap<u32, Vec<&WriteOp>> = HashMap::new();
         for w in &successful {
-            by_partition.entry(w.partition_id).or_default().push(w);
+            by_topic.entry(w.topic_id.0).or_default().push(w);
         }
 
-        for (partition_id, writes) in &by_partition {
+        for (topic_id, writes) in &by_topic {
             for a in writes {
                 for b in writes {
                     if std::ptr::eq(*a, *b) {
@@ -310,11 +308,11 @@ impl OperationHistory {
                         let b_off = b.offset.unwrap().0;
                         if a_off >= b_off {
                             return Err(format!(
-                                "WW causal violation on partition {}: \
+                                "WW causal violation on topic {}: \
                                  write {:?} (offset {}, completed {:?}) \
                                  completed before write {:?} (offset {}, started {:?}), \
                                  but offset is not less",
-                                partition_id,
+                                topic_id,
                                 a.value,
                                 a_off,
                                 a.end_time,
@@ -330,28 +328,28 @@ impl OperationHistory {
         Ok(())
     }
 
-    /// Per-producer offsets within a partition are monotonically increasing.
+    /// Per-producer offsets within a topic are monotonically increasing.
     pub fn verify_monotonic_sends(&self) -> Result<(), String> {
         let mut writes_by_writer: HashMap<(WriterId, u32), Vec<&WriteOp>> = HashMap::new();
         for write in &self.writes {
             if write.success && write.offset.is_some() {
                 writes_by_writer
-                    .entry((write.writer_id, write.partition_id))
+                    .entry((write.writer_id, write.topic_id.0))
                     .or_default()
                     .push(write);
             }
         }
 
-        for ((writer_id, partition_id), writes) in &writes_by_writer {
+        for ((writer_id, topic_id), writes) in &writes_by_writer {
             for window in writes.windows(2) {
                 if let (Some(prev_offset), Some(curr_offset)) =
                     (window[0].offset, window[1].offset)
                 {
                     if curr_offset.0 <= prev_offset.0 {
                         return Err(format!(
-                            "Non-monotonic send for writer {:?} partition {}: \
+                            "Non-monotonic send for writer {:?} topic {}: \
                              offset {} followed by {}",
-                            writer_id, partition_id, prev_offset.0, curr_offset.0
+                            writer_id, topic_id, prev_offset.0, curr_offset.0
                         ));
                     }
                 }

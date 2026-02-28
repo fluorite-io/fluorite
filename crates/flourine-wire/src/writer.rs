@@ -1,7 +1,7 @@
 //! Writer protocol messages: AppendRequest and AppendResponse.
 
 use prost::Message;
-use flourine_common::ids::{AppendSeq, Offset, PartitionId, SchemaId, TopicId, WriterId};
+use flourine_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
 use flourine_common::types::{BatchAck, RecordBatch};
 use uuid::Uuid;
 
@@ -113,7 +113,6 @@ pub fn decode_response(buf: &[u8]) -> Result<(AppendResponse, usize), DecodeErro
 fn to_proto_segment(batch: &RecordBatch) -> proto::RecordBatch {
     proto::RecordBatch {
         topic_id: batch.topic_id.0,
-        partition_id: batch.partition_id.0,
         schema_id: batch.schema_id.0,
         records: batch.records.iter().map(to_proto_record).collect(),
     }
@@ -122,7 +121,6 @@ fn to_proto_segment(batch: &RecordBatch) -> proto::RecordBatch {
 fn from_proto_segment(msg: proto::RecordBatch) -> Result<RecordBatch, DecodeError> {
     Ok(RecordBatch {
         topic_id: TopicId(msg.topic_id),
-        partition_id: PartitionId(msg.partition_id),
         schema_id: SchemaId(msg.schema_id),
         records: msg.records.into_iter().map(from_proto_record).collect(),
     })
@@ -131,7 +129,6 @@ fn from_proto_segment(msg: proto::RecordBatch) -> Result<RecordBatch, DecodeErro
 fn to_proto_ack(ack: &BatchAck) -> proto::BatchAck {
     proto::BatchAck {
         topic_id: ack.topic_id.0,
-        partition_id: ack.partition_id.0,
         schema_id: ack.schema_id.0,
         start_offset: ack.start_offset.0,
         end_offset: ack.end_offset.0,
@@ -141,7 +138,6 @@ fn to_proto_ack(ack: &BatchAck) -> proto::BatchAck {
 fn from_proto_ack(msg: proto::BatchAck) -> BatchAck {
     BatchAck {
         topic_id: TopicId(msg.topic_id),
-        partition_id: PartitionId(msg.partition_id),
         schema_id: SchemaId(msg.schema_id),
         start_offset: Offset(msg.start_offset),
         end_offset: Offset(msg.end_offset),
@@ -157,7 +153,6 @@ mod tests {
     fn sample_segment() -> RecordBatch {
         RecordBatch {
             topic_id: TopicId(1),
-            partition_id: PartitionId(0),
             schema_id: SchemaId(100),
             records: vec![
                 Record {
@@ -200,7 +195,6 @@ mod tests {
             error_message: "boom".to_string(),
             append_acks: vec![BatchAck {
                 topic_id: TopicId(1),
-                partition_id: PartitionId(0),
                 schema_id: SchemaId(100),
                 start_offset: Offset(1000),
                 end_offset: Offset(1002),

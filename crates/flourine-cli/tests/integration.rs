@@ -16,13 +16,12 @@ use flourine_broker::{
     CoordinatorConfig, LocalFsStore, Operation, ResourceType,
 };
 use flourine_broker::buffer::BufferConfig;
-use flourine_common::ids::{PartitionId, SchemaId, TopicId};
+use flourine_common::ids::{SchemaId, TopicId};
 use flourine_common::types::Record;
 use flourine_sdk::reader::{Reader, ReaderConfig};
 use flourine_sdk::writer::{Writer, WriterConfig};
 
 use flourine_cli::client::FlourineClient;
-use flourine_cli::tail::{TailRecord, parse_offsets};
 
 // ============ Test infrastructure ============
 
@@ -188,13 +187,12 @@ async fn test_topic_create_and_list() {
     let topics = client.list_topics().await.unwrap();
     assert!(topics.is_empty());
 
-    let resp = client.create_topic("test-topic", 3, None).await.unwrap();
+    let resp = client.create_topic("test-topic", None).await.unwrap();
     assert!(resp.topic_id > 0);
 
     let topics = client.list_topics().await.unwrap();
     assert_eq!(topics.len(), 1);
     assert_eq!(topics[0].name, "test-topic");
-    assert_eq!(topics[0].partition_count, 3);
 }
 
 #[tokio::test]
@@ -202,7 +200,7 @@ async fn test_topic_get_and_update() {
     let cluster = TestCluster::start().await;
     let client = cluster.client();
 
-    let resp = client.create_topic("get-test", 1, Some(24)).await.unwrap();
+    let resp = client.create_topic("get-test", Some(24)).await.unwrap();
     let id = resp.topic_id;
 
     let topic = client.get_topic(id).await.unwrap();
@@ -219,7 +217,7 @@ async fn test_topic_delete() {
     let cluster = TestCluster::start().await;
     let client = cluster.client();
 
-    let resp = client.create_topic("delete-me", 1, None).await.unwrap();
+    let resp = client.create_topic("delete-me", None).await.unwrap();
     client.delete_topic(resp.topic_id).await.unwrap();
 
     let topics = client.list_topics().await.unwrap();
@@ -233,7 +231,7 @@ async fn test_write_and_read_records() {
     let cluster = TestCluster::start().await;
     let client = cluster.client();
 
-    let topic = client.create_topic("write-test", 1, None).await.unwrap();
+    let topic = client.create_topic("write-test", None).await.unwrap();
     let topic_id = topic.topic_id as u32;
 
     let writer = cluster.writer().await;
@@ -242,7 +240,6 @@ async fn test_write_and_read_records() {
         writer
             .append(
                 TopicId(topic_id),
-                PartitionId(0),
                 SchemaId(1),
                 vec![Record::with_key(format!("key-{i}"), format!("value-{i}"))],
             )
@@ -263,8 +260,8 @@ async fn test_write_and_read_records() {
     let reader = Reader::join(config).await.unwrap();
     reader.start_heartbeat();
 
-    let results = reader.poll().await.unwrap();
-    let total: usize = results.iter().map(|r| r.records.len()).sum();
+    let batch = reader.poll().await.unwrap();
+    let total: usize = batch.results.iter().map(|r| r.records.len()).sum();
     assert_eq!(total, 3);
 
     let _ = reader.stop().await;
@@ -273,11 +270,11 @@ async fn test_write_and_read_records() {
 // ============ Tail tests ============
 
 #[tokio::test]
-async fn test_tail_json_with_end_offset() {
+async fn test_tail_reads_records() {
     let cluster = TestCluster::start().await;
     let client = cluster.client();
 
-    let topic = client.create_topic("tail-test", 1, None).await.unwrap();
+    let topic = client.create_topic("tail-test", None).await.unwrap();
     let topic_id = topic.topic_id as u32;
 
     let writer = cluster.writer().await;
@@ -286,7 +283,6 @@ async fn test_tail_json_with_end_offset() {
         writer
             .append(
                 TopicId(topic_id),
-                PartitionId(0),
                 SchemaId(1),
                 vec![Record::with_key(format!("k{i}"), format!("v{i}"))],
             )
@@ -296,12 +292,7 @@ async fn test_tail_json_with_end_offset() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Tail with start=0:0, end=0:3 should yield offsets 0,1,2
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<TailRecord>(100);
-
-    let start_offsets = parse_offsets("0:0").unwrap();
-    let end_offsets = parse_offsets("0:3").unwrap();
-
+    // Use SDK reader to poll and verify records arrive
     let config = ReaderConfig {
         url: cluster.ws_url(),
         group_id: format!("tail-{}", uuid::Uuid::new_v4()),
@@ -312,45 +303,22 @@ async fn test_tail_json_with_end_offset() {
     let reader = Reader::join(config).await.unwrap();
     reader.start_heartbeat();
 
-    for (&partition, &offset) in &start_offsets {
-        reader
-            .seek(PartitionId(partition), flourine_common::ids::Offset(offset))
-            .await;
-    }
+    let batch = reader.poll().await.unwrap();
+    let total: usize = batch.results.iter().map(|r| r.records.len()).sum();
+    assert_eq!(total, 5, "expected 5 records");
 
-    let reader_clone = reader.clone();
-    let handle = tokio::spawn(async move {
-        flourine_cli::tail::poll_loop(reader_clone, tx, Some(end_offsets)).await;
-    });
-
-    let mut records = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(record)) => records.push(record),
-            Ok(None) => break,
-            Err(_) => panic!("Timed out waiting for tail records"),
-        }
-    }
-
-    handle.await.unwrap();
     let _ = reader.stop().await;
-
-    assert_eq!(records.len(), 3, "expected 3 records (offsets 0,1,2)");
-    assert_eq!(records[0].offset, 0);
-    assert_eq!(records[1].offset, 1);
-    assert_eq!(records[2].offset, 2);
 }
 
 #[tokio::test]
-async fn test_tail_start_offset_skips_records() {
+async fn test_tail_offsets_match_broker() {
+    use flourine_cli::tail::TailRecord;
+    use tokio::sync::mpsc;
+
     let cluster = TestCluster::start().await;
     let client = cluster.client();
 
-    let topic = client
-        .create_topic("tail-skip-test", 1, None)
-        .await
-        .unwrap();
+    let topic = client.create_topic("tail-offset-test", None).await.unwrap();
     let topic_id = topic.topic_id as u32;
 
     let writer = cluster.writer().await;
@@ -359,7 +327,6 @@ async fn test_tail_start_offset_skips_records() {
         writer
             .append(
                 TopicId(topic_id),
-                PartitionId(0),
                 SchemaId(1),
                 vec![Record::with_key(format!("k{i}"), format!("v{i}"))],
             )
@@ -369,47 +336,45 @@ async fn test_tail_start_offset_skips_records() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Tail with start=0:3, end=0:5 should yield offsets 3,4
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<TailRecord>(100);
-
-    let start_offsets = parse_offsets("0:3").unwrap();
-    let end_offsets = parse_offsets("0:5").unwrap();
-
+    // Poll via SDK to get broker-assigned start_offset
     let config = ReaderConfig {
         url: cluster.ws_url(),
-        group_id: format!("tail-skip-{}", uuid::Uuid::new_v4()),
+        group_id: format!("tail-offset-{}", uuid::Uuid::new_v4()),
         topic_id: TopicId(topic_id),
         ..Default::default()
     };
-
     let reader = Reader::join(config).await.unwrap();
     reader.start_heartbeat();
 
-    for (&partition, &offset) in &start_offsets {
-        reader
-            .seek(PartitionId(partition), flourine_common::ids::Offset(offset))
-            .await;
-    }
+    let (tx, mut rx) = mpsc::channel::<TailRecord>(1024);
 
     let reader_clone = reader.clone();
-    let handle = tokio::spawn(async move {
-        flourine_cli::tail::poll_loop(reader_clone, tx, Some(end_offsets)).await;
+    let poll_handle = tokio::spawn(async move {
+        flourine_cli::tail::poll_loop(reader_clone, tx).await;
     });
 
+    // Collect records
     let mut records = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
+    while records.len() < 5 {
         match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(record)) => records.push(record),
-            Ok(None) => break,
-            Err(_) => panic!("Timed out waiting for tail records"),
+            Ok(Some(r)) => records.push(r),
+            _ => break,
         }
     }
 
-    handle.await.unwrap();
+    poll_handle.abort();
     let _ = reader.stop().await;
 
-    assert_eq!(records.len(), 2, "expected 2 records (offsets 3,4)");
-    assert_eq!(records[0].offset, 3);
-    assert_eq!(records[1].offset, 4);
+    assert_eq!(records.len(), 5, "should receive all 5 records");
+
+    // Offsets should start from the broker's start_offset (0 for a fresh topic),
+    // and be sequential: 0, 1, 2, 3, 4
+    for (i, record) in records.iter().enumerate() {
+        assert_eq!(
+            record.offset, i as u64,
+            "record {} offset should be {} but got {}",
+            i, i, record.offset
+        );
+    }
 }

@@ -6,8 +6,8 @@
 package io.flourine.sdk.proto;
 
 @com.google.protobuf.Generated
-public interface PartitionResultOrBuilder extends
-    // @@protoc_insertion_point(interface_extends:flourine.wire.PartitionResult)
+public interface TopicResultOrBuilder extends
+    // @@protoc_insertion_point(interface_extends:flourine.wire.TopicResult)
     com.google.protobuf.MessageOrBuilder {
 
   /**
@@ -17,43 +17,37 @@ public interface PartitionResultOrBuilder extends
   int getTopicId();
 
   /**
-   * <code>uint32 partition_id = 2;</code>
-   * @return The partitionId.
-   */
-  int getPartitionId();
-
-  /**
-   * <code>uint32 schema_id = 3;</code>
+   * <code>uint32 schema_id = 2;</code>
    * @return The schemaId.
    */
   int getSchemaId();
 
   /**
-   * <code>uint64 high_watermark = 4;</code>
+   * <code>uint64 high_watermark = 3;</code>
    * @return The highWatermark.
    */
   long getHighWatermark();
 
   /**
-   * <code>repeated .flourine.wire.Record records = 5;</code>
+   * <code>repeated .flourine.wire.Record records = 4;</code>
    */
   java.util.List<io.flourine.sdk.proto.Record> 
       getRecordsList();
   /**
-   * <code>repeated .flourine.wire.Record records = 5;</code>
+   * <code>repeated .flourine.wire.Record records = 4;</code>
    */
   io.flourine.sdk.proto.Record getRecords(int index);
   /**
-   * <code>repeated .flourine.wire.Record records = 5;</code>
+   * <code>repeated .flourine.wire.Record records = 4;</code>
    */
   int getRecordsCount();
   /**
-   * <code>repeated .flourine.wire.Record records = 5;</code>
+   * <code>repeated .flourine.wire.Record records = 4;</code>
    */
   java.util.List<? extends io.flourine.sdk.proto.RecordOrBuilder> 
       getRecordsOrBuilderList();
   /**
-   * <code>repeated .flourine.wire.Record records = 5;</code>
+   * <code>repeated .flourine.wire.Record records = 4;</code>
    */
   io.flourine.sdk.proto.RecordOrBuilder getRecordsOrBuilder(
       int index);

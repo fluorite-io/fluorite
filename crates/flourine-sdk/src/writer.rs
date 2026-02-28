@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, Semaphore, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::{debug, warn};
 
-use flourine_common::ids::{PartitionId, WriterId, SchemaId, AppendSeq, TopicId};
+use flourine_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
 use flourine_common::types::{Record, RecordBatch, BatchAck};
 use flourine_wire::{
     ClientMessage, ERR_BACKPRESSURE, ServerMessage, auth as wire_auth, decode_server_message,
@@ -251,26 +251,23 @@ impl Writer {
         AppendSeq(self.append_seq.load(Ordering::SeqCst))
     }
 
-    /// Append records to a single partition.
+    /// Append records to a topic.
     pub async fn append(
         &self,
         topic_id: TopicId,
-        partition_id: PartitionId,
         schema_id: SchemaId,
         records: Vec<Record>,
     ) -> Result<BatchAck, SdkError> {
         let batches = vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id,
             records,
         }];
-
         let append_acks = self.append_batch(batches).await?;
         append_acks.into_iter().next().ok_or(SdkError::InvalidResponse)
     }
 
-    /// Append records to multiple partitions in a single request.
+    /// Append records across multiple topics in a single request.
     pub async fn append_batch(&self, batches: Vec<RecordBatch>) -> Result<Vec<BatchAck>, SdkError> {
         let append_seq = AppendSeq(self.append_seq.fetch_add(1, Ordering::SeqCst));
         let mut retries = 0;
@@ -312,19 +309,16 @@ impl Writer {
         tokio::spawn(async move { writer.append_batch(batches).await })
     }
 
-    /// Async helper that starts a single-partition append and returns immediately.
+    /// Async helper that starts an append and returns immediately.
     pub fn append_async(
         self: &Arc<Self>,
         topic_id: TopicId,
-        partition_id: PartitionId,
         schema_id: SchemaId,
         records: Vec<Record>,
     ) -> tokio::task::JoinHandle<Result<BatchAck, SdkError>> {
         let writer = Arc::clone(self);
         tokio::spawn(async move {
-            writer
-                .append(topic_id, partition_id, schema_id, records)
-                .await
+            writer.append(topic_id, schema_id, records).await
         })
     }
 
@@ -379,18 +373,11 @@ impl Writer {
     pub async fn append_one(
         &self,
         topic_id: TopicId,
-        partition_id: PartitionId,
         schema_id: SchemaId,
         key: Option<Bytes>,
         value: Bytes,
     ) -> Result<BatchAck, SdkError> {
-        self.append(
-            topic_id,
-            partition_id,
-            schema_id,
-            vec![Record { key, value }],
-        )
-        .await
+        self.append(topic_id, schema_id, vec![Record { key, value }]).await
     }
 }
 
@@ -430,7 +417,6 @@ mod tests {
             append_seq: AppendSeq(1),
             batches: vec![RecordBatch {
                 topic_id: TopicId(1),
-                partition_id: PartitionId(0),
                 schema_id: SchemaId(100),
                 records: vec![Record {
                     key: Some(Bytes::from("key")),

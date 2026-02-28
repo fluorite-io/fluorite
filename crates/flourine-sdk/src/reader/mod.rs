@@ -1,12 +1,10 @@
 //! Reader client for reading messages from Flourine.
 //!
 //! Features:
-//! - Reader group support with automatic partition assignment
+//! - Reader group support with broker-side work dispatch (poll model)
 //! - Heartbeat loop for membership maintenance
-//! - Automatic rebalance handling
-//! - Offset tracking and commit
+//! - Offset range tracking and commit
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -17,7 +15,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
-use flourine_common::ids::{Generation, Offset, PartitionId, TopicId};
+use flourine_common::ids::{Offset, TopicId};
 use flourine_wire::{
     ClientMessage, ServerMessage, auth as wire_auth, decode_server_message, encode_client_message,
     reader,
@@ -47,8 +45,6 @@ pub struct ReaderConfig {
     pub timeout: Duration,
     /// Heartbeat interval.
     pub heartbeat_interval: Duration,
-    /// Rebalance delay (wait before claiming partitions).
-    pub rebalance_delay: Duration,
 }
 
 impl Default for ReaderConfig {
@@ -62,16 +58,8 @@ impl Default for ReaderConfig {
             max_bytes: 1024 * 1024, // 1 MB
             timeout: Duration::from_secs(30),
             heartbeat_interval: Duration::from_secs(10),
-            rebalance_delay: Duration::from_secs(5),
         }
     }
-}
-
-/// Partition assignment with committed offset.
-#[derive(Debug, Clone)]
-pub struct PartitionAssignment {
-    pub partition_id: PartitionId,
-    pub committed_offset: Offset,
 }
 
 /// Reader state.
@@ -79,7 +67,6 @@ pub struct PartitionAssignment {
 pub enum ReaderState {
     Init,
     Active,
-    Rebalancing,
     Stopped,
 }
 
@@ -87,20 +74,29 @@ pub enum ReaderState {
 #[derive(Debug)]
 pub struct ReadResult {
     pub topic_id: TopicId,
-    pub partition_id: PartitionId,
     pub schema_id: flourine_common::ids::SchemaId,
     pub high_watermark: Offset,
     pub records: Vec<flourine_common::types::Record>,
 }
 
-/// Reader client with reader group support.
+/// A batch of results from a single poll, with its offset range and lease deadline.
+///
+/// Pass this to `commit()` to commit the specific range. Multiple `PollBatch`es
+/// can be outstanding simultaneously (pipelined polling).
+#[derive(Debug)]
+pub struct PollBatch {
+    pub results: Vec<ReadResult>,
+    pub start_offset: Offset,
+    pub end_offset: Offset,
+    pub lease_deadline_ms: u64,
+}
+
+/// Reader client with broker-side work dispatch.
 pub struct GroupReader {
     config: ReaderConfig,
     ws: Mutex<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     state: RwLock<ReaderState>,
-    generation: RwLock<Generation>,
-    assignments: RwLock<Vec<PartitionAssignment>>,
-    offsets: RwLock<HashMap<PartitionId, Offset>>,
+    inflight: RwLock<Vec<(Offset, Offset)>>,
     running: AtomicBool,
 }
 
@@ -119,9 +115,7 @@ impl GroupReader {
             config,
             ws: Mutex::new(ws),
             state: RwLock::new(ReaderState::Init),
-            generation: RwLock::new(Generation(0)),
-            assignments: RwLock::new(vec![]),
-            offsets: RwLock::new(HashMap::new()),
+            inflight: RwLock::new(Vec::new()),
             running: AtomicBool::new(true),
         });
 
@@ -206,88 +200,84 @@ impl GroupReader {
         *self.state.read().await
     }
 
-    pub async fn generation(&self) -> Generation {
-        *self.generation.read().await
-    }
-
-    pub async fn assignments(&self) -> Vec<PartitionAssignment> {
-        self.assignments.read().await.clone()
-    }
-
-    pub async fn assigned_partitions(&self) -> Vec<PartitionId> {
-        self.assignments
-            .read()
-            .await
-            .iter()
-            .map(|a| a.partition_id)
-            .collect()
-    }
-
-    /// Seek a partition to the given offset. The next `poll()` will read from this offset.
-    pub async fn seek(&self, partition_id: PartitionId, offset: Offset) {
-        self.offsets.write().await.insert(partition_id, offset);
-    }
-
-    /// Read records from assigned partitions.
-    pub async fn poll(&self) -> Result<Vec<ReadResult>, SdkError> {
+    /// Poll the broker for records. The broker dispatches work (offset ranges).
+    ///
+    /// Multiple polls can be outstanding simultaneously (pipelined polling).
+    /// Pass the returned `PollBatch` to `commit()` to commit that specific range.
+    pub async fn poll(&self) -> Result<PollBatch, SdkError> {
         let state = *self.state.read().await;
         if state != ReaderState::Active {
             return Err(SdkError::InvalidState(format!("{:?}", state)));
         }
 
-        let assignments = self.assignments.read().await.clone();
-        if assignments.is_empty() {
-            return Ok(vec![]);
+        let req = reader::PollRequest {
+            group_id: self.config.group_id.clone(),
+            topic_id: self.config.topic_id,
+            reader_id: self.config.reader_id.clone(),
+            max_bytes: self.config.max_bytes,
+        };
+
+        let resp = self
+            .send_request(ClientMessage::Poll(req), 8192)
+            .await?;
+        let response = match resp {
+            ServerMessage::Poll(r) if r.success => r,
+            ServerMessage::Poll(r) => {
+                return Err(SdkError::Server {
+                    code: r.error_code,
+                    message: r.error_message,
+                })
+            }
+            _ => return Err(SdkError::InvalidResponse),
+        };
+
+        let start_offset = response.start_offset;
+        let end_offset = response.end_offset;
+        let lease_deadline_ms = response.lease_deadline_ms;
+
+        if start_offset != end_offset {
+            self.inflight.write().await.push((start_offset, end_offset));
         }
 
-        let offsets = self.offsets.read().await;
-        let reads: Vec<_> = assignments
-            .iter()
-            .map(|a| {
-                let offset = offsets
-                    .get(&a.partition_id)
-                    .copied()
-                    .unwrap_or(a.committed_offset);
-                (self.config.topic_id, a.partition_id, offset)
+        let results = response
+            .results
+            .into_iter()
+            .map(|r| ReadResult {
+                topic_id: r.topic_id,
+                schema_id: r.schema_id,
+                high_watermark: r.high_watermark,
+                records: r.records,
             })
             .collect();
-        drop(offsets);
 
-        self.read_partitions(&reads).await
+        Ok(PollBatch {
+            results,
+            start_offset,
+            end_offset,
+            lease_deadline_ms,
+        })
     }
 
-    /// Commit current offsets.
-    pub async fn commit(&self) -> Result<(), SdkError> {
-        let generation = *self.generation.read().await;
-        let offsets = self.offsets.read().await;
-
-        let commits: Vec<reader::PartitionCommit> = offsets
-            .iter()
-            .map(|(&partition_id, &offset)| reader::PartitionCommit {
-                topic_id: self.config.topic_id,
-                partition_id,
-                offset,
-            })
-            .collect();
-
-        drop(offsets);
-
-        if commits.is_empty() {
-            return Ok(());
-        }
-
+    /// Commit a specific polled batch's offset range.
+    pub async fn commit(&self, batch: &PollBatch) -> Result<(), SdkError> {
         let req = reader::CommitRequest {
             group_id: self.config.group_id.clone(),
             reader_id: self.config.reader_id.clone(),
-            generation,
-            commits,
+            topic_id: self.config.topic_id,
+            start_offset: batch.start_offset,
+            end_offset: batch.end_offset,
         };
 
         let resp = self
             .send_request(ClientMessage::Commit(req), 8192)
             .await?;
         match resp {
-            ServerMessage::Commit(r) if r.success => Ok(()),
+            ServerMessage::Commit(r) if r.success => {
+                let s = batch.start_offset;
+                let e = batch.end_offset;
+                self.inflight.write().await.retain(|(ss, ee)| *ss != s || *ee != e);
+                Ok(())
+            }
             ServerMessage::Commit(r) => Err(SdkError::Server {
                 code: r.error_code,
                 message: r.error_message,
@@ -307,8 +297,8 @@ impl GroupReader {
         let resp = self
             .send_request(ClientMessage::JoinGroup(req), 8192)
             .await?;
-        let response = match resp {
-            ServerMessage::JoinGroup(r) if r.success => r,
+        match resp {
+            ServerMessage::JoinGroup(r) if r.success => {}
             ServerMessage::JoinGroup(r) => {
                 return Err(SdkError::Server {
                     code: r.error_code,
@@ -316,108 +306,30 @@ impl GroupReader {
                 })
             }
             _ => return Err(SdkError::InvalidResponse),
-        };
-
-        *self.generation.write().await = response.generation;
-
-        let assignments: Vec<PartitionAssignment> = response
-            .assignments
-            .into_iter()
-            .map(|a| PartitionAssignment {
-                partition_id: a.partition_id,
-                committed_offset: a.committed_offset,
-            })
-            .collect();
-
-        let mut offsets = self.offsets.write().await;
-        for a in &assignments {
-            offsets.insert(a.partition_id, a.committed_offset);
         }
-        drop(offsets);
 
-        *self.assignments.write().await = assignments;
+        self.inflight.write().await.clear();
         *self.state.write().await = ReaderState::Active;
 
-        info!(
-            "Joined group {} at generation {}",
-            self.config.group_id, response.generation.0
-        );
+        info!("Joined group {}", self.config.group_id);
 
         Ok(())
     }
 
-    /// Handle rebalance: rejoin with new generation.
-    async fn do_rejoin(&self, new_generation: Generation) -> Result<(), SdkError> {
-        *self.state.write().await = ReaderState::Rebalancing;
-
-        if let Err(e) = self.commit().await {
-            warn!("Failed to commit offsets during rebalance: {}", e);
-        }
-
-        tokio::time::sleep(self.config.rebalance_delay).await;
-
-        let mut current_generation = new_generation;
-        loop {
-            let req = reader::RejoinRequest {
-                group_id: self.config.group_id.clone(),
-                topic_id: self.config.topic_id,
-                reader_id: self.config.reader_id.clone(),
-                generation: current_generation,
-            };
-
-            let resp = self
-                .send_request(ClientMessage::Rejoin(req), 8192)
-                .await?;
-            let response = match resp {
-                ServerMessage::Rejoin(r) if r.success => r,
-                ServerMessage::Rejoin(r) => {
-                    return Err(SdkError::Server {
-                        code: r.error_code,
-                        message: r.error_message,
-                    })
-                }
-                _ => return Err(SdkError::InvalidResponse),
-            };
-
-            if response.status == reader::RejoinStatus::RebalanceNeeded {
-                current_generation = response.generation;
-                tokio::time::sleep(self.config.rebalance_delay).await;
-                continue;
-            }
-
-            let assignments: Vec<PartitionAssignment> = response
-                .assignments
-                .into_iter()
-                .map(|a| PartitionAssignment {
-                    partition_id: a.partition_id,
-                    committed_offset: a.committed_offset,
-                })
-                .collect();
-
-            let mut offsets = self.offsets.write().await;
-            offsets.clear();
-            for a in &assignments {
-                offsets.insert(a.partition_id, a.committed_offset);
-            }
-            drop(offsets);
-
-            *self.assignments.write().await = assignments;
-            *self.generation.write().await = response.generation;
-            *self.state.write().await = ReaderState::Active;
-
-            info!(
-                "Rejoined group {} at generation {}",
-                self.config.group_id, response.generation.0
-            );
-
-            return Ok(());
-        }
-    }
-
-    /// Leave the reader group.
+    /// Leave the reader group, committing all outstanding inflight ranges first.
     async fn do_leave(&self) -> Result<(), SdkError> {
-        if let Err(e) = self.commit().await {
-            warn!("Failed to commit offsets during leave: {}", e);
+        // Commit all inflight ranges before leaving
+        let ranges: Vec<(Offset, Offset)> = self.inflight.read().await.clone();
+        for (start, end) in &ranges {
+            let batch = PollBatch {
+                results: vec![],
+                start_offset: *start,
+                end_offset: *end,
+                lease_deadline_ms: 0,
+            };
+            if let Err(e) = self.commit(&batch).await {
+                warn!("Failed to commit range [{}, {}) during leave: {}", start.0, end.0, e);
+            }
         }
 
         let req = reader::LeaveGroupRequest {
@@ -453,12 +365,10 @@ impl GroupReader {
                 break;
             }
 
-            let generation = *self.generation.read().await;
             let req = reader::HeartbeatRequest {
                 group_id: self.config.group_id.clone(),
                 topic_id: self.config.topic_id,
                 reader_id: self.config.reader_id.clone(),
-                generation,
             };
 
             let result = self
@@ -469,16 +379,7 @@ impl GroupReader {
                 Ok(ServerMessage::Heartbeat(response)) if response.success => {
                     match response.status {
                         reader::HeartbeatStatus::Ok => {
-                            debug!("Heartbeat OK at generation {}", response.generation.0);
-                        }
-                        reader::HeartbeatStatus::RebalanceNeeded => {
-                            info!(
-                                "Rebalance needed, new generation {}",
-                                response.generation.0
-                            );
-                            if let Err(e) = self.do_rejoin(response.generation).await {
-                                error!("Failed to rejoin: {}", e);
-                            }
+                            debug!("Heartbeat OK");
                         }
                         reader::HeartbeatStatus::UnknownMember => {
                             warn!("Unknown member, rejoining group");
@@ -502,76 +403,6 @@ impl GroupReader {
                 }
             }
         }
-    }
-
-    /// Read from specific partitions.
-    async fn read_partitions(
-        &self,
-        partitions: &[(TopicId, PartitionId, Offset)],
-    ) -> Result<Vec<ReadResult>, SdkError> {
-        let generation = *self.generation.read().await;
-
-        let reads: Vec<reader::PartitionRead> = partitions
-            .iter()
-            .map(
-                |(topic_id, partition_id, offset)| reader::PartitionRead {
-                    topic_id: *topic_id,
-                    partition_id: *partition_id,
-                    offset: *offset,
-                    max_bytes: self.config.max_bytes,
-                },
-            )
-            .collect();
-
-        let req = reader::ReadRequest {
-            group_id: self.config.group_id.clone(),
-            reader_id: self.config.reader_id.clone(),
-            generation,
-            reads,
-        };
-
-        let resp = self
-            .send_request(ClientMessage::Read(req), 8192)
-            .await?;
-        let response = match resp {
-            ServerMessage::Read(r) if r.success => r,
-            ServerMessage::Read(r) => {
-                return Err(SdkError::Server {
-                    code: r.error_code,
-                    message: r.error_message,
-                })
-            }
-            _ => return Err(SdkError::InvalidResponse),
-        };
-
-        let results: Vec<ReadResult> = response
-            .results
-            .into_iter()
-            .map(|r| ReadResult {
-                topic_id: r.topic_id,
-                partition_id: r.partition_id,
-                schema_id: r.schema_id,
-                high_watermark: r.high_watermark,
-                records: r.records,
-            })
-            .collect();
-
-        // Update offsets
-        let mut offsets = self.offsets.write().await;
-        for result in &results {
-            if !result.records.is_empty() {
-                let current = offsets
-                    .get(&result.partition_id)
-                    .copied()
-                    .unwrap_or(Offset(0));
-                offsets.insert(
-                    result.partition_id,
-                    Offset(current.0 + result.records.len() as u64),
-                );
-            }
-        }
-
-        Ok(results)
     }
 
     // ============ Wire protocol ============
@@ -633,55 +464,22 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_key_hash() {
-        use std::collections::HashSet;
-
-        let mut set = HashSet::new();
-        set.insert(PartitionId(0));
-        set.insert(PartitionId(1));
-        set.insert(PartitionId(0)); // Duplicate
-
-        assert_eq!(set.len(), 2);
-    }
-
-    #[test]
-    fn test_read_request_encoding() {
-        let req = reader::ReadRequest {
+    fn test_poll_request_encoding() {
+        let req = reader::PollRequest {
             group_id: "test-group".to_string(),
+            topic_id: TopicId(1),
             reader_id: "test-reader".to_string(),
-            generation: Generation(1),
-            reads: vec![reader::PartitionRead {
-                topic_id: TopicId(1),
-                partition_id: PartitionId(0),
-                offset: Offset(100),
-                max_bytes: 1024,
-            }],
+            max_bytes: 2048,
         };
 
         let mut buf = vec![0u8; 1024];
-        let len = reader::encode_read_request(&req, &mut buf);
+        let len = reader::encode_poll_request(&req, &mut buf);
         assert!(len > 0);
 
-        let (decoded, _) = reader::decode_read_request(&buf[..len]).unwrap();
+        let (decoded, _) = reader::decode_poll_request(&buf[..len]).unwrap();
         assert_eq!(decoded.group_id, "test-group");
-        assert_eq!(decoded.reads.len(), 1);
-        assert_eq!(decoded.reads[0].offset.0, 100);
-    }
-
-    #[tokio::test]
-    async fn test_offset_tracking() {
-        let offsets: HashMap<PartitionId, Offset> = HashMap::new();
-        let offsets = RwLock::new(offsets);
-
-        let key = PartitionId(0);
-
-        assert_eq!(offsets.read().await.get(&key).copied(), None);
-
-        offsets.write().await.insert(key, Offset(100));
-        assert_eq!(offsets.read().await.get(&key).copied(), Some(Offset(100)));
-
-        let current = offsets.read().await.get(&key).copied().unwrap_or(Offset(0));
-        offsets.write().await.insert(key, Offset(current.0 + 10));
-        assert_eq!(offsets.read().await.get(&key).copied(), Some(Offset(110)));
+        assert_eq!(decoded.topic_id, TopicId(1));
+        assert_eq!(decoded.reader_id, "test-reader");
+        assert_eq!(decoded.max_bytes, 2048);
     }
 }

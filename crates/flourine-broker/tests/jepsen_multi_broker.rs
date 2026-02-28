@@ -37,7 +37,6 @@ async fn ws_produce(
     writer_id: WriterId,
     seq: u64,
     topic_id: TopicId,
-    partition_id: PartitionId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
     let req = writer::AppendRequest {
@@ -45,7 +44,6 @@ async fn ws_produce(
         append_seq: AppendSeq(seq),
         batches: vec![RecordBatch {
             topic_id,
-            partition_id,
             schema_id: SchemaId(100),
             records: vec![Record {
                 key: None,
@@ -77,19 +75,12 @@ async fn ws_produce(
 async fn ws_read(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
     offset: Offset,
 ) -> Result<reader::ReadResponse, String> {
     let req = reader::ReadRequest {
-        group_id: String::new(),
-        reader_id: String::new(),
-        generation: Generation(0),
-        reads: vec![reader::PartitionRead {
-            topic_id,
-            partition_id,
-            offset,
-            max_bytes: 10 * 1024 * 1024,
-        }],
+        topic_id,
+        offset,
+        max_bytes: 10 * 1024 * 1024,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Read(req), 8192);
     ws.send(Message::Binary(buf))
@@ -115,14 +106,13 @@ async fn ws_read(
 async fn ws_read_all(
     ws: &mut Ws,
     topic_id: TopicId,
-    partition_id: PartitionId,
 ) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
 
     loop {
-        let resp = ws_read(ws, topic_id, partition_id, next_offset).await?;
+        let resp = ws_read(ws, topic_id, next_offset).await?;
         if !resp.success {
             return Err(format!("read failed: {}", resp.error_message));
         }
@@ -144,13 +134,12 @@ async fn ws_read_all(
     Ok((all_values, hwm))
 }
 
-/// 2 brokers, 2 producers each writing to partition 0.
+/// 2 brokers, 2 producers each writing to topic.
 /// All acked offsets globally unique (tests FOR UPDATE serialization).
 #[tokio::test]
 async fn test_concurrent_writes_unique_offsets() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("multi-unique", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("multi-unique").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
     let addrs = cluster.addrs();
@@ -167,7 +156,7 @@ async fn test_concurrent_writes_unique_offsets() {
                 for i in 0..10 {
                     let val = format!("b{}-p{}-s{}", broker_idx, p, i);
                     let seq = i + 1;
-                    match ws_produce(&mut ws, writer_id, seq, topic_id, partition_id, &val).await {
+                    match ws_produce(&mut ws, writer_id, seq, topic_id, &val).await {
                         Ok(resp) if resp.success => {
                             for ack in &resp.append_acks {
                                 offsets
@@ -211,8 +200,7 @@ async fn test_concurrent_writes_unique_offsets() {
 #[tokio::test]
 async fn test_broker_crash_other_continues() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("multi-crash", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("multi-crash").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
     let acked_values = Arc::new(Mutex::new(Vec::<Bytes>::new()));
@@ -222,7 +210,7 @@ async fn test_broker_crash_other_continues() {
     let w0 = WriterId::new();
     for i in 0..5 {
         let val = format!("b0-{}", i);
-        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, &val)
             .await
             .expect("write through broker 0");
         if resp.success {
@@ -235,7 +223,7 @@ async fn test_broker_crash_other_continues() {
     let w1 = WriterId::new();
     for i in 0..5 {
         let val = format!("b1-{}", i);
-        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, &val)
             .await
             .expect("write through broker 1");
         if resp.success {
@@ -250,7 +238,7 @@ async fn test_broker_crash_other_continues() {
     // Continue through broker 1
     for i in 5..10 {
         let val = format!("b1-{}", i);
-        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, &val)
             .await
             .expect("write through broker 1 after crash");
         if resp.success {
@@ -263,7 +251,7 @@ async fn test_broker_crash_other_continues() {
 
     // Verify all acked writes visible from either broker
     let mut ws = ws_connect(cluster.broker(1).addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
 
@@ -290,11 +278,12 @@ async fn test_broker_crash_other_continues() {
 }
 
 /// Consumer group across brokers: Reader A on broker 0, Reader B on broker 1.
-/// Verify non-overlapping assignments. Crash broker 0, B gets all partitions.
+/// Both join the same group. Verify group state is consistent in DB.
+/// Crash broker 0, B continues. State persists across brokers.
 #[tokio::test]
 async fn test_consumer_group_across_brokers() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("multi-cg", 4).await as u32);
+    let topic_id = TopicId(db.create_topic("multi-cg").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -338,85 +327,19 @@ async fn test_consumer_group_across_brokers() {
     });
     assert!(resp_b.success, "Reader B join should succeed");
 
-    // Get current generation from DB and rejoin both to settle assignments
-    let current_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    // Verify both members exist in DB
+    let member_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reader_members WHERE group_id = $1",
     )
     .bind("multi-cg-group")
-    .bind(topic_id.0 as i32)
     .fetch_one(cluster.pool())
     .await
-    .expect("query gen");
+    .expect("query members");
+    assert_eq!(member_count, 2, "both readers should be members");
 
-    // Rejoin A via broker 0
-    let rejoin_a = reader::RejoinRequest {
-        group_id: "multi-cg-group".to_string(),
-        topic_id,
-        reader_id: "reader-a".to_string(),
-        generation: Generation(current_gen as u64),
-    };
-    let buf = ws_helpers::encode_client_frame(ClientMessage::Rejoin(rejoin_a), 8192);
-    ws_a.send(Message::Binary(buf)).await.unwrap();
-    let msg = tokio::time::timeout(Duration::from_secs(5), ws_a.next())
-        .await
-        .expect("timeout")
-        .expect("closed")
-        .expect("error");
-    let rejoin_resp_a = match ws_helpers::decode_server_frame(match &msg {
-        Message::Binary(d) => d,
-        _ => panic!("expected binary"),
-    }) {
-        flourine_wire::ServerMessage::Rejoin(r) => r,
-        other => panic!("expected rejoin response, got {:?}", other),
-    };
-
-    // Rejoin B via broker 1
-    let rejoin_b = reader::RejoinRequest {
-        group_id: "multi-cg-group".to_string(),
-        topic_id,
-        reader_id: "reader-b".to_string(),
-        generation: Generation(current_gen as u64),
-    };
-    let buf = ws_helpers::encode_client_frame(ClientMessage::Rejoin(rejoin_b), 8192);
-    ws_b.send(Message::Binary(buf)).await.unwrap();
-    let msg = tokio::time::timeout(Duration::from_secs(5), ws_b.next())
-        .await
-        .expect("timeout")
-        .expect("closed")
-        .expect("error");
-    let rejoin_resp_b = match ws_helpers::decode_server_frame(match &msg {
-        Message::Binary(d) => d,
-        _ => panic!("expected binary"),
-    }) {
-        flourine_wire::ServerMessage::Rejoin(r) => r,
-        other => panic!("expected rejoin response, got {:?}", other),
-    };
-
-    // Verify non-overlapping assignments
-    let a_parts: HashSet<u32> = rejoin_resp_a
-        .assignments
-        .iter()
-        .map(|a| a.partition_id.0)
-        .collect();
-    let b_parts: HashSet<u32> = rejoin_resp_b
-        .assignments
-        .iter()
-        .map(|a| a.partition_id.0)
-        .collect();
-    let overlap: HashSet<u32> = a_parts.intersection(&b_parts).copied().collect();
-    assert!(
-        overlap.is_empty(),
-        "Readers across brokers should not have overlapping partitions: {:?}",
-        overlap
-    );
-    let total_before = a_parts.len() + b_parts.len();
-    assert_eq!(total_before, 4, "all 4 partitions should be assigned");
-
-    // --- Crash broker 0, verify B gets all partitions after session timeout ---
+    // --- Crash broker 0, verify B continues via heartbeat ---
     drop(ws_a);
-    // Note: we don't actually crash the broker because CrashableWsBroker crash
-    // would also kill broker 0's server. Instead, we simulate session timeout
-    // by setting reader-a's last_heartbeat to the past, then having B heartbeat.
+    // Simulate session timeout by setting reader-a's last_heartbeat to the past
     sqlx::query(
         "UPDATE reader_members SET last_heartbeat = NOW() - interval '60 seconds' \
          WHERE group_id = $1 AND reader_id = $2",
@@ -432,7 +355,6 @@ async fn test_consumer_group_across_brokers() {
         group_id: "multi-cg-group".to_string(),
         topic_id,
         reader_id: "reader-b".to_string(),
-        generation: Generation(current_gen as u64),
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Heartbeat(hb_req), 8192);
     ws_b.send(Message::Binary(buf)).await.unwrap();
@@ -450,52 +372,18 @@ async fn test_consumer_group_across_brokers() {
     };
     assert!(hb_resp.success, "heartbeat should succeed");
 
-    // Get new generation after A was expired
-    let new_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
+    // Verify reader-a was expired from members
+    let remaining_members: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reader_members WHERE group_id = $1 AND topic_id = $2",
     )
     .bind("multi-cg-group")
     .bind(topic_id.0 as i32)
     .fetch_one(cluster.pool())
     .await
-    .expect("query new gen");
-    assert!(
-        new_gen > current_gen,
-        "generation should bump after member expiry"
-    );
-
-    // Reader B rejoins with new generation → should get all 4 partitions
-    let rejoin_b2 = reader::RejoinRequest {
-        group_id: "multi-cg-group".to_string(),
-        topic_id,
-        reader_id: "reader-b".to_string(),
-        generation: Generation(new_gen as u64),
-    };
-    let buf = ws_helpers::encode_client_frame(ClientMessage::Rejoin(rejoin_b2), 8192);
-    ws_b.send(Message::Binary(buf)).await.unwrap();
-    let msg = tokio::time::timeout(Duration::from_secs(5), ws_b.next())
-        .await
-        .expect("timeout")
-        .expect("closed")
-        .expect("error");
-    let rejoin_resp_b2 = match ws_helpers::decode_server_frame(match &msg {
-        Message::Binary(d) => d,
-        _ => panic!("expected binary"),
-    }) {
-        flourine_wire::ServerMessage::Rejoin(r) => r,
-        other => panic!("expected rejoin response, got {:?}", other),
-    };
-
-    let b_parts_after: HashSet<u32> = rejoin_resp_b2
-        .assignments
-        .iter()
-        .map(|a| a.partition_id.0)
-        .collect();
+    .expect("query remaining members");
     assert_eq!(
-        b_parts_after.len(),
-        4,
-        "Reader B should own all 4 partitions after A expired, got {:?}",
-        b_parts_after
+        remaining_members, 1,
+        "only reader-b should remain after member expiry"
     );
 }
 
@@ -504,28 +392,27 @@ async fn test_consumer_group_across_brokers() {
 #[tokio::test]
 async fn test_cross_broker_dedup() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("cross-dedup", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("cross-dedup").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
     let writer_id = WriterId::new();
 
     // Write via broker 0
     let mut ws0 = ws_connect(cluster.broker(0).addr()).await;
-    let resp = ws_produce(&mut ws0, writer_id, 1, topic_id, partition_id, "cross-dedup-val")
+    let resp = ws_produce(&mut ws0, writer_id, 1, topic_id, "cross-dedup-val")
         .await
         .expect("produce via broker 0");
     assert!(resp.success);
 
     // Retry same (writer_id, seq=1) via broker 1
     let mut ws1 = ws_connect(cluster.broker(1).addr()).await;
-    let resp2 = ws_produce(&mut ws1, writer_id, 1, topic_id, partition_id, "cross-dedup-val")
+    let resp2 = ws_produce(&mut ws1, writer_id, 1, topic_id, "cross-dedup-val")
         .await
         .expect("retry via broker 1");
     assert!(resp2.success, "cross-broker dedup should return cached ack");
 
     // Verify exactly 1 record via either broker
-    let (values, _) = ws_read_all(&mut ws1, topic_id, partition_id)
+    let (values, _) = ws_read_all(&mut ws1, topic_id)
         .await
         .expect("read should succeed");
     assert_eq!(values.len(), 1, "no duplicate from cross-broker retry");
@@ -537,8 +424,7 @@ async fn test_cross_broker_dedup() {
 #[tokio::test]
 async fn test_multi_broker_chaos() {
     let db = TestDb::new().await;
-    let num_partitions = 2;
-    let topic_id = TopicId(db.create_topic("multi-chaos", num_partitions).await as u32);
+    let topic_id = TopicId(db.create_topic("multi-chaos").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 3).await;
     let history = OperationHistory::shared();
@@ -554,7 +440,6 @@ async fn test_multi_broker_chaos() {
         let mut stop_rx = stop_tx.subscribe();
 
         producer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((p % num_partitions as usize) as u32);
             let writer_id = WriterId::new();
             let mut seq = 0u64;
             let mut ws: Option<Ws> = None;
@@ -581,10 +466,10 @@ async fn test_multi_broker_chaos() {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                    h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
                 };
 
-                match ws_produce(w, writer_id, seq, topic_id, partition_id, &val).await {
+                match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
                         let offset = resp
                             .append_acks
@@ -613,7 +498,6 @@ async fn test_multi_broker_chaos() {
         let mut stop_rx = stop_tx.subscribe();
 
         consumer_handles.push(tokio::spawn(async move {
-            let partition_id = PartitionId((c % num_partitions as usize) as u32);
             let reader_id = format!("reader-{}", c);
             let mut next_offset = Offset(0);
             let mut ws: Option<Ws> = None;
@@ -638,10 +522,10 @@ async fn test_multi_broker_chaos() {
                 let w = ws.as_mut().unwrap();
                 let idx = {
                     let mut h = history.lock().await;
-                    h.record_read(partition_id.0, reader_id.clone(), next_offset)
+                    h.record_read(TopicId(0), reader_id.clone(), next_offset)
                 };
 
-                match ws_read(w, topic_id, partition_id, next_offset).await {
+                match ws_read(w, topic_id, next_offset).await {
                     Ok(resp) if resp.success => {
                         let values: Vec<Bytes> = resp
                             .results
@@ -699,18 +583,15 @@ async fn test_multi_broker_chaos() {
     // Final read for verification
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mut ws = ws_connect(cluster.broker(0).addr()).await;
-    for p in 0..num_partitions as u32 {
-        let (values, hwm) = ws_read_all(&mut ws, topic_id, PartitionId(p))
-            .await
-            .expect("final read should succeed");
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
+        .await
+        .expect("final read should succeed");
 
-        let mut h = history.lock().await;
-        let idx = h.record_read(p, "final".to_string(), Offset(0));
-        h.record_read_complete(idx, values, hwm, true);
-    }
+    let mut h = history.lock().await;
+    let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
+    h.record_read_complete(idx, values, hwm, true);
 
     // Invariant checks
-    let h = history.lock().await;
     h.verify_acknowledged_writes_visible()
         .expect("INVARIANT: all acked writes visible");
     h.verify_unique_offsets()
@@ -730,8 +611,7 @@ async fn test_multi_broker_chaos() {
 #[tokio::test]
 async fn test_asymmetric_s3_partition_one_broker() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("asym-s3", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("asym-s3").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -739,7 +619,7 @@ async fn test_asymmetric_s3_partition_one_broker() {
     let mut ws0 = ws_connect(cluster.broker(0).addr()).await;
     let w0 = WriterId::new();
     for i in 0..3 {
-        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, partition_id, &format!("pre-{}", i))
+        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, &format!("pre-{}", i))
             .await
             .expect("baseline write");
         assert!(resp.success);
@@ -752,7 +632,7 @@ async fn test_asymmetric_s3_partition_one_broker() {
     let w0b = WriterId::new();
     let hung = tokio::time::timeout(
         Duration::from_secs(2),
-        ws_produce(&mut ws0, w0b, 1, topic_id, partition_id, "should-hang"),
+        ws_produce(&mut ws0, w0b, 1, topic_id, "should-hang"),
     )
     .await;
     assert!(hung.is_err(), "broker 0 write should hang while S3 partitioned");
@@ -763,7 +643,7 @@ async fn test_asymmetric_s3_partition_one_broker() {
     let mut acked_via_b1 = vec![];
     for i in 0..5 {
         let val = format!("b1-{}", i);
-        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, &val)
             .await
             .expect("broker 1 write");
         assert!(resp.success, "broker 1 write should succeed");
@@ -777,7 +657,7 @@ async fn test_asymmetric_s3_partition_one_broker() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify all broker 1 acked writes visible
-    let (values, hwm) = ws_read_all(&mut ws1, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws1, topic_id)
         .await
         .expect("final read");
     for v in &acked_via_b1 {
@@ -802,8 +682,7 @@ async fn test_asymmetric_s3_partition_one_broker() {
 #[tokio::test]
 async fn test_split_brain_writes() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("split-brain", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("split-brain").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
     let history = OperationHistory::shared();
@@ -821,11 +700,11 @@ async fn test_split_brain_writes() {
             let val = format!("b0-{}", i);
             let idx = {
                 let mut h = history_b0.lock().await;
-                h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
             };
             match tokio::time::timeout(
                 Duration::from_secs(3),
-                ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &val),
+                ws_produce(&mut ws, writer_id, i + 1, topic_id, &val),
             )
             .await
             {
@@ -861,9 +740,9 @@ async fn test_split_brain_writes() {
             let val = format!("b1-{}", i);
             let idx = {
                 let mut h = history_b1.lock().await;
-                h.record_write(writer_id, partition_id.0, Bytes::from(val.clone()))
+                h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
             };
-            match ws_produce(&mut ws, writer_id, i + 1, topic_id, partition_id, &val).await {
+            match ws_produce(&mut ws, writer_id, i + 1, topic_id, &val).await {
                 Ok(resp) if resp.success => {
                     let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                     history_b1
@@ -890,12 +769,12 @@ async fn test_split_brain_writes() {
 
     // Final read
     let mut ws = ws_connect(cluster.broker(1).addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("final read");
     {
         let mut h = history.lock().await;
-        let idx = h.record_read(partition_id.0, "final".to_string(), Offset(0));
+        let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
         h.record_read_complete(idx, values, hwm, true);
     }
 
@@ -916,22 +795,21 @@ async fn test_split_brain_writes() {
 #[tokio::test]
 async fn test_db_partition_one_broker_continues() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("db-part", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("db-part").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
     // Write baseline via both
     let mut ws0 = ws_connect(cluster.broker(0).addr()).await;
     let w0 = WriterId::new();
-    let resp = ws_produce(&mut ws0, w0, 1, topic_id, partition_id, "b0-pre")
+    let resp = ws_produce(&mut ws0, w0, 1, topic_id, "b0-pre")
         .await
         .expect("baseline b0");
     assert!(resp.success);
 
     let mut ws1 = ws_connect(cluster.broker(1).addr()).await;
     let w1 = WriterId::new();
-    let resp = ws_produce(&mut ws1, w1, 1, topic_id, partition_id, "b1-pre")
+    let resp = ws_produce(&mut ws1, w1, 1, topic_id, "b1-pre")
         .await
         .expect("baseline b1");
     assert!(resp.success);
@@ -944,7 +822,7 @@ async fn test_db_partition_one_broker_continues() {
     let mut acked_b1 = vec![Bytes::from("b1-pre")];
     for i in 1..6 {
         let val = format!("b1-{}", i);
-        let resp = ws_produce(&mut ws1, w1, (i + 1) as u64, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, (i + 1) as u64, topic_id, &val)
             .await
             .expect("broker 1 write");
         assert!(resp.success, "broker 1 should continue after broker 0 DB partition");
@@ -956,7 +834,7 @@ async fn test_db_partition_one_broker_continues() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify all broker 1 acked writes visible
-    let (values, _) = ws_read_all(&mut ws1, topic_id, partition_id)
+    let (values, _) = ws_read_all(&mut ws1, topic_id)
         .await
         .expect("final read");
     for v in &acked_b1 {
@@ -973,8 +851,7 @@ async fn test_db_partition_one_broker_continues() {
 #[tokio::test]
 async fn test_db_partition_during_flush() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("db-flush", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("db-flush").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -986,7 +863,7 @@ async fn test_db_partition_during_flush() {
     let write_handle = tokio::spawn(async move {
         let mut ws = ws_connect(addr0).await;
         let writer_id = WriterId::new();
-        ws_produce(&mut ws, writer_id, 1, topic_id, partition_id, "inflight-val").await
+        ws_produce(&mut ws, writer_id, 1, topic_id, "inflight-val").await
     });
 
     // Wait for S3 put to start, then kill DB
@@ -1018,13 +895,13 @@ async fn test_db_partition_during_flush() {
     // Retry via healed broker 0
     let mut ws = ws_connect(cluster.broker(0).addr()).await;
     let w = WriterId::new();
-    let resp = ws_produce(&mut ws, w, 1, topic_id, partition_id, "after-heal")
+    let resp = ws_produce(&mut ws, w, 1, topic_id, "after-heal")
         .await
         .expect("write after heal");
     assert!(resp.success, "write should succeed after healing");
 
     // Verify data is consistent
-    let (values, hwm) = ws_read_all(&mut ws, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws, topic_id)
         .await
         .expect("final read");
     assert!(
@@ -1044,8 +921,7 @@ async fn test_db_partition_during_flush() {
 #[tokio::test]
 async fn test_write_broker_a_read_broker_b_immediately() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("cross-read", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("cross-read").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -1055,7 +931,7 @@ async fn test_write_broker_a_read_broker_b_immediately() {
     let mut expected_values = Vec::new();
     for i in 0..5 {
         let val = format!("cross-{}", i);
-        let resp = ws_produce(&mut ws0, writer_id, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws0, writer_id, i + 1, topic_id, &val)
             .await
             .expect("write via broker 0");
         assert!(resp.success, "write {} should succeed", i);
@@ -1064,7 +940,7 @@ async fn test_write_broker_a_read_broker_b_immediately() {
 
     // Immediately read via broker 1 from offset 0
     let mut ws1 = ws_connect(cluster.broker(1).addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws1, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws1, topic_id)
         .await
         .expect("read via broker 1 should succeed");
 
@@ -1096,13 +972,13 @@ async fn test_write_broker_a_read_broker_b_immediately() {
 
 /// L2: Cross-broker reader group reconnect.
 /// 2-broker cluster. Reader connects to broker A. Crash broker A.
-/// Reader reconnects to broker B, calls join_group. Verify: reader gets
-/// assignments and committed offsets are preserved (state is in Postgres).
+/// Reader reconnects to broker B, calls join_group. Verify: committed
+/// offsets are preserved (state is in Postgres).
 /// Invariant: reader group state is in Postgres, not broker memory.
 #[tokio::test]
 async fn test_cross_broker_reader_group_reconnect() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("cross-reconnect", 4).await as u32);
+    let topic_id = TopicId(db.create_topic("cross-reconnect").await as u32);
 
     let mut cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -1126,25 +1002,41 @@ async fn test_cross_broker_reader_group_reconnect() {
     });
     assert!(join_resp.success, "join via broker 0 should succeed");
 
-    // Get generation and commit an offset via broker 0
-    let current_gen: i64 = sqlx::query_scalar(
-        "SELECT generation FROM reader_groups WHERE group_id = $1 AND topic_id = $2",
-    )
-    .bind("xr-group")
-    .bind(topic_id.0 as i32)
-    .fetch_one(cluster.pool())
-    .await
-    .expect("query gen");
+    // Produce some records via broker 0 so there's work to dispatch
+    let writer_id = WriterId::new();
+    let produce_resp =
+        ws_produce(&mut ws_a, writer_id, 1, topic_id, "test-value").await.expect("produce");
+    assert!(produce_resp.success, "produce via broker 0 should succeed");
+
+    // Wait for flush
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Poll for work and commit the dispatched range via broker 0
+    let poll_req = reader::PollRequest {
+        group_id: "xr-group".to_string(),
+        topic_id,
+        reader_id: "reader-a".to_string(),
+        max_bytes: 1024 * 1024,
+    };
+    let buf = ws_helpers::encode_client_frame(ClientMessage::Poll(poll_req), 8192);
+    ws_a.send(Message::Binary(buf)).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), ws_a.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("error");
+    let poll_resp = ws_helpers::decode_poll_response(match &msg {
+        Message::Binary(d) => d,
+        _ => panic!("expected binary"),
+    });
+    assert!(poll_resp.success, "poll via broker 0 should succeed");
 
     let commit_req = reader::CommitRequest {
         group_id: "xr-group".to_string(),
         reader_id: "reader-a".to_string(),
-        generation: Generation(current_gen as u64),
-        commits: vec![reader::PartitionCommit {
-            topic_id,
-            partition_id: PartitionId(0),
-            offset: Offset(42),
-        }],
+        topic_id,
+        start_offset: poll_resp.start_offset,
+        end_offset: poll_resp.end_offset,
     };
     let buf = ws_helpers::encode_client_frame(ClientMessage::Commit(commit_req), 8192);
     ws_a.send(Message::Binary(buf)).await.unwrap();
@@ -1208,34 +1100,21 @@ async fn test_cross_broker_reader_group_reconnect() {
     });
     assert!(join_resp2.success, "rejoin via broker 1 should succeed");
 
-    // Verify: committed offset should be preserved
-    let partition_0_assignment = join_resp2
-        .assignments
-        .iter()
-        .find(|a| a.partition_id == PartitionId(0));
-    if let Some(assignment) = partition_0_assignment {
-        assert_eq!(
-            assignment.committed_offset,
-            Offset(42),
-            "committed offset should survive cross-broker reconnect"
-        );
-    } else {
-        // Verify from DB that the commit persisted
-        let db_offset: Option<i64> = sqlx::query_scalar(
-            "SELECT committed_offset FROM reader_assignments \
-             WHERE group_id = $1 AND topic_id = $2 AND partition_id = 0",
-        )
-        .bind("xr-group")
-        .bind(topic_id.0 as i32)
-        .fetch_optional(cluster.pool())
-        .await
-        .expect("query");
-        assert_eq!(
-            db_offset,
-            Some(42),
-            "committed offset should persist in DB across broker crash"
-        );
-    }
+    // Verify: committed watermark should be preserved in DB
+    let db_watermark: Option<i64> = sqlx::query_scalar(
+        "SELECT committed_watermark FROM reader_group_state \
+         WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("xr-group")
+    .bind(topic_id.0 as i32)
+    .fetch_optional(cluster.pool())
+    .await
+    .expect("query");
+    assert!(
+        db_watermark.is_some() && db_watermark.unwrap() > 0,
+        "committed watermark should persist in DB across broker crash, got {:?}",
+        db_watermark
+    );
 }
 
 /// L3: Sustained S3 impairment with multi-broker writes.
@@ -1245,8 +1124,7 @@ async fn test_cross_broker_reader_group_reconnect() {
 #[tokio::test]
 async fn test_sustained_s3_impairment_multi_broker() {
     let db = TestDb::new().await;
-    let topic_id = TopicId(db.create_topic("sustained-s3", 1).await as u32);
-    let partition_id = PartitionId(0);
+    let topic_id = TopicId(db.create_topic("sustained-s3").await as u32);
 
     let cluster = MultiBrokerCluster::start(db.url(), 2).await;
 
@@ -1255,7 +1133,7 @@ async fn test_sustained_s3_impairment_multi_broker() {
     let w0 = WriterId::new();
     for i in 0..3 {
         let resp = ws_produce(
-            &mut ws0, w0, i + 1, topic_id, partition_id,
+            &mut ws0, w0, i + 1, topic_id,
             &format!("baseline-{}", i),
         )
         .await
@@ -1272,7 +1150,7 @@ async fn test_sustained_s3_impairment_multi_broker() {
     let mut acked_b1 = Vec::new();
     for i in 0..10 {
         let val = format!("b1-sustained-{}", i);
-        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, partition_id, &val)
+        let resp = ws_produce(&mut ws1, w1, i + 1, topic_id, &val)
             .await
             .expect("broker 1 write should succeed");
         assert!(resp.success, "broker 1 write {} should succeed", i);
@@ -1284,7 +1162,7 @@ async fn test_sustained_s3_impairment_multi_broker() {
     let w0b = WriterId::new();
     let hung = tokio::time::timeout(
         Duration::from_secs(1),
-        ws_produce(&mut ws0, w0b, 1, topic_id, partition_id, "should-hang"),
+        ws_produce(&mut ws0, w0b, 1, topic_id, "should-hang"),
     )
     .await;
     assert!(hung.is_err(), "broker 0 write should hang while S3 partitioned");
@@ -1294,7 +1172,7 @@ async fn test_sustained_s3_impairment_multi_broker() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Read all data via broker 1
-    let (values, hwm) = ws_read_all(&mut ws1, topic_id, partition_id)
+    let (values, hwm) = ws_read_all(&mut ws1, topic_id)
         .await
         .expect("final read should succeed");
 

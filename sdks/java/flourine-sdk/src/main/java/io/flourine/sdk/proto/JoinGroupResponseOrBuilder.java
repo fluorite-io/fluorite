@@ -33,34 +33,4 @@ public interface JoinGroupResponseOrBuilder extends
    */
   com.google.protobuf.ByteString
       getErrorMessageBytes();
-
-  /**
-   * <code>uint64 generation = 4;</code>
-   * @return The generation.
-   */
-  long getGeneration();
-
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  java.util.List<io.flourine.sdk.proto.PartitionAssignment> 
-      getAssignmentsList();
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  io.flourine.sdk.proto.PartitionAssignment getAssignments(int index);
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  int getAssignmentsCount();
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  java.util.List<? extends io.flourine.sdk.proto.PartitionAssignmentOrBuilder> 
-      getAssignmentsOrBuilderList();
-  /**
-   * <code>repeated .flourine.wire.PartitionAssignment assignments = 5;</code>
-   */
-  io.flourine.sdk.proto.PartitionAssignmentOrBuilder getAssignmentsOrBuilder(
-      int index);
 }

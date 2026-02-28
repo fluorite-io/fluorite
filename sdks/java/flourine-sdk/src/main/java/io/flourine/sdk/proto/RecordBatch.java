@@ -55,21 +55,10 @@ private static final long serialVersionUID = 0L;
     return topicId_;
   }
 
-  public static final int PARTITION_ID_FIELD_NUMBER = 2;
-  private int partitionId_ = 0;
-  /**
-   * <code>uint32 partition_id = 2;</code>
-   * @return The partitionId.
-   */
-  @java.lang.Override
-  public int getPartitionId() {
-    return partitionId_;
-  }
-
-  public static final int SCHEMA_ID_FIELD_NUMBER = 3;
+  public static final int SCHEMA_ID_FIELD_NUMBER = 2;
   private int schemaId_ = 0;
   /**
-   * <code>uint32 schema_id = 3;</code>
+   * <code>uint32 schema_id = 2;</code>
    * @return The schemaId.
    */
   @java.lang.Override
@@ -77,18 +66,18 @@ private static final long serialVersionUID = 0L;
     return schemaId_;
   }
 
-  public static final int RECORDS_FIELD_NUMBER = 4;
+  public static final int RECORDS_FIELD_NUMBER = 3;
   @SuppressWarnings("serial")
   private java.util.List<io.flourine.sdk.proto.Record> records_;
   /**
-   * <code>repeated .flourine.wire.Record records = 4;</code>
+   * <code>repeated .flourine.wire.Record records = 3;</code>
    */
   @java.lang.Override
   public java.util.List<io.flourine.sdk.proto.Record> getRecordsList() {
     return records_;
   }
   /**
-   * <code>repeated .flourine.wire.Record records = 4;</code>
+   * <code>repeated .flourine.wire.Record records = 3;</code>
    */
   @java.lang.Override
   public java.util.List<? extends io.flourine.sdk.proto.RecordOrBuilder> 
@@ -96,21 +85,21 @@ private static final long serialVersionUID = 0L;
     return records_;
   }
   /**
-   * <code>repeated .flourine.wire.Record records = 4;</code>
+   * <code>repeated .flourine.wire.Record records = 3;</code>
    */
   @java.lang.Override
   public int getRecordsCount() {
     return records_.size();
   }
   /**
-   * <code>repeated .flourine.wire.Record records = 4;</code>
+   * <code>repeated .flourine.wire.Record records = 3;</code>
    */
   @java.lang.Override
   public io.flourine.sdk.proto.Record getRecords(int index) {
     return records_.get(index);
   }
   /**
-   * <code>repeated .flourine.wire.Record records = 4;</code>
+   * <code>repeated .flourine.wire.Record records = 3;</code>
    */
   @java.lang.Override
   public io.flourine.sdk.proto.RecordOrBuilder getRecordsOrBuilder(
@@ -135,14 +124,11 @@ private static final long serialVersionUID = 0L;
     if (topicId_ != 0) {
       output.writeUInt32(1, topicId_);
     }
-    if (partitionId_ != 0) {
-      output.writeUInt32(2, partitionId_);
-    }
     if (schemaId_ != 0) {
-      output.writeUInt32(3, schemaId_);
+      output.writeUInt32(2, schemaId_);
     }
     for (int i = 0; i < records_.size(); i++) {
-      output.writeMessage(4, records_.get(i));
+      output.writeMessage(3, records_.get(i));
     }
     getUnknownFields().writeTo(output);
   }
@@ -157,17 +143,13 @@ private static final long serialVersionUID = 0L;
       size += com.google.protobuf.CodedOutputStream
         .computeUInt32Size(1, topicId_);
     }
-    if (partitionId_ != 0) {
-      size += com.google.protobuf.CodedOutputStream
-        .computeUInt32Size(2, partitionId_);
-    }
     if (schemaId_ != 0) {
       size += com.google.protobuf.CodedOutputStream
-        .computeUInt32Size(3, schemaId_);
+        .computeUInt32Size(2, schemaId_);
     }
     for (int i = 0; i < records_.size(); i++) {
       size += com.google.protobuf.CodedOutputStream
-        .computeMessageSize(4, records_.get(i));
+        .computeMessageSize(3, records_.get(i));
     }
     size += getUnknownFields().getSerializedSize();
     memoizedSize = size;
@@ -186,8 +168,6 @@ private static final long serialVersionUID = 0L;
 
     if (getTopicId()
         != other.getTopicId()) return false;
-    if (getPartitionId()
-        != other.getPartitionId()) return false;
     if (getSchemaId()
         != other.getSchemaId()) return false;
     if (!getRecordsList()
@@ -205,8 +185,6 @@ private static final long serialVersionUID = 0L;
     hash = (19 * hash) + getDescriptor().hashCode();
     hash = (37 * hash) + TOPIC_ID_FIELD_NUMBER;
     hash = (53 * hash) + getTopicId();
-    hash = (37 * hash) + PARTITION_ID_FIELD_NUMBER;
-    hash = (53 * hash) + getPartitionId();
     hash = (37 * hash) + SCHEMA_ID_FIELD_NUMBER;
     hash = (53 * hash) + getSchemaId();
     if (getRecordsCount() > 0) {
@@ -345,7 +323,6 @@ private static final long serialVersionUID = 0L;
       super.clear();
       bitField0_ = 0;
       topicId_ = 0;
-      partitionId_ = 0;
       schemaId_ = 0;
       if (recordsBuilder_ == null) {
         records_ = java.util.Collections.emptyList();
@@ -353,7 +330,7 @@ private static final long serialVersionUID = 0L;
         records_ = null;
         recordsBuilder_.clear();
       }
-      bitField0_ = (bitField0_ & ~0x00000008);
+      bitField0_ = (bitField0_ & ~0x00000004);
       return this;
     }
 
@@ -388,9 +365,9 @@ private static final long serialVersionUID = 0L;
 
     private void buildPartialRepeatedFields(io.flourine.sdk.proto.RecordBatch result) {
       if (recordsBuilder_ == null) {
-        if (((bitField0_ & 0x00000008) != 0)) {
+        if (((bitField0_ & 0x00000004) != 0)) {
           records_ = java.util.Collections.unmodifiableList(records_);
-          bitField0_ = (bitField0_ & ~0x00000008);
+          bitField0_ = (bitField0_ & ~0x00000004);
         }
         result.records_ = records_;
       } else {
@@ -404,9 +381,6 @@ private static final long serialVersionUID = 0L;
         result.topicId_ = topicId_;
       }
       if (((from_bitField0_ & 0x00000002) != 0)) {
-        result.partitionId_ = partitionId_;
-      }
-      if (((from_bitField0_ & 0x00000004) != 0)) {
         result.schemaId_ = schemaId_;
       }
     }
@@ -426,9 +400,6 @@ private static final long serialVersionUID = 0L;
       if (other.getTopicId() != 0) {
         setTopicId(other.getTopicId());
       }
-      if (other.getPartitionId() != 0) {
-        setPartitionId(other.getPartitionId());
-      }
       if (other.getSchemaId() != 0) {
         setSchemaId(other.getSchemaId());
       }
@@ -436,7 +407,7 @@ private static final long serialVersionUID = 0L;
         if (!other.records_.isEmpty()) {
           if (records_.isEmpty()) {
             records_ = other.records_;
-            bitField0_ = (bitField0_ & ~0x00000008);
+            bitField0_ = (bitField0_ & ~0x00000004);
           } else {
             ensureRecordsIsMutable();
             records_.addAll(other.records_);
@@ -449,7 +420,7 @@ private static final long serialVersionUID = 0L;
             recordsBuilder_.dispose();
             recordsBuilder_ = null;
             records_ = other.records_;
-            bitField0_ = (bitField0_ & ~0x00000008);
+            bitField0_ = (bitField0_ & ~0x00000004);
             recordsBuilder_ = 
               com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders ?
                  internalGetRecordsFieldBuilder() : null;
@@ -490,16 +461,11 @@ private static final long serialVersionUID = 0L;
               break;
             } // case 8
             case 16: {
-              partitionId_ = input.readUInt32();
+              schemaId_ = input.readUInt32();
               bitField0_ |= 0x00000002;
               break;
             } // case 16
-            case 24: {
-              schemaId_ = input.readUInt32();
-              bitField0_ |= 0x00000004;
-              break;
-            } // case 24
-            case 34: {
+            case 26: {
               io.flourine.sdk.proto.Record m =
                   input.readMessage(
                       io.flourine.sdk.proto.Record.parser(),
@@ -511,7 +477,7 @@ private static final long serialVersionUID = 0L;
                 recordsBuilder_.addMessage(m);
               }
               break;
-            } // case 34
+            } // case 26
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -561,41 +527,9 @@ private static final long serialVersionUID = 0L;
       return this;
     }
 
-    private int partitionId_ ;
-    /**
-     * <code>uint32 partition_id = 2;</code>
-     * @return The partitionId.
-     */
-    @java.lang.Override
-    public int getPartitionId() {
-      return partitionId_;
-    }
-    /**
-     * <code>uint32 partition_id = 2;</code>
-     * @param value The partitionId to set.
-     * @return This builder for chaining.
-     */
-    public Builder setPartitionId(int value) {
-
-      partitionId_ = value;
-      bitField0_ |= 0x00000002;
-      onChanged();
-      return this;
-    }
-    /**
-     * <code>uint32 partition_id = 2;</code>
-     * @return This builder for chaining.
-     */
-    public Builder clearPartitionId() {
-      bitField0_ = (bitField0_ & ~0x00000002);
-      partitionId_ = 0;
-      onChanged();
-      return this;
-    }
-
     private int schemaId_ ;
     /**
-     * <code>uint32 schema_id = 3;</code>
+     * <code>uint32 schema_id = 2;</code>
      * @return The schemaId.
      */
     @java.lang.Override
@@ -603,23 +537,23 @@ private static final long serialVersionUID = 0L;
       return schemaId_;
     }
     /**
-     * <code>uint32 schema_id = 3;</code>
+     * <code>uint32 schema_id = 2;</code>
      * @param value The schemaId to set.
      * @return This builder for chaining.
      */
     public Builder setSchemaId(int value) {
 
       schemaId_ = value;
-      bitField0_ |= 0x00000004;
+      bitField0_ |= 0x00000002;
       onChanged();
       return this;
     }
     /**
-     * <code>uint32 schema_id = 3;</code>
+     * <code>uint32 schema_id = 2;</code>
      * @return This builder for chaining.
      */
     public Builder clearSchemaId() {
-      bitField0_ = (bitField0_ & ~0x00000004);
+      bitField0_ = (bitField0_ & ~0x00000002);
       schemaId_ = 0;
       onChanged();
       return this;
@@ -628,9 +562,9 @@ private static final long serialVersionUID = 0L;
     private java.util.List<io.flourine.sdk.proto.Record> records_ =
       java.util.Collections.emptyList();
     private void ensureRecordsIsMutable() {
-      if (!((bitField0_ & 0x00000008) != 0)) {
+      if (!((bitField0_ & 0x00000004) != 0)) {
         records_ = new java.util.ArrayList<io.flourine.sdk.proto.Record>(records_);
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000004;
        }
     }
 
@@ -638,7 +572,7 @@ private static final long serialVersionUID = 0L;
         io.flourine.sdk.proto.Record, io.flourine.sdk.proto.Record.Builder, io.flourine.sdk.proto.RecordOrBuilder> recordsBuilder_;
 
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public java.util.List<io.flourine.sdk.proto.Record> getRecordsList() {
       if (recordsBuilder_ == null) {
@@ -648,7 +582,7 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public int getRecordsCount() {
       if (recordsBuilder_ == null) {
@@ -658,7 +592,7 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public io.flourine.sdk.proto.Record getRecords(int index) {
       if (recordsBuilder_ == null) {
@@ -668,7 +602,7 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder setRecords(
         int index, io.flourine.sdk.proto.Record value) {
@@ -685,7 +619,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder setRecords(
         int index, io.flourine.sdk.proto.Record.Builder builderForValue) {
@@ -699,7 +633,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder addRecords(io.flourine.sdk.proto.Record value) {
       if (recordsBuilder_ == null) {
@@ -715,7 +649,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder addRecords(
         int index, io.flourine.sdk.proto.Record value) {
@@ -732,7 +666,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder addRecords(
         io.flourine.sdk.proto.Record.Builder builderForValue) {
@@ -746,7 +680,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder addRecords(
         int index, io.flourine.sdk.proto.Record.Builder builderForValue) {
@@ -760,7 +694,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder addAllRecords(
         java.lang.Iterable<? extends io.flourine.sdk.proto.Record> values) {
@@ -775,12 +709,12 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder clearRecords() {
       if (recordsBuilder_ == null) {
         records_ = java.util.Collections.emptyList();
-        bitField0_ = (bitField0_ & ~0x00000008);
+        bitField0_ = (bitField0_ & ~0x00000004);
         onChanged();
       } else {
         recordsBuilder_.clear();
@@ -788,7 +722,7 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public Builder removeRecords(int index) {
       if (recordsBuilder_ == null) {
@@ -801,14 +735,14 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public io.flourine.sdk.proto.Record.Builder getRecordsBuilder(
         int index) {
       return internalGetRecordsFieldBuilder().getBuilder(index);
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public io.flourine.sdk.proto.RecordOrBuilder getRecordsOrBuilder(
         int index) {
@@ -818,7 +752,7 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public java.util.List<? extends io.flourine.sdk.proto.RecordOrBuilder> 
          getRecordsOrBuilderList() {
@@ -829,14 +763,14 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public io.flourine.sdk.proto.Record.Builder addRecordsBuilder() {
       return internalGetRecordsFieldBuilder().addBuilder(
           io.flourine.sdk.proto.Record.getDefaultInstance());
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public io.flourine.sdk.proto.Record.Builder addRecordsBuilder(
         int index) {
@@ -844,7 +778,7 @@ private static final long serialVersionUID = 0L;
           index, io.flourine.sdk.proto.Record.getDefaultInstance());
     }
     /**
-     * <code>repeated .flourine.wire.Record records = 4;</code>
+     * <code>repeated .flourine.wire.Record records = 3;</code>
      */
     public java.util.List<io.flourine.sdk.proto.Record.Builder> 
          getRecordsBuilderList() {
@@ -857,7 +791,7 @@ private static final long serialVersionUID = 0L;
         recordsBuilder_ = new com.google.protobuf.RepeatedFieldBuilder<
             io.flourine.sdk.proto.Record, io.flourine.sdk.proto.Record.Builder, io.flourine.sdk.proto.RecordOrBuilder>(
                 records_,
-                ((bitField0_ & 0x00000008) != 0),
+                ((bitField0_ & 0x00000004) != 0),
                 getParentForChildren(),
                 isClean());
         records_ = null;
