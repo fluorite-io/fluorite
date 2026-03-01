@@ -3,7 +3,7 @@
 import pytest
 from google.protobuf.message import DecodeError
 
-from flourine.proto import flourine_wire_pb2 as pb
+from fluorite.proto import fluorite_wire_pb2 as pb
 
 
 def _build_append_envelope() -> pb.ClientMessage:

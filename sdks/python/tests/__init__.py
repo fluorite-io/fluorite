@@ -1,1 +1,1 @@
-"""Tests for Flourine SDK."""
+"""Tests for Fluorite SDK."""

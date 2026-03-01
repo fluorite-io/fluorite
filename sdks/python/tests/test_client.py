@@ -1,4 +1,4 @@
-"""Tests for FlourineClient with mocked admin and writer."""
+"""Tests for FluoriteClient with mocked admin and writer."""
 
 from dataclasses import dataclass
 from typing import Annotated
@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from flourine import schema, NonNull, FlourineException
-from flourine.client import FlourineClient, ClientConfig
-from flourine._admin import AdminClient
-from flourine.proto import flourine_wire_pb2 as pb
+from fluorite import schema, NonNull, FluoriteException
+from fluorite.client import FluoriteClient, ClientConfig
+from fluorite._admin import AdminClient
+from fluorite.proto import fluorite_wire_pb2 as pb
 
 
 # ---- test fixtures ----
@@ -37,7 +37,7 @@ def make_client(writer=None, admin=None):
     writer = writer or AsyncMock()
     admin = admin or AsyncMock()
     config = ClientConfig(ws_url="ws://test:9000", admin_url="http://test:9001")
-    return FlourineClient(writer, admin, config)
+    return FluoriteClient(writer, admin, config)
 
 
 # ---- topic resolution ----
@@ -78,7 +78,7 @@ async def test_send_topic_override():
 @pytest.mark.asyncio
 async def test_send_no_topic_raises():
     client = make_client()
-    with pytest.raises(FlourineException, match="has no topic"):
+    with pytest.raises(FluoriteException, match="has no topic"):
         await client.send(NoTopicEvent(value=1))
 
 
@@ -88,7 +88,7 @@ async def test_topic_not_found_raises():
     admin.list_topics = AsyncMock(return_value=MOCK_TOPICS)
     client = make_client(admin=admin)
 
-    with pytest.raises(FlourineException, match="Topic not found"):
+    with pytest.raises(FluoriteException, match="Topic not found"):
         await client.send(OrderEvent(order_id="x", amount=1), topic="nonexistent")
 
 
@@ -179,11 +179,11 @@ async def test_send_batch_multiple():
 # ---- @schema(topic=...) integration ----
 
 def test_schema_decorator_stores_topic():
-    assert OrderEvent.__flourine_topic__ == "orders"
+    assert OrderEvent.__fluorite_topic__ == "orders"
 
 
 def test_schema_decorator_no_topic():
-    assert not hasattr(NoTopicEvent, "__flourine_topic__")
+    assert not hasattr(NoTopicEvent, "__fluorite_topic__")
 
 
 # ---- context manager ----

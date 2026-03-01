@@ -1,4 +1,4 @@
-# Flourine: Core Failure-Tolerance Algorithms
+# Fluorite: Core Failure-Tolerance Algorithms
 
 This document describes the algorithms that provide failure tolerance between writers, brokers, and readers. Each section maps to specific code paths and explains the invariants maintained.
 
@@ -29,14 +29,14 @@ A writer sends an `AppendRequest(writer_id, append_seq, batches[])`. The broker 
 
 Each writer maintains a monotonically increasing `append_seq` (`AtomicU64`, starts at 1). The broker uses this to implement idempotent appends.
 
-**Writer side** (`crates/flourine-sdk/src/writer.rs`):
+**Writer side** (`crates/fluorite-sdk/src/writer.rs`):
 
 1. `append_seq` is allocated atomically via `fetch_add(1, SeqCst)` before the request is sent.
 2. On backpressure (`ERR_BACKPRESSURE`), the writer retries with the **same** `append_seq` using exponential backoff (100ms → 10s, up to 5 retries).
 3. Pipelined in-flight requests are bounded by a semaphore (`max_in_flight`, default 256). This prevents unbounded memory growth if the broker is slow.
 4. Each in-flight request has a 30s timeout. On timeout or disconnect, the pending oneshot channel is cleaned up.
 
-**Broker side** (`crates/flourine-broker/src/batched_server/append.rs`):
+**Broker side** (`crates/fluorite-broker/src/batched_server/append.rs`):
 
 Appends are processed synchronously on the connection handler to preserve per-writer TCP arrival order. Non-append messages are dispatched concurrently to spawned tasks.
 
@@ -74,14 +74,14 @@ await_append_ack(pending):
   9. On channel closed: return ERR_INTERNAL_ERROR, complete in-flight
 ```
 
-**Dedup cache** (`crates/flourine-broker/src/dedup.rs`):
+**Dedup cache** (`crates/fluorite-broker/src/dedup.rs`):
 
 - Two-tier: LRU in-memory (100k entries) + Postgres `writer_state` table.
 - On `check()`: read lock for cache hit, write lock + DB query for cache miss.
 - The `Missing` sentinel prevents repeated DB queries for new writers before their first commit.
 - On `update()`: only advances if `append_seq > existing.last_seq` (monotonicity guard, uses `<=` check to skip no-ops).
 
-**Durability of dedup state** (`crates/flourine-broker/src/batched_server/flush.rs`):
+**Durability of dedup state** (`crates/fluorite-broker/src/batched_server/flush.rs`):
 
 During `commit_batch`, the broker persists the latest `(writer_id, last_seq, last_acks)` in the same Postgres transaction that commits the offsets and segment index. When multiple appends from the same writer are in the same flush, only the highest `append_seq` is persisted. The upsert has a `WHERE writer_state.last_seq < EXCLUDED.last_seq` guard, so concurrent brokers processing the same writer never regress the sequence.
 
@@ -116,7 +116,7 @@ The broker must merge records from many writers into efficient S3 objects while 
 
 ### Algorithm
 
-**Buffer** (`crates/flourine-broker/src/buffer.rs`):
+**Buffer** (`crates/fluorite-broker/src/buffer.rs`):
 
 Records are grouped by `BatchKey(topic_id, schema_id)`. Multiple writers targeting the same key have their records appended into a single `BufferedSegment`. Each `PendingWriter` tracks:
 - `segment_keys`: which batch keys this writer contributed to
@@ -127,7 +127,7 @@ The buffer tracks `total_bytes` and triggers a flush when either of:
 - `total_bytes >= max_size_bytes` (default 256 MB)
 - Time since first record in buffer `>= max_wait` (default 200ms)
 
-**Pipelined flush loop** (`crates/flourine-broker/src/batched_server/flush.rs`):
+**Pipelined flush loop** (`crates/fluorite-broker/src/batched_server/flush.rs`):
 
 The flush loop decouples write ingestion from flush I/O: while a flush runs on a spawned task, the loop continues accepting new writes into the buffer. At most one flush is in-flight at a time, preserving offset ordering and dedup correctness.
 
@@ -228,7 +228,7 @@ For each PendingWriter:
 
 Records must be stored durably in S3 and retrieved efficiently for reads. A single S3 object may contain segments for multiple (topic, schema) combinations.
 
-### Format (`crates/flourine-broker/src/fl.rs`)
+### Format (`crates/fluorite-broker/src/fl.rs`)
 
 ```
 ┌───────────────────────────────────────┐
@@ -260,7 +260,7 @@ The footer is encoded as: a varint count, then for each segment: varints for top
 
 Readers need to fetch records starting from a given offset for a topic. The data is in S3, indexed by the `topic_batches` table.
 
-### Algorithm (`crates/flourine-broker/src/batched_server/read.rs`, `fetch.rs`)
+### Algorithm (`crates/fluorite-broker/src/batched_server/read.rs`, `fetch.rs`)
 
 ```
 process_read(ReadRequest { topic_id, offset, max_bytes }):
@@ -314,7 +314,7 @@ Multiple readers in a group need to consume a topic in parallel without duplicat
 
 The `dispatch_cursor` tracks the frontier of dispatched work. The `committed_watermark` tracks the lowest offset that has not yet been committed — everything below it has been fully processed.
 
-### Coordinator Configuration (`crates/flourine-broker/src/coordinator/mod.rs`)
+### Coordinator Configuration (`crates/fluorite-broker/src/coordinator/mod.rs`)
 
 | Field | Default | Purpose |
 |-------|---------|---------|
@@ -323,7 +323,7 @@ The `dispatch_cursor` tracks the frontier of dispatched work. The `committed_wat
 | `broker_id` | random UUID | Identifies this broker instance; stored in `reader_members.broker_id` |
 | `max_inflight_per_reader` | 10 | Maximum outstanding (uncommitted) poll ranges per reader |
 
-### Join Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
+### Join Protocol (`crates/fluorite-broker/src/coordinator/db.rs`)
 
 ```
 join_group(group_id, topic_id, reader_id):
@@ -338,7 +338,7 @@ join_group(group_id, topic_id, reader_id):
 
 Join is lightweight — it registers the member. No assignment computation, no generation bump. The reader begins polling immediately after join.
 
-### Poll Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
+### Poll Protocol (`crates/fluorite-broker/src/coordinator/db.rs`)
 
 The poll is the core dispatch mechanism. The broker hands out the next available offset range:
 
@@ -369,7 +369,7 @@ poll(group_id, topic_id, reader_id, max_bytes):
 - Step 4 uses `FOR UPDATE` on `reader_group_state` to serialize concurrent polls. This is the single serialization point for the group.
 - The broker also fetches and returns the actual records for the dispatched range (via `fetch_records`), so the poll response includes both the lease and the data.
 
-### Heartbeat Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
+### Heartbeat Protocol (`crates/fluorite-broker/src/coordinator/db.rs`)
 
 ```
 heartbeat(group_id, topic_id, reader_id):
@@ -391,7 +391,7 @@ heartbeat(group_id, topic_id, reader_id):
 
 **How dead readers are recovered:** the heartbeat handler of any live reader detects expired members and rolls back the dispatch cursor so their uncommitted work is re-dispatched. No rebalance protocol — the work simply becomes available again.
 
-### Commit Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
+### Commit Protocol (`crates/fluorite-broker/src/coordinator/db.rs`)
 
 ```
 commit_range(group_id, topic_id, reader_id, start_offset, end_offset):
@@ -407,7 +407,7 @@ commit_range(group_id, topic_id, reader_id, start_offset, end_offset):
 
 The commit requires exact match on `(start_offset, end_offset, reader_id)`. A reader that has been evicted (inflight deleted by heartbeat) cannot commit — the row no longer exists.
 
-### Leave Protocol (`crates/flourine-broker/src/coordinator/db.rs`)
+### Leave Protocol (`crates/fluorite-broker/src/coordinator/db.rs`)
 
 ```
 leave_group(group_id, topic_id, reader_id):
@@ -420,7 +420,7 @@ leave_group(group_id, topic_id, reader_id):
 
 Before leaving, the SDK commits all outstanding inflight ranges. Any uncommitted ranges are released for re-dispatch.
 
-### Force Reset (Break-Glass) (`crates/flourine-broker/src/coordinator/db.rs`)
+### Force Reset (Break-Glass) (`crates/fluorite-broker/src/coordinator/db.rs`)
 
 ```
 force_reset(group_id, topic_id):
@@ -433,7 +433,7 @@ force_reset(group_id, topic_id):
 
 This is a manual intervention for stuck groups — clears all state and resets to the last committed position.
 
-### Reader SDK State Machine (`crates/flourine-sdk/src/reader/mod.rs`)
+### Reader SDK State Machine (`crates/fluorite-sdk/src/reader/mod.rs`)
 
 ```
 Init ──join()──► Active ──poll()──► Active (accumulate inflight)
@@ -467,7 +467,7 @@ The SDK tracks inflight ranges locally. Before leaving, it commits all outstandi
 
 ## 6. Broker Graceful Shutdown
 
-### Algorithm (`crates/flourine-broker/src/batched_server/mod.rs`, `crates/flourine-broker/src/shutdown.rs`)
+### Algorithm (`crates/fluorite-broker/src/batched_server/mod.rs`, `crates/fluorite-broker/src/shutdown.rs`)
 
 ```
 run_with_shutdown(state, shutdown_signal):

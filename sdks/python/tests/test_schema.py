@@ -6,8 +6,8 @@ from typing import Annotated, Optional
 
 import pytest
 
-from flourine._schema import schema, Int32, Float32, NonNull
-from flourine.exceptions import SchemaException
+from fluorite._schema import schema, Int32, Float32, NonNull
+from fluorite.exceptions import SchemaException
 
 
 # ============ Primitive Type Mapping (nullable by default) ============
@@ -258,14 +258,14 @@ def test_renames_add_aliases():
     assert field["aliases"] == ["old_name"]
 
 
-def test_flourine_renames_in_schema():
+def test_fluorite_renames_in_schema():
     s = Evolved.schema()
-    assert s["flourine.renames"] == {"old_name": "new_name"}
+    assert s["fluorite.renames"] == {"old_name": "new_name"}
 
 
-def test_flourine_deletions_in_schema():
+def test_fluorite_deletions_in_schema():
     s = Evolved.schema()
-    assert s["flourine.deletions"] == ["removed_field"]
+    assert s["fluorite.deletions"] == ["removed_field"]
 
 
 def test_namespace_in_schema():

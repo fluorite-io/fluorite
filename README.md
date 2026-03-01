@@ -1,4 +1,4 @@
-# Flourine
+# Fluorite
 
 Unified data infrastructure for event streaming, CDC, and schema management.
 
@@ -8,9 +8,9 @@ Production data infrastructure is typically several independent systems: Kafka f
 
 Schema management is particularly fragmented. Confluent Schema Registry is a separate service that enforces compatibility at registration time but not on the broker. Clients manually look up schema IDs. When a field is renamed or removed, the migration happens outside the system — the registry has no concept of renames or deletions. The schema is an artifact managed alongside your code rather than derived from it.
 
-Flourine unifies event ingestion, transport, schema management, and (planned) CDC and cataloging in a single binary. Schemas are defined as native language types — annotated dataclasses in Python, annotated POJOs in Java — and the SDK generates Avro schemas, handles serialization, and tracks evolution (field renames and deletions) in the schema metadata. These concerns share metadata, storage, and failure semantics; unifying them reduces operational surface area.
+Fluorite unifies event ingestion, transport, schema management, and (planned) CDC and cataloging in a single binary. Schemas are defined as native language types — annotated dataclasses in Python, annotated POJOs in Java — and the SDK generates Avro schemas, handles serialization, and tracks evolution (field renames and deletions) in the schema metadata. These concerns share metadata, storage, and failure semantics; unifying them reduces operational surface area.
 
-## What Flourine Does
+## What Fluorite Does
 
 Disaggregated event bus: stateless Rust brokers, S3 for data, Postgres for metadata. Writers send records over WebSocket. Brokers buffer, compress (ZSTD), and flush to S3 as FL files. A single Postgres transaction per flush commits offsets, segment index, and writer dedup state atomically. Readers fetch segments via S3 range reads.
 
@@ -41,7 +41,7 @@ Key properties:
 
 What this replaces:
 
-| Flourine component         | Replaces                          |
+| Fluorite component         | Replaces                          |
 |----------------------------|-----------------------------------|
 | Broker (write/read path)   | Kafka/Redpanda brokers            |
 | Schema registry            | Confluent Schema Registry         |
@@ -77,7 +77,7 @@ Define schemas as native types. The SDK generates Avro schemas, serializes/deser
 **Python** — `@schema` decorator on dataclasses:
 
 ```python
-from flourine import schema, NonNull, Int32
+from fluorite import schema, NonNull, Int32
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -99,10 +99,10 @@ restored: Event = Event.from_bytes(data)
 schema_json: str = Event.schema_json()        # for registry upload
 ```
 
-**Java** — `@FlourineSchema` annotation on POJOs:
+**Java** — `@FluoriteSchema` annotation on POJOs:
 
 ```java
-@FlourineSchema(
+@FluoriteSchema(
     namespace = "com.example",
     renames = {@Rename(from = "old_name", to = "newName")},
     deletions = {"removedField"}
@@ -118,7 +118,7 @@ Event restored = Schemas.fromBytes(Event.class, data);
 String json = Schemas.schemaJson(Event.class); // for registry upload
 ```
 
-Both generate Avro schemas with aliases for renamed fields and `flourine.deletions` metadata for dropped fields. The registry's backward compatibility check passes across renames and deletions.
+Both generate Avro schemas with aliases for renamed fields and `fluorite.deletions` metadata for dropped fields. The registry's backward compatibility check passes across renames and deletions.
 
 ### Writer API
 
@@ -200,7 +200,7 @@ reader.commit().await?;
 
 - **CDC ingestion** — database change capture without Debezium/Connect
 - **Data catalog** — unified metadata across topics, schemas, consumers
-- **Iceberg sink** — streaming to lakehouse (Avro→Arrow→Parquet infra exists in `flourine-core`)
+- **Iceberg sink** — streaming to lakehouse (Avro→Arrow→Parquet infra exists in `fluorite-core`)
 - **JS SDK**, multi-topic reader groups, quotas, multi-tenancy
 
 ## Quick Start
@@ -215,8 +215,8 @@ docker-compose up -d
 ### 2. Start the broker
 
 ```bash
-export DATABASE_URL=postgres://postgres:postgres@localhost:5433/flourine
-cargo run -p flourine-broker --bin flourine-broker
+export DATABASE_URL=postgres://postgres:postgres@localhost:5433/fluorite
+cargo run -p fluorite-broker --bin fluorite-broker
 ```
 
 The broker starts:
@@ -226,39 +226,51 @@ The broker starts:
 ### 3. Bootstrap an API key
 
 ```bash
-export DATABASE_URL=postgres://postgres:postgres@localhost:5433/flourine
-cargo run -p flourine-cli -- bootstrap
+export DATABASE_URL=postgres://postgres:postgres@localhost:5433/fluorite
+cargo run -p fluorite-cli -- bootstrap
 ```
 
 Export the printed key:
 
 ```bash
-export FLOURINE_API_KEY=tb_...
+export FLUORITE_API_KEY=tb_...
 ```
 
 ### 4. Create a topic, write, and tail
 
 ```bash
-flourine topic create my-events --partitions 3
-flourine write --topic my-events '{"name":"alice"}'
-flourine tail --topic my-events
+fluorite topic create my-events --partitions 3
+fluorite write --topic my-events '{"name":"alice"}'
+fluorite tail --topic my-events
 ```
 
-See [crates/flourine-cli/README.md](crates/flourine-cli/README.md) for the full CLI reference.
+See [crates/fluorite-cli/README.md](crates/fluorite-cli/README.md) for the full CLI reference.
 
 ## Project Structure
 
 | Crate / Directory | Purpose |
 |-------------------|---------|
-| `crates/flourine-broker` | Broker binary: WebSocket server, flush pipeline, coordinator |
-| `crates/flourine-sdk` | Rust SDK: Writer, GroupReader |
-| `crates/flourine-core` | Shared types, Avro engine, Arrow/Parquet converters |
-| `crates/flourine-schema` | Schema registry client and compatibility logic |
-| `crates/flourine-wire` | Binary wire protocol encoding/decoding |
-| `crates/flourine-common` | Shared utilities |
-| `crates/flourine-cli` | CLI tool (topic, schema, write, tail) |
+| `crates/fluorite-broker` | Broker binary: WebSocket server, flush pipeline, coordinator |
+| `crates/fluorite-sdk` | Rust SDK: Writer, GroupReader |
+| `crates/fluorite-core` | Shared types, Avro engine, Arrow/Parquet converters |
+| `crates/fluorite-schema` | Schema registry client and compatibility logic |
+| `crates/fluorite-wire` | Binary wire protocol encoding/decoding |
+| `crates/fluorite-common` | Shared utilities |
+| `crates/fluorite-cli` | CLI tool (topic, schema, write, tail) |
 | `sdks/java` | Java SDK |
 | `sdks/python` | Python SDK |
+
+## License
+
+Fluorite is dual-licensed:
+
+- **Open source:** [AGPL-3.0-only](LICENSE) — free for open-source use under
+  the terms of the GNU Affero General Public License v3.0.
+- **Commercial:** A commercial license is available for use cases where AGPL
+  obligations are not feasible. Contact licensing@fluorite.io for details.
+
+All contributions require agreeing to our [CLA](CLA.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Links
 

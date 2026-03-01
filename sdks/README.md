@@ -1,6 +1,6 @@
-# Flourine SDKs
+# Fluorite SDKs
 
-Multi-language client libraries for Flourine Event Bus.
+Multi-language client libraries for Fluorite Event Bus.
 
 ## Available SDKs
 
@@ -70,7 +70,7 @@ async with GroupReader.join(config) as reader:
 ### Java
 
 ```bash
-cd java/flourine-sdk
+cd java/fluorite-sdk
 mvn clean install
 ```
 

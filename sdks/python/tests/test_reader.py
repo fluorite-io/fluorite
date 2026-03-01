@@ -4,8 +4,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from flourine.reader import GroupReader, PollBatch, ReaderConfig, ReaderState
-from flourine.exceptions import ProtocolException, TimeoutException
+from fluorite.reader import GroupReader, PollBatch, ReaderConfig, ReaderState
+from fluorite.exceptions import ProtocolException, TimeoutException
 
 
 def validate_response_bounds(response: bytes, expected_type: int) -> None:

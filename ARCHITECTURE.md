@@ -1,6 +1,6 @@
-# Flourine Architecture
+# Fluorite Architecture
 
-Flourine is a **disaggregated event bus** — stateless Rust brokers backed by S3 for data and Postgres for metadata. Any broker can serve any client; all durable state lives outside the broker process.
+Fluorite is a **disaggregated event bus** — stateless Rust brokers backed by S3 for data and Postgres for metadata. Any broker can serve any client; all durable state lives outside the broker process.
 
 ## System Overview
 
@@ -8,7 +8,7 @@ Flourine is a **disaggregated event bus** — stateless Rust brokers backed by S
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                                   Clients                                    │
 │  ┌───────────┐  ┌───────────┐  ┌───────────┐      ┌─────────────────────┐    │
-│  │ Rust SDK  │  │ Java SDK  │  │Python SDK │      │   CLI (flourine)    │    │
+│  │ Rust SDK  │  │ Java SDK  │  │Python SDK │      │   CLI (fluorite)    │    │
 │  │  Writer   │  │  Writer   │  │  Writer   │      │bootstrap│topic│tail │    │
 │  │  Reader   │  │  Reader   │  │  Reader   │      └─────────────────────┘    │
 │  └───────────┘  └───────────┘  └───────────┘                                 │
@@ -265,7 +265,7 @@ Broker-side dispatch (no partition assignment):
 
 ```
                     ┌───────────────┐
-                    │ flourine-cli  │
+                    │ fluorite-cli  │
                     │   (binary)    │
                     └───────────────┘
                            │
@@ -273,7 +273,7 @@ Broker-side dispatch (no partition assignment):
               │            │            │
               ▼            ▼            ▼
     ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-    │ flourine-sdk  │ │   flourine-   │ │   flourine-   │
+    │ fluorite-sdk  │ │   fluorite-   │ │   fluorite-   │
     │    (lib)      │ │    broker     │ │    common     │
     │               │ │  (bin+lib)    │ │    (lib)      │
     └───────────────┘ └───────────────┘ └───────────────┘
@@ -281,7 +281,7 @@ Broker-side dispatch (no partition assignment):
            │               │              │
            ▼               ▼              │
      ┌───────────────────────────┐
-     │      flourine-wire        │
+     │      fluorite-wire        │
      │         (lib)             │──────┘
      │  protobuf encode/decode   │
      └───────────────────────────┘

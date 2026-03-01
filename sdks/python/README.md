@@ -1,11 +1,11 @@
-# Flourine Python SDK
+# Fluorite Python SDK
 
-Python client library for Flourine Event Bus.
+Python client library for Fluorite Event Bus.
 
 ## Installation
 
 ```bash
-pip install flourine-sdk
+pip install fluorite-sdk
 ```
 
 Or install from source:
@@ -17,13 +17,13 @@ pip install -e .
 
 ## Usage
 
-### FlourineClient (High-Level API)
+### FluoriteClient (High-Level API)
 
 ```python
 import asyncio
 from dataclasses import dataclass
 from typing import Annotated
-from flourine import FlourineClient, ClientConfig, schema, NonNull
+from fluorite import FluoriteClient, ClientConfig, schema, NonNull
 
 @schema(topic="orders", namespace="com.example")
 @dataclass
@@ -38,7 +38,7 @@ async def main():
         api_key="tb_your_api_key",
     )
 
-    async with FlourineClient.connect(config) as client:
+    async with FluoriteClient.connect(config) as client:
         # Send — one call handles schema registration + serialization + partitioning
         await client.send(OrderEvent(order_id="abc", amount=100))
         await client.send(OrderEvent(order_id="abc", amount=100), key=b"abc")       # key-based partition
@@ -56,8 +56,8 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from flourine import Writer, WriterConfig
-from flourine.proto import flourine_wire_pb2 as pb
+from fluorite import Writer, WriterConfig
+from fluorite.proto import fluorite_wire_pb2 as pb
 
 async def main():
     # Connect
@@ -89,7 +89,7 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from flourine import GroupReader, ReaderConfig
+from fluorite import GroupReader, ReaderConfig
 
 async def main():
     config = ReaderConfig(
@@ -118,7 +118,7 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from flourine import GroupReader, ReaderConfig
+from fluorite import GroupReader, ReaderConfig
 
 async def main():
     config = ReaderConfig(
@@ -189,6 +189,6 @@ pytest tests/
 
 ## Wire Protocol
 
-The SDK uses generated protobuf messages from `proto/flourine_wire.proto` for:
+The SDK uses generated protobuf messages from `proto/fluorite_wire.proto` for:
 - outer WebSocket envelope (`ClientMessage`/`ServerMessage`)
 - all request/response payloads

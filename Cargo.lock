@@ -2586,7 +2586,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
 
 [[package]]
-name = "flourine-broker"
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin 0.9.8",
+]
+
+[[package]]
+name = "fluorite-broker"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2601,10 +2612,10 @@ dependencies = [
  "clap",
  "crc32fast",
  "criterion",
- "flourine-common",
- "flourine-iceberg",
- "flourine-schema",
- "flourine-wire",
+ "fluorite-common",
+ "fluorite-iceberg",
+ "fluorite-schema",
+ "fluorite-wire",
  "futures",
  "hdrhistogram",
  "hex",
@@ -2632,7 +2643,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-cli"
+name = "fluorite-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2641,9 +2652,9 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
- "flourine-broker",
- "flourine-common",
- "flourine-sdk",
+ "fluorite-broker",
+ "fluorite-common",
+ "fluorite-sdk",
  "ratatui",
  "reqwest",
  "serde",
@@ -2655,7 +2666,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-common"
+name = "fluorite-common"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -2666,7 +2677,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-core"
+name = "fluorite-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2702,7 +2713,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-iceberg"
+name = "fluorite-iceberg"
 version = "0.1.0"
 dependencies = [
  "apache-avro 0.17.0",
@@ -2711,10 +2722,10 @@ dependencies = [
  "bytes",
  "chrono",
  "criterion",
- "flourine-common",
- "flourine-core",
- "flourine-schema",
- "flourine-wire",
+ "fluorite-common",
+ "fluorite-core",
+ "fluorite-schema",
+ "fluorite-wire",
  "futures",
  "iceberg",
  "iceberg-catalog-sql",
@@ -2733,13 +2744,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-schema"
+name = "fluorite-schema"
 version = "0.1.0"
 dependencies = [
  "apache-avro 0.17.0",
  "axum",
  "chrono",
- "flourine-common",
+ "fluorite-common",
  "serde",
  "serde_json",
  "sha2",
@@ -2751,12 +2762,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-sdk"
+name = "fluorite-sdk"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "flourine-common",
- "flourine-wire",
+ "fluorite-common",
+ "fluorite-wire",
  "futures",
  "thiserror 1.0.69",
  "tokio",
@@ -2766,7 +2777,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-whitepaper"
+name = "fluorite-whitepaper"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2776,27 +2787,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "flourine-wire"
+name = "fluorite-wire"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "flourine-common",
+ "fluorite-common",
  "proptest",
  "prost",
  "prost-build",
  "thiserror 1.0.69",
  "uuid",
-]
-
-[[package]]
-name = "flume"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
-dependencies = [
- "futures-core",
- "futures-sink",
- "spin 0.9.8",
 ]
 
 [[package]]

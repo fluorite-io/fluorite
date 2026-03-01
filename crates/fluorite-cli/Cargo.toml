@@ -1,0 +1,33 @@
+[package]
+name = "fluorite-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fluorite"
+path = "src/main.rs"
+
+[dependencies]
+fluorite-broker = { path = "../fluorite-broker" }
+fluorite-sdk = { path = "../fluorite-sdk" }
+fluorite-common = { path = "../fluorite-common" }
+
+clap = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true }
+apache-avro = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

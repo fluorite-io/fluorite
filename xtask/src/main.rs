@@ -48,7 +48,7 @@ fn print_help() {
     println!("  gen-proto   Regenerate protobuf code for Java/Python and rebuild Rust proto");
     println!("  build       Build the Rust workspace");
     println!("  test-rust   Run Rust tests (workspace)");
-    println!("  test-db     Run flourine-broker DB suites with --include-ignored");
+    println!("  test-db     Run fluorite-broker DB suites with --include-ignored");
     println!("  test-sdk    Run Java and Python SDK tests");
     println!("  test-all    Run all tests across Rust + Java + Python + DB suites");
     println!("  ci          Run gen-proto + build + test-rust + test-sdk + test-db");
@@ -102,14 +102,14 @@ fn test_rust() -> Result<()> {
 
 fn gen_proto() -> Result<()> {
     let root = repo_root();
-    ensure_exists(&root.join("proto/flourine_wire.proto"))?;
+    ensure_exists(&root.join("proto/fluorite_wire.proto"))?;
 
     let mut java = Command::new("protoc");
     java.current_dir(&root).args([
         "-I",
         "proto",
-        "--java_out=sdks/java/flourine-sdk/src/main/java",
-        "proto/flourine_wire.proto",
+        "--java_out=sdks/java/fluorite-sdk/src/main/java",
+        "proto/fluorite_wire.proto",
     ]);
     run_cmd(&mut java).context("failed to generate Java protobuf files")?;
 
@@ -117,14 +117,14 @@ fn gen_proto() -> Result<()> {
     py.current_dir(&root).args([
         "-I",
         "proto",
-        "--python_out=sdks/python/flourine/proto",
-        "proto/flourine_wire.proto",
+        "--python_out=sdks/python/fluorite/proto",
+        "proto/fluorite_wire.proto",
     ]);
     run_cmd(&mut py).context("failed to generate Python protobuf file")?;
 
     let mut rust = Command::new("cargo");
     rust.current_dir(&root)
-        .args(["build", "-p", "flourine-wire"]);
+        .args(["build", "-p", "fluorite-wire"]);
     run_cmd(&mut rust).context("failed to rebuild Rust protobuf output")?;
 
     Ok(())
@@ -135,9 +135,9 @@ fn test_db() -> Result<()> {
     let root = repo_root();
     let suites = discover_broker_test_suites()?;
     if suites.is_empty() {
-        bail!("no flourine-broker integration test suites found");
+        bail!("no fluorite-broker integration test suites found");
     }
-    eprintln!("Discovered {} flourine-broker test suite(s)", suites.len());
+    eprintln!("Discovered {} fluorite-broker test suite(s)", suites.len());
 
     let mut failed = Vec::new();
 
@@ -148,7 +148,7 @@ fn test_db() -> Result<()> {
             "test",
             "-q",
             "-p",
-            "flourine-broker",
+            "fluorite-broker",
             "--test",
             suite.as_str(),
             "--",
@@ -169,11 +169,11 @@ fn test_db() -> Result<()> {
 }
 
 fn discover_broker_test_suites() -> Result<Vec<String>> {
-    let tests_dir = sh_path("crates/flourine-broker/tests");
+    let tests_dir = sh_path("crates/fluorite-broker/tests");
     ensure_exists(&tests_dir)?;
 
     let mut suites = Vec::new();
-    for entry in fs::read_dir(&tests_dir).context("failed to read flourine-broker tests dir")? {
+    for entry in fs::read_dir(&tests_dir).context("failed to read fluorite-broker tests dir")? {
         let entry = entry.context("failed to read test dir entry")?;
         let path = entry.path();
         if !path.is_file() {
@@ -204,7 +204,7 @@ fn test_sdk() -> Result<()> {
 
 fn test_java_sdk() -> Result<()> {
     let mut cmd = Command::new("mvn");
-    cmd.current_dir(sh_path("sdks/java/flourine-sdk"))
+    cmd.current_dir(sh_path("sdks/java/fluorite-sdk"))
         .args(["test"]);
     run_cmd(&mut cmd).context("java SDK tests failed")
 }

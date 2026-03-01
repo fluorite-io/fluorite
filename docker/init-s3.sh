@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize S3 bucket for Flourine
+# Initialize S3 bucket for Fluorite
 
-awslocal s3 mb s3://flourine-batches
-echo "Created S3 bucket: flourine-batches"
+awslocal s3 mb s3://fluorite-batches
+echo "Created S3 bucket: fluorite-batches"

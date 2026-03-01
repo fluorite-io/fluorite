@@ -1,4 +1,4 @@
-# Flourine vs Kafka, Redpanda, WarpStream, Bufstream, Ursa
+# Fluorite vs Kafka, Redpanda, WarpStream, Bufstream, Ursa
 
 ## Architecture Family
 
@@ -6,12 +6,12 @@ These systems fall into two camps:
 
 | | Replicated-log (stateful brokers) | Disaggregated (stateless brokers + object storage) |
 |---|---|---|
-| **Systems** | Kafka, Redpanda | WarpStream, Bufstream, Ursa, **Flourine** |
+| **Systems** | Kafka, Redpanda | WarpStream, Bufstream, Ursa, **Fluorite** |
 | **Durability** | Broker-managed ISR / Raft replication | S3 for payloads, external metadata store |
 | **Scaling** | Partition rebalancing on add/remove | Add/remove brokers instantly |
 | **Failure recovery** | Leader election, ISR catch-up | Retry on any broker |
 
-Flourine is firmly in the disaggregated camp. Its closest architectural peers are **WarpStream** and **Bufstream**.
+Fluorite is firmly in the disaggregated camp. Its closest architectural peers are **WarpStream** and **Bufstream**.
 
 ---
 
@@ -24,11 +24,11 @@ Flourine is firmly in the disaggregated camp. Its closest architectural peers ar
 | WarpStream | Kafka binary protocol | Yes |
 | Bufstream | Kafka binary protocol | Yes |
 | Ursa | Kafka binary protocol | Yes |
-| **Flourine** | **Custom Protobuf over WebSocket** | **No** |
+| **Fluorite** | **Custom Protobuf over WebSocket** | **No** |
 
-This is Flourine's most significant differentiator — and its biggest adoption barrier. Every other system in this comparison speaks Kafka natively. Flourine requires its own SDKs (Rust, Java, Python; JS planned). Existing Kafka Connect connectors, Kafka Streams, Flink Kafka sources/sinks, and the entire Kafka tooling ecosystem don't work with Flourine.
+This is Fluorite's most significant differentiator — and its biggest adoption barrier. Every other system in this comparison speaks Kafka natively. Fluorite requires its own SDKs (Rust, Java, Python; JS planned). Existing Kafka Connect connectors, Kafka Streams, Flink Kafka sources/sinks, and the entire Kafka tooling ecosystem don't work with Fluorite.
 
-**Tradeoff**: The custom protocol is simpler (no need to implement 30+ Kafka API versions), allows Flourine to evolve its semantics freely, and avoids inheriting Kafka protocol bugs (e.g., KAFKA-17754 — the cross-socket sequence number gap that causes torn transactions in all Kafka-compatible systems, found by Jepsen in Bufstream). But it means Flourine must build its own ecosystem from scratch.
+**Tradeoff**: The custom protocol is simpler (no need to implement 30+ Kafka API versions), allows Fluorite to evolve its semantics freely, and avoids inheriting Kafka protocol bugs (e.g., KAFKA-17754 — the cross-socket sequence number gap that causes torn transactions in all Kafka-compatible systems, found by Jepsen in Bufstream). But it means Fluorite must build its own ecosystem from scratch.
 
 ---
 
@@ -41,9 +41,9 @@ This is Flourine's most significant differentiator — and its biggest adoption 
 | WarpStream | Managed cloud DB (DynamoDB/Spanner/CosmosDB) | Vendor-managed |
 | Bufstream | Pluggable: Postgres, Spanner, or etcd | Operator-managed |
 | Ursa | Oxia (custom, TLA+ verified, sharded) | Operator-managed |
-| **Flourine** | **Postgres** | **Operator-managed, SPOF** |
+| **Fluorite** | **Postgres** | **Operator-managed, SPOF** |
 
-Flourine uses Postgres for everything: offsets, segment index, writer dedup, reader groups, schemas, auth. This is elegant (single ACID transaction per flush) but makes Postgres a single point of failure. No writes or reads can proceed if Postgres is down.
+Fluorite uses Postgres for everything: offsets, segment index, writer dedup, reader groups, schemas, auth. This is elegant (single ACID transaction per flush) but makes Postgres a single point of failure. No writes or reads can proceed if Postgres is down.
 
 WarpStream avoids this by using managed cloud databases with built-in HA. Bufstream offers pluggable backends including Spanner (multi-region). Ursa built a custom metadata store (Oxia) with horizontal sharding. Kafka and Redpanda avoid the problem entirely by embedding metadata in the cluster itself.
 
@@ -58,9 +58,9 @@ WarpStream avoids this by using managed cloud databases with built-in HA. Bufstr
 | WarpStream | ~250ms (S3 Express) to ~1s (S3 Standard) | S3 PUT in critical path |
 | Bufstream | ~260ms median, ~500ms p99 | Object storage in critical path |
 | Ursa | 200-500ms (S3 WAL) or ~5ms (BookKeeper) | Configurable per-topic |
-| **Flourine** | **~100ms + S3 + Postgres** | Buffer interval + S3 PUT + PG commit |
+| **Fluorite** | **~100ms + S3 + Postgres** | Buffer interval + S3 PUT + PG commit |
 
-All disaggregated systems pay the S3 PUT latency penalty. Flourine additionally pays for the Postgres transaction (offset allocation + segment index + writer state upsert). Ursa is unique in offering a per-topic choice between the low-latency path (BookKeeper WAL) and the cost-optimized path (S3).
+All disaggregated systems pay the S3 PUT latency penalty. Fluorite additionally pays for the Postgres transaction (offset allocation + segment index + writer state upsert). Ursa is unique in offering a per-topic choice between the low-latency path (BookKeeper WAL) and the cost-optimized path (S3).
 
 ---
 
@@ -73,11 +73,11 @@ All disaggregated systems pay the S3 PUT latency penalty. Flourine additionally 
 | WarpStream | Yes (retroactive tombstones) | Yes | Metadata-layer dedup + Kafka txn protocol |
 | Bufstream | Yes (Jepsen-validated) | Yes (Jepsen-validated, modulo KAFKA-17754) | Kafka-compatible |
 | Ursa | Unknown | **No** (not yet supported) | — |
-| **Flourine** | **Writer-scoped, single last_seq** | **No** | LRU cache + Postgres fallback |
+| **Fluorite** | **Writer-scoped, single last_seq** | **No** | LRU cache + Postgres fallback |
 
-Flourine's dedup is simpler than Kafka's: it tracks a single `last_seq` per writer rather than a sliding window of 5 per partition. This is safe under the SDK's monotonic-increment contract but weaker at the protocol level. There are no transactions — the whitepaper explicitly lists this as a non-goal for v1.
+Fluorite's dedup is simpler than Kafka's: it tracks a single `last_seq` per writer rather than a sliding window of 5 per partition. This is safe under the SDK's monotonic-increment contract but weaker at the protocol level. There are no transactions — the whitepaper explicitly lists this as a non-goal for v1.
 
-The practical impact: Flourine cannot support read-process-write loops with exactly-once guarantees (the core Kafka Streams / Flink use case). For most produce-only workloads with idempotent consumers, this doesn't matter.
+The practical impact: Fluorite cannot support read-process-write loops with exactly-once guarantees (the core Kafka Streams / Flink use case). For most produce-only workloads with idempotent consumers, this doesn't matter.
 
 ---
 
@@ -90,9 +90,9 @@ The practical impact: Flourine cannot support read-process-write loops with exac
 | WarpStream | Kafka-compatible | Kafka-compatible | Any agent or backend |
 | Bufstream | Kafka-compatible | Kafka-compatible | Metadata backend |
 | Ursa | Kafka-compatible | Kafka-compatible | Oxia |
-| **Flourine** | **Custom (JoinGroup/Heartbeat/Poll/Leave/Commit)** | **Broker-driven offset-range dispatch** | **Postgres (dispatch cursor + inflight leases)** |
+| **Fluorite** | **Custom (JoinGroup/Heartbeat/Poll/Leave/Commit)** | **Broker-driven offset-range dispatch** | **Postgres (dispatch cursor + inflight leases)** |
 
-Flourine's reader group protocol uses a poll-based work dispatch model: instead of assigning fixed ownership of offsets to readers, the broker hands out leased offset ranges on demand via `Poll`. Readers request work, process it, and commit the range. Expired leases are automatically reclaimed and re-dispatched. When readers join or leave, work redistribution happens naturally through the poll mechanism — no separate coordination protocol is needed.
+Fluorite's reader group protocol uses a poll-based work dispatch model: instead of assigning fixed ownership of offsets to readers, the broker hands out leased offset ranges on demand via `Poll`. Readers request work, process it, and commit the range. Expired leases are automatically reclaimed and re-dispatched. When readers join or leave, work redistribution happens naturally through the poll mechanism — no separate coordination protocol is needed.
 
 ---
 
@@ -105,9 +105,9 @@ Flourine's reader group protocol uses a poll-based work dispatch model: instead 
 | WarpStream | Mixed-partition files in S3 | No (compaction produces optimized files) | External ETL |
 | Bufstream | Intake → Archive (Parquet/Iceberg) | **Yes — zero-copy** | Built-in |
 | Ursa | WAL → Parquet/Iceberg/Delta | **Yes — native compaction** | Built-in |
-| **Flourine** | **FL (custom ZSTD container)** | **No (Avro→Arrow→Parquet infra exists, Iceberg deferred to v2)** | Planned |
+| **Fluorite** | **FL (custom ZSTD container)** | **No (Avro→Arrow→Parquet infra exists, Iceberg deferred to v2)** | Planned |
 
-Bufstream and Ursa have a significant edge here: they write Parquet/Iceberg natively, eliminating the ETL pipeline entirely. Flourine has the converter machinery in `flourine-core` (Avro→Arrow→Parquet) but hasn't wired it into the data path yet. This is the most compelling v2 feature.
+Bufstream and Ursa have a significant edge here: they write Parquet/Iceberg natively, eliminating the ETL pipeline entirely. Fluorite has the converter machinery in `fluorite-core` (Avro→Arrow→Parquet) but hasn't wired it into the data path yet. This is the most compelling v2 feature.
 
 ---
 
@@ -120,9 +120,9 @@ Bufstream and Ursa have a significant edge here: they write Parquet/Iceberg nati
 | WarpStream | External SR | Same as Kafka | No |
 | Bufstream | **Broker-side** (Buf SR integration) | Protobuf-native, semantic validation | **Yes — can reject bad data** |
 | Ursa | Client-side | Standard Kafka SR | No |
-| **Flourine** | **Separate Avro registry, out-of-band** | **Avro only** | **No** |
+| **Fluorite** | **Separate Avro registry, out-of-band** | **Avro only** | **No** |
 
-Bufstream is unique in offering broker-side schema enforcement with semantic validation (Protovalidate rules). Flourine's schema registry does backward compatibility checks at registration time but doesn't validate records on the append path — the broker treats payloads as opaque bytes.
+Bufstream is unique in offering broker-side schema enforcement with semantic validation (Protovalidate rules). Fluorite's schema registry does backward compatibility checks at registration time but doesn't validate records on the append path — the broker treats payloads as opaque bytes.
 
 ---
 
@@ -135,13 +135,13 @@ Bufstream is unique in offering broker-side schema enforcement with semantic val
 | WarpStream | Low (single stateless binary) | S3 + managed metadata SaaS | Add/remove agents |
 | Bufstream | Low (stateless, Helm chart) | S3 + Postgres/Spanner/etcd | Add/remove brokers |
 | Ursa | Low (stateless) | S3 + Oxia | Add/remove brokers |
-| **Flourine** | **Low (single binary)** | **S3 + Postgres** | **Add/remove agents** |
+| **Fluorite** | **Low (single binary)** | **S3 + Postgres** | **Add/remove agents** |
 
-Flourine's operational model is comparable to Bufstream with Postgres as the metadata backend. The dependency set (S3 + Postgres) is simpler than Kafka's but creates a hard dependency on Postgres availability.
+Fluorite's operational model is comparable to Bufstream with Postgres as the metadata backend. The dependency set (S3 + Postgres) is simpler than Kafka's but creates a hard dependency on Postgres availability.
 
 ---
 
-## Where Flourine Stands
+## Where Fluorite Stands
 
 **Strengths relative to the field:**
 - Simplest metadata model — single Postgres transaction per flush, no Raft, no custom consensus
@@ -154,9 +154,9 @@ Flourine's operational model is comparable to Bufstream with Postgres as the met
 1. **No Kafka protocol compatibility** — every other system has it; this is the biggest ecosystem barrier
 2. **Postgres SPOF** — WarpStream uses managed HA databases, Bufstream supports Spanner, Ursa has Oxia
 3. **No transactions** — Kafka, Redpanda, WarpStream, and Bufstream all have them
-4. **No native Iceberg/Parquet** — Bufstream and Ursa have zero-copy lakehouse; Flourine has the infra but hasn't connected it
+4. **No native Iceberg/Parquet** — Bufstream and Ursa have zero-copy lakehouse; Fluorite has the infra but hasn't connected it
 5. **Single dispatch cursor per group** — all polls serialize on one cursor; no per-topic parallelism beyond pipelined inflight ranges
 6. **Dedup is weaker** — single `last_seq` vs Kafka's per-partition window of 5
 
 **Architectural positioning:**
-Flourine occupies roughly the same design space as WarpStream and Bufstream (stateless brokers, S3 for data, external metadata store) but without Kafka compatibility. If it were to add a Kafka protocol adapter, it would compete directly with those systems. Without it, its value proposition is "a simpler, purpose-built event bus for teams willing to use Flourine-native SDKs" — which is a viable niche but a smaller market.
+Fluorite occupies roughly the same design space as WarpStream and Bufstream (stateless brokers, S3 for data, external metadata store) but without Kafka compatibility. If it were to add a Kafka protocol adapter, it would compete directly with those systems. Without it, its value proposition is "a simpler, purpose-built event bus for teams willing to use Fluorite-native SDKs" — which is a viable niche but a smaller market.

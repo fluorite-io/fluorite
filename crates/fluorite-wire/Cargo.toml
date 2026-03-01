@@ -1,0 +1,19 @@
+[package]
+name = "fluorite-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fluorite-common = { path = "../fluorite-common" }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+prost = "0.13"
+
+[dev-dependencies]
+proptest = "1"
+
+[build-dependencies]
+prost-build = "0.13"

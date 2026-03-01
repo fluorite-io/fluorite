@@ -1,6 +1,6 @@
-# Flourine Java SDK
+# Fluorite Java SDK
 
-Java client library for Flourine Event Bus.
+Java client library for Fluorite Event Bus.
 
 ## Installation
 
@@ -8,28 +8,28 @@ Add to your `pom.xml`:
 
 ```xml
 <dependency>
-    <groupId>io.flourine</groupId>
-    <artifactId>flourine-sdk</artifactId>
+    <groupId>io.fluorite</groupId>
+    <artifactId>fluorite-sdk</artifactId>
     <version>0.1.0</version>
 </dependency>
 ```
 
 ## Usage
 
-### FlourineClient (High-Level API)
+### FluoriteClient (High-Level API)
 
 ```java
-import io.flourine.sdk.*;
-import io.flourine.sdk.schema.*;
+import io.fluorite.sdk.*;
+import io.fluorite.sdk.schema.*;
 
-@FlourineSchema(topic = "orders", namespace = "com.example")
+@FluoriteSchema(topic = "orders", namespace = "com.example")
 public class OrderEvent {
     @NonNull public String orderId;
     public long amount;
 }
 
 // Connect
-try (FlourineClient client = FlourineClient.connect(new ClientConfig().apiKey("tb_..."))) {
+try (FluoriteClient client = FluoriteClient.connect(new ClientConfig().apiKey("tb_..."))) {
     // Send — one call handles schema registration + serialization + partitioning
     client.send(new OrderEvent("abc", 100));
     client.send(new OrderEvent("abc", 100), "abc".getBytes());  // key-based partition
@@ -46,9 +46,9 @@ try (FlourineClient client = FlourineClient.connect(new ClientConfig().apiKey("t
 ### Writer (Low-Level API)
 
 ```java
-import io.flourine.sdk.*;
-import io.flourine.sdk.proto.BatchAck;
-import io.flourine.sdk.proto.Record;
+import io.fluorite.sdk.*;
+import io.fluorite.sdk.proto.BatchAck;
+import io.fluorite.sdk.proto.Record;
 import com.google.protobuf.ByteString;
 
 // Connect
@@ -76,9 +76,9 @@ writer.close();
 ### Reader (with Reader Groups)
 
 ```java
-import io.flourine.sdk.*;
-import io.flourine.sdk.proto.PartitionResult;
-import io.flourine.sdk.proto.Record;
+import io.fluorite.sdk.*;
+import io.fluorite.sdk.proto.PartitionResult;
+import io.fluorite.sdk.proto.Record;
 
 // Configure
 ReaderConfig config = new ReaderConfig()
@@ -113,10 +113,10 @@ reader.close();
 ### Schema
 
 ```java
-import io.flourine.sdk.schema.*;
+import io.fluorite.sdk.schema.*;
 
 // All fields are nullable by default. Use @NonNull to require a field.
-@FlourineSchema
+@FluoriteSchema
 public class Order {
     @NonNull public String orderId;
     public long amount;          // nullable ["null", "long"]
@@ -124,7 +124,7 @@ public class Order {
 }
 
 // With evolution metadata
-@FlourineSchema(
+@FluoriteSchema(
     namespace = "com.example",
     renames = {@Rename(from = "old_name", to = "newName")},
     deletions = {"removedField"}
@@ -142,12 +142,12 @@ byte[] bytes = Schemas.toBytes(order);
 Order restored = Schemas.fromBytes(Order.class, bytes);
 ```
 
-Supported types: `String`, `int`/`Integer`, `long`/`Long`, `float`/`Float`, `double`/`Double`, `boolean`/`Boolean`, `byte[]`, `List<T>`, `Map<String,T>`, Java enums, nested `@FlourineSchema` classes.
+Supported types: `String`, `int`/`Integer`, `long`/`Long`, `float`/`Float`, `double`/`Double`, `boolean`/`Boolean`, `byte[]`, `List<T>`, `Map<String,T>`, Java enums, nested `@FluoriteSchema` classes.
 
 ## Building
 
 ```bash
-cd sdks/java/flourine-sdk
+cd sdks/java/fluorite-sdk
 mvn clean install
 ```
 
@@ -159,6 +159,6 @@ mvn test
 
 ## Wire Protocol
 
-The SDK uses generated protobuf messages from `proto/flourine_wire.proto` for:
+The SDK uses generated protobuf messages from `proto/fluorite_wire.proto` for:
 - outer WebSocket envelope (`ClientMessage`/`ServerMessage`)
 - all request/response payloads
