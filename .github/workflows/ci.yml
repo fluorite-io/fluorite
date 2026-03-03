@@ -297,11 +297,11 @@ jobs:
           pytest tests/
 
   # ---------------------------------------------------------------------------
-  # Integration tests — fast (Postgres + LocalStack)
-  # admin, auth, db, e2e write, negative tests
+  # Integration tests (Postgres + LocalStack, parallel via cargo)
+  # All integration test binaries run concurrently on an 8-core runner.
   # ---------------------------------------------------------------------------
-  test-integration-fast:
-    runs-on: ubuntu-latest
+  test-integration:
+    runs-on: ubuntu-latest-8-cores
     needs: [detect-changes, test-broker-unit]
     if: needs.detect-changes.outputs.needs-broker == 'true'
     services:
@@ -350,22 +350,20 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           AWS_ENDPOINT_URL: http://localhost:4566
 
-      - name: Run integration tests
+      - name: Run integration tests (parallel)
         run: |
-          tests=(
-            admin_api_integration
-            auth_integration
-            db_integration
-            e2e_auth
-            e2e_write
-            integration
-            negative_tests
-          )
-          for name in "${tests[@]}"; do
-            echo "::group::$name"
-            cargo test -p fluorite-broker --test "$name" -- --include-ignored
-            echo "::endgroup::"
-          done
+          cargo test -p fluorite-broker --no-fail-fast \
+            --test admin_api_integration \
+            --test auth_integration \
+            --test coordinator_integration \
+            --test db_integration \
+            --test e2e_auth \
+            --test e2e_load \
+            --test e2e_reader_groups \
+            --test e2e_write \
+            --test integration \
+            --test negative_tests \
+            -- --include-ignored
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: test
@@ -373,10 +371,12 @@ jobs:
           AWS_ENDPOINT_URL: http://localhost:4566
 
   # ---------------------------------------------------------------------------
-  # Integration tests — heavy (coordinator, reader groups, load)
+  # Jepsen chaos tests (Postgres + LocalStack, parallel via cargo)
+  # All 22 jepsen test binaries (including #[ignore] soak tests) run
+  # concurrently on an 8-core runner.
   # ---------------------------------------------------------------------------
-  test-integration-heavy:
-    runs-on: ubuntu-latest
+  test-jepsen:
+    runs-on: ubuntu-latest-8-cores
     needs: [detect-changes, test-broker-unit]
     if: needs.detect-changes.outputs.needs-broker == 'true'
     services:
@@ -425,245 +425,33 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           AWS_ENDPOINT_URL: http://localhost:4566
 
-      - name: Run integration tests
+      - name: Run Jepsen tests (parallel)
         run: |
-          tests=(
-            coordinator_integration
-            e2e_reader_groups
-            e2e_load
-          )
-          for name in "${tests[@]}"; do
-            echo "::group::$name"
-            cargo test -p fluorite-broker --test "$name" -- --include-ignored
-            echo "::endgroup::"
-          done
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT_URL: http://localhost:4566
-
-  # ---------------------------------------------------------------------------
-  # Jepsen batch 1 — fast fault injection tests (~5s each)
-  # ---------------------------------------------------------------------------
-  test-jepsen-fast:
-    runs-on: ubuntu-latest
-    needs: [detect-changes, test-broker-unit]
-    if: needs.detect-changes.outputs.needs-broker == 'true'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: fluorite
-        ports:
-          - "5433:5432"
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-      localstack:
-        image: localstack/localstack:3.0
-        env:
-          SERVICES: s3
-          DEBUG: "0"
-          AWS_DEFAULT_REGION: us-east-1
-        ports:
-          - "4566:4566"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run database migrations
-        run: |
-          psql "$DATABASE_URL" -f migrations/001_init.sql
-          psql "$DATABASE_URL" -f migrations/002_iceberg.sql
-
-      - name: Create S3 bucket
-        run: |
-          pip install awscli-local
-          awslocal s3 mb s3://fluorite-batches
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT_URL: http://localhost:4566
-
-      - name: Run Jepsen tests (fast)
-        run: |
-          tests=(
-            jepsen_backpressure
-            jepsen_shutdown
-            jepsen_read_faults
-            jepsen_partition
-            jepsen_offset
-            jepsen_reader_churn
-            jepsen_partial_commit
-            jepsen_fl_corruption
-            jepsen_partial_write
-          )
-          for name in "${tests[@]}"; do
-            echo "::group::$name"
-            cargo test -p fluorite-broker --test "$name" -- --include-ignored
-            echo "::endgroup::"
-          done
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT_URL: http://localhost:4566
-
-  # ---------------------------------------------------------------------------
-  # Jepsen batch 2 — medium fault injection tests (~5-15s each)
-  # ---------------------------------------------------------------------------
-  test-jepsen-medium:
-    runs-on: ubuntu-latest
-    needs: [detect-changes, test-broker-unit]
-    if: needs.detect-changes.outputs.needs-broker == 'true'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: fluorite
-        ports:
-          - "5433:5432"
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-      localstack:
-        image: localstack/localstack:3.0
-        env:
-          SERVICES: s3
-          DEBUG: "0"
-          AWS_DEFAULT_REGION: us-east-1
-        ports:
-          - "4566:4566"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run database migrations
-        run: |
-          psql "$DATABASE_URL" -f migrations/001_init.sql
-          psql "$DATABASE_URL" -f migrations/002_iceberg.sql
-
-      - name: Create S3 bucket
-        run: |
-          pip install awscli-local
-          awslocal s3 mb s3://fluorite-batches
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT_URL: http://localhost:4566
-
-      - name: Run Jepsen tests (medium)
-        run: |
-          tests=(
-            jepsen_crash
-            jepsen_dedup_pressure
-            jepsen_linearizability
-            jepsen_idempotent
-            jepsen_process_pause
-            jepsen_postgres_failure
-            jepsen_network_partition
-            jepsen_multi_topic
-            jepsen_reader_group_chaos
-          )
-          for name in "${tests[@]}"; do
-            echo "::group::$name"
-            cargo test -p fluorite-broker --test "$name" -- --include-ignored
-            echo "::endgroup::"
-          done
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT_URL: http://localhost:4566
-
-  # ---------------------------------------------------------------------------
-  # Jepsen batch 3 — heavy tests + soak tests (includes #[ignore])
-  # ---------------------------------------------------------------------------
-  test-jepsen-heavy:
-    runs-on: ubuntu-latest
-    needs: [detect-changes, test-broker-unit]
-    if: needs.detect-changes.outputs.needs-broker == 'true'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: fluorite
-        ports:
-          - "5433:5432"
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-      localstack:
-        image: localstack/localstack:3.0
-        env:
-          SERVICES: s3
-          DEBUG: "0"
-          AWS_DEFAULT_REGION: us-east-1
-        ports:
-          - "4566:4566"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run database migrations
-        run: |
-          psql "$DATABASE_URL" -f migrations/001_init.sql
-          psql "$DATABASE_URL" -f migrations/002_iceberg.sql
-
-      - name: Create S3 bucket
-        run: |
-          pip install awscli-local
-          awslocal s3 mb s3://fluorite-batches
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT_URL: http://localhost:4566
-
-      - name: Run Jepsen tests (heavy + soak)
-        run: |
-          tests=(
-            jepsen_reader_groups
-            jepsen_pipelined_flush
-            jepsen_exactly_once
-            jepsen_chaos_workload
-            jepsen_multi_broker
-          )
-          for name in "${tests[@]}"; do
-            echo "::group::$name"
-            cargo test -p fluorite-broker --test "$name" -- --include-ignored
-            echo "::endgroup::"
-          done
+          cargo test -p fluorite-broker --no-fail-fast \
+            --test jepsen_backpressure \
+            --test jepsen_chaos_workload \
+            --test jepsen_crash \
+            --test jepsen_dedup_pressure \
+            --test jepsen_exactly_once \
+            --test jepsen_fl_corruption \
+            --test jepsen_idempotent \
+            --test jepsen_linearizability \
+            --test jepsen_multi_broker \
+            --test jepsen_multi_topic \
+            --test jepsen_network_partition \
+            --test jepsen_offset \
+            --test jepsen_partial_commit \
+            --test jepsen_partial_write \
+            --test jepsen_partition \
+            --test jepsen_pipelined_flush \
+            --test jepsen_postgres_failure \
+            --test jepsen_process_pause \
+            --test jepsen_read_faults \
+            --test jepsen_reader_churn \
+            --test jepsen_reader_group_chaos \
+            --test jepsen_reader_groups \
+            --test jepsen_shutdown \
+            -- --include-ignored
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: test
@@ -675,7 +463,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-cross-language:
     runs-on: ubuntu-latest
-    needs: [detect-changes, test-integration-fast, test-integration-heavy, test-jepsen-heavy]
+    needs: [detect-changes, test-integration, test-jepsen]
     if: >-
       github.ref == 'refs/heads/main'
       && needs.detect-changes.outputs.needs-broker == 'true'
