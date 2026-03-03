@@ -371,6 +371,10 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
         .expect("INVARIANT: per-producer offsets should be monotonic");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +702,10 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
         .expect("INVARIANT: per-producer offsets monotonic");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 }
 
 /// Short randomized chaos: 30s, 6 cycles of 5s.
@@ -1009,6 +1017,10 @@ async fn test_soak_2min() {
         .expect("INVARIANT: per-producer offsets monotonic");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 
     let total_writes = h.writes.len();
     let successful_writes = h.writes.iter().filter(|w| w.success).count();

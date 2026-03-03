@@ -41,6 +41,10 @@ pub struct FaultyObjectStore {
     black_hole_get: Arc<AtomicBool>,
     /// Notified when partition is healed
     unpartition_notify: Arc<Notify>,
+    /// Corrupt next get_range response (flip first byte)
+    corrupt_next_get_range: Arc<AtomicBool>,
+    /// Truncate next get_range response (return half the data)
+    truncate_next_get_range: Arc<AtomicBool>,
 }
 
 impl FaultyObjectStore {
@@ -63,6 +67,8 @@ impl FaultyObjectStore {
             black_hole_put: Arc::new(AtomicBool::new(false)),
             black_hole_get: Arc::new(AtomicBool::new(false)),
             unpartition_notify: Arc::new(Notify::new()),
+            corrupt_next_get_range: Arc::new(AtomicBool::new(false)),
+            truncate_next_get_range: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -113,6 +119,16 @@ impl FaultyObjectStore {
         self.black_hole_get.store(true, Ordering::SeqCst);
     }
 
+    /// Corrupt next get_range response (flip first byte).
+    pub fn corrupt_next_get_range(&self) {
+        self.corrupt_next_get_range.store(true, Ordering::SeqCst);
+    }
+
+    /// Truncate next get_range response (return half the data).
+    pub fn truncate_next_get_range(&self) {
+        self.truncate_next_get_range.store(true, Ordering::SeqCst);
+    }
+
     /// Heal all partitions: unblock hanging puts and gets.
     pub fn heal_partition(&self) {
         self.black_hole_put.store(false, Ordering::SeqCst);
@@ -131,6 +147,8 @@ impl FaultyObjectStore {
         self.fail_put_remaining.store(0, Ordering::SeqCst);
         self.black_hole_put.store(false, Ordering::SeqCst);
         self.black_hole_get.store(false, Ordering::SeqCst);
+        self.corrupt_next_get_range.store(false, Ordering::SeqCst);
+        self.truncate_next_get_range.store(false, Ordering::SeqCst);
         self.unpartition_notify.notify_waiters();
     }
 }
@@ -259,7 +277,25 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
         if delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
-        self.inner.get_range(key, start, len).await
+        let result = self.inner.get_range(key, start, len).await?;
+
+        // Corrupt: flip first byte
+        if self.corrupt_next_get_range.swap(false, Ordering::SeqCst) {
+            let mut data = result.to_vec();
+            if !data.is_empty() {
+                data[0] ^= 0xFF;
+            }
+            return Ok(Bytes::from(data));
+        }
+
+        // Truncate: return half the data
+        if self.truncate_next_get_range.swap(false, Ordering::SeqCst) {
+            let data = result.to_vec();
+            let half = data.len() / 2;
+            return Ok(Bytes::from(data[..half].to_vec()));
+        }
+
+        Ok(result)
     }
 
     async fn delete(
@@ -397,6 +433,8 @@ pub struct CrashableWsBroker {
     addr: SocketAddr,
     server_handle: Option<JoinHandle<()>>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    cancel_token: Option<fluorite_broker::CancellationToken>,
+    coordinator_config: Option<fluorite_broker::CoordinatorConfig>,
     temp_dir: TempDir,
 }
 
@@ -410,6 +448,8 @@ impl CrashableWsBroker {
             addr: "127.0.0.1:0".parse().unwrap(),
             server_handle: None,
             shutdown_tx: None,
+            cancel_token: None,
+            coordinator_config: None,
             temp_dir,
         };
         broker.boot().await;
@@ -426,6 +466,8 @@ impl CrashableWsBroker {
             addr: "127.0.0.1:0".parse().unwrap(),
             server_handle: None,
             shutdown_tx: None,
+            cancel_token: None,
+            coordinator_config: None,
             temp_dir,
         };
         broker.boot().await;
@@ -442,9 +484,32 @@ impl CrashableWsBroker {
             addr: "127.0.0.1:0".parse().unwrap(),
             server_handle: None,
             shutdown_tx: None,
+            cancel_token: None,
+            coordinator_config: None,
             temp_dir,
         };
         broker.boot_with_config(buffer).await;
+        broker
+    }
+
+    /// Start a broker with custom coordinator config (for reader group timeout tests).
+    pub async fn start_with_coordinator_config(
+        pool: PgPool,
+        coordinator_config: fluorite_broker::CoordinatorConfig,
+    ) -> Self {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let store = FaultyObjectStore::new(LocalFsStore::new(temp_dir.path().to_path_buf()));
+        let mut broker = Self {
+            pool,
+            store,
+            addr: "127.0.0.1:0".parse().unwrap(),
+            server_handle: None,
+            shutdown_tx: None,
+            cancel_token: None,
+            coordinator_config: Some(coordinator_config),
+            temp_dir,
+        };
+        broker.boot().await;
         broker
     }
 
@@ -463,7 +528,18 @@ impl CrashableWsBroker {
             require_auth: false,
             auth_timeout: Duration::from_secs(10),
         };
-        let state = BrokerState::new(self.pool.clone(), self.store.clone(), config).await;
+        let coordinator_config = self
+            .coordinator_config
+            .clone()
+            .unwrap_or_default();
+        let state = BrokerState::with_coordinator_config(
+            self.pool.clone(),
+            self.store.clone(),
+            config,
+            coordinator_config,
+        )
+        .await;
+        self.cancel_token = Some(state.cancel_token());
         let handle = tokio::spawn(async move {
             let _ = fluorite_broker::run(state).await;
         });
@@ -490,6 +566,8 @@ impl CrashableWsBroker {
             addr: "127.0.0.1:0".parse().unwrap(),
             server_handle: None,
             shutdown_tx: None,
+            cancel_token: None,
+            coordinator_config: None,
             temp_dir,
         };
         broker.boot_with_shutdown().await;
@@ -507,7 +585,18 @@ impl CrashableWsBroker {
             require_auth: false,
             auth_timeout: Duration::from_secs(10),
         };
-        let state = BrokerState::new(self.pool.clone(), self.store.clone(), config).await;
+        let coordinator_config = self
+            .coordinator_config
+            .clone()
+            .unwrap_or_default();
+        let state = BrokerState::with_coordinator_config(
+            self.pool.clone(),
+            self.store.clone(),
+            config,
+            coordinator_config,
+        )
+        .await;
+        self.cancel_token = Some(state.cancel_token());
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
             let shutdown = async { rx.await.ok(); };
@@ -534,6 +623,9 @@ impl CrashableWsBroker {
     }
 
     pub fn crash(&mut self) {
+        if let Some(token) = self.cancel_token.take() {
+            token.cancel();
+        }
         if let Some(handle) = self.server_handle.take() {
             handle.abort();
         }

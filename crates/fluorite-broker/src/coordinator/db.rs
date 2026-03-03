@@ -207,11 +207,21 @@ impl Coordinator {
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        // 1. Release this reader's inflight ranges
+        // 1. Release this reader's inflight ranges and roll back
+        //    dispatch_cursor so those ranges get re-dispatched to other readers.
         sqlx::query(
             r#"
-            DELETE FROM reader_inflight
-            WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3
+            WITH deleted AS (
+                DELETE FROM reader_inflight
+                WHERE group_id = $1 AND topic_id = $2 AND reader_id = $3
+                RETURNING start_offset
+            )
+            UPDATE reader_group_state
+            SET dispatch_cursor = LEAST(
+                dispatch_cursor,
+                COALESCE((SELECT MIN(start_offset) FROM deleted), dispatch_cursor)
+            )
+            WHERE group_id = $1 AND topic_id = $2
             "#,
         )
         .bind(group_id)
@@ -220,7 +230,7 @@ impl Coordinator {
         .execute(&mut *tx)
         .await?;
 
-        // 2. Advance committed_watermark
+        // 2. Update committed_watermark
         sqlx::query(
             r#"
             UPDATE reader_group_state

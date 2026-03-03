@@ -607,6 +607,10 @@ async fn test_multi_broker_chaos() {
         .expect("INVARIANT: per-producer offsets monotonic");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 }
 
 /// 2 brokers. Partition broker 0 from S3. Writes via broker 0 hang.
@@ -791,6 +795,10 @@ async fn test_split_brain_writes() {
         .expect("INVARIANT: no duplicate records");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 }
 
 /// 2 brokers. Close broker 0's DB pool. Broker 0's writes fail.

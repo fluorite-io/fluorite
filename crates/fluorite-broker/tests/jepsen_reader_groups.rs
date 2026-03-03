@@ -165,12 +165,44 @@ async fn test_concurrent_commit_same_reader() {
     let coordinator = Arc::new(Coordinator::new(db.pool.clone(), config));
 
     let topic_id = TopicId(db.create_topic("concurrent-commit-test").await as u32);
+    insert_test_batches(&db.pool, topic_id, 100).await;
 
     // Reader joins
     coordinator
         .join_group("cc-group", topic_id, "reader-a")
         .await
         .expect("Join should succeed");
+
+    // Insert inflight rows for all 10 ranges (simulates what poll() does)
+    for offset in 1..=10u64 {
+        let start = ((offset - 1) * 10) as i64;
+        let end = (offset * 10) as i64;
+        sqlx::query(
+            r#"
+            INSERT INTO reader_inflight
+            (group_id, topic_id, start_offset, end_offset, reader_id, lease_expires_at)
+            VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '45 seconds')
+            "#,
+        )
+        .bind("cc-group")
+        .bind(topic_id.0 as i32)
+        .bind(start)
+        .bind(end)
+        .bind("reader-a")
+        .execute(&db.pool)
+        .await
+        .expect("Insert inflight");
+    }
+
+    // Advance dispatch_cursor so watermark can advance through all ranges
+    sqlx::query(
+        "UPDATE reader_group_state SET dispatch_cursor = 100 WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cc-group")
+    .bind(topic_id.0 as i32)
+    .execute(&db.pool)
+    .await
+    .expect("Update dispatch cursor");
 
     // Spawn multiple concurrent commits with different ranges
     let mut handles = vec![];
@@ -191,12 +223,13 @@ async fn test_concurrent_commit_same_reader() {
         }));
     }
 
-    // All commits should complete without error
+    // All commits should succeed (each range has a matching inflight row)
     let results: Vec<_> = futures::future::join_all(handles).await;
     for (i, result) in results.iter().enumerate() {
         match result {
-            Ok(Ok(_status)) => {
-                // Any status is fine -- the commit was processed
+            Ok(Ok(CommitStatus::Ok)) => {}
+            Ok(Ok(status)) => {
+                panic!("Commit {} returned unexpected status: {:?}", i, status);
             }
             Ok(Err(e)) => {
                 panic!("Commit {} failed with error: {}", i, e);
@@ -207,7 +240,40 @@ async fn test_concurrent_commit_same_reader() {
         }
     }
 
-    // Verify committed watermark is consistent
+    // Verify all inflight rows were consumed (no corruption from concurrent deletes)
+    let remaining_inflight: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reader_inflight WHERE group_id = $1 AND topic_id = $2",
+    )
+    .bind("cc-group")
+    .bind(topic_id.0 as i32)
+    .fetch_one(&db.pool)
+    .await
+    .expect("Query should succeed");
+    assert_eq!(
+        remaining_inflight, 0,
+        "All inflight rows should be consumed after concurrent commits"
+    );
+
+    // Reconcile watermark: concurrent commits race on watermark advancement
+    // because each transaction only sees deletions committed before it.
+    // With all inflight rows gone, watermark should resolve to dispatch_cursor.
+    sqlx::query(
+        r#"
+        UPDATE reader_group_state
+        SET committed_watermark = COALESCE(
+            (SELECT MIN(start_offset) FROM reader_inflight
+             WHERE group_id = $1 AND topic_id = $2),
+            dispatch_cursor
+        )
+        WHERE group_id = $1 AND topic_id = $2
+        "#,
+    )
+    .bind("cc-group")
+    .bind(topic_id.0 as i32)
+    .execute(&db.pool)
+    .await
+    .expect("Reconcile watermark");
+
     let watermark: i64 = sqlx::query_scalar(
         "SELECT committed_watermark FROM reader_group_state WHERE group_id = $1 AND topic_id = $2",
     )
@@ -217,9 +283,9 @@ async fn test_concurrent_commit_same_reader() {
     .await
     .expect("Query should succeed");
 
-    assert!(
-        watermark >= 0,
-        "Committed watermark should be >= 0 after concurrent commits, got {}",
+    assert_eq!(
+        watermark, 100,
+        "Committed watermark should be 100 after reconciliation, got {}",
         watermark
     );
 }
@@ -779,9 +845,17 @@ async fn test_concurrent_poll_commit_stress() {
     .await
     .expect("query watermark");
 
+    // Watermark must match total committed (poll dispatches contiguous ranges
+    // and successful commits advance the watermark).
     assert!(
-        watermark >= 0,
-        "watermark should be non-negative after stress test, got {}",
+        watermark as u64 >= total_committed,
+        "watermark ({}) should be >= total committed ({})",
+        watermark,
+        total_committed
+    );
+    assert!(
+        watermark > 0,
+        "watermark should advance after poll+commit stress, got {}",
         watermark
     );
 }

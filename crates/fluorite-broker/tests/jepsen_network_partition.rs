@@ -320,6 +320,10 @@ async fn test_s3_partition_concurrent_writes() {
         .expect("INVARIANT: no duplicate records");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 }
 
 /// Partition puts only (gets still work). Existing data readable.

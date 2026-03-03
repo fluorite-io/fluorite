@@ -182,20 +182,23 @@ fn spawn_producer(
 
             let w = ws.as_mut().unwrap();
 
-            // Only record fresh writes in the operation history.
-            // Retries are not new operations — the original write's outcome
-            // is unknown (killed mid-flight), and recording the retry with
-            // a later timestamp would break WW causal ordering if the broker
-            // returns an idempotent ack with the original (earlier) offset.
-            let history_idx = if !is_retry {
+            // Always record write attempts so verify_no_phantom_writes can
+            // detect fabricated data. The original incarnation may have been
+            // killed after setting last_unacked_seq but before record_write,
+            // leaving the value untracked if we only record fresh writes.
+            //
+            // Only return the index for fresh writes — retries never call
+            // record_write_complete because the dedup-acked offset is from
+            // an earlier epoch, and recording it with a later timestamp
+            // would create a false WW causal ordering violation.
+            let history_idx = {
                 let mut h = history.lock().await;
-                Some(h.record_write(
+                let idx = h.record_write(
                     writer_id,
                     TopicId(0),
                     Bytes::from(val.clone()),
-                ))
-            } else {
-                None
+                );
+                if !is_retry { Some(idx) } else { None }
             };
 
             match ws_produce(w, writer_id, seq, topic_id, &val).await {
@@ -364,6 +367,10 @@ async fn final_read_and_verify(
         .expect("INVARIANT: per-producer offsets monotonic");
     h.verify_write_write_causal()
         .expect("INVARIANT: write-write causal ordering");
+    h.verify_poll_contiguity()
+        .expect("INVARIANT: sequential reads don't skip offsets");
+    h.verify_no_phantom_writes()
+        .expect("INVARIANT: no unacked values in reads");
 
     // Payload-level exactly-once check.
     let mut seen_payloads: HashSet<Vec<u8>> = HashSet::new();

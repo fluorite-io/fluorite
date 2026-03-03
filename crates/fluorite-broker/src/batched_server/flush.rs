@@ -56,6 +56,10 @@ pub(crate) async fn flush_loop<S: ObjectStore + Send + Sync + 'static>(
 
     loop {
         tokio::select! {
+            _ = state.cancel_token.cancelled() => {
+                debug!("Cancel token triggered, stopping flush loop");
+                break;
+            }
             Some(cmd) = rx.recv() => {
                 let mut should_force_flush = false;
                 let mut should_shutdown = false;

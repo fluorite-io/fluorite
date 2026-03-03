@@ -25,6 +25,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+use tokio_util::sync::CancellationToken;
+
 use bumpalo::Bump;
 use futures::{SinkExt, StreamExt};
 use sqlx::PgPool;
@@ -148,6 +150,8 @@ pub struct BrokerState<S: ObjectStore> {
     in_flight_append: Arc<Mutex<HashMap<WriterId, WriterInFlightState>>>,
     /// Number of queued append commands waiting in flush loop.
     pending_flush_commands: Arc<AtomicUsize>,
+    /// Token cancelled on hard crash to stop flush loop and connection handlers.
+    cancel_token: CancellationToken,
     /// Iceberg ingestion buffer (None = disabled).
     #[cfg(feature = "iceberg")]
     pub iceberg_buffer: Option<Arc<fluorite_iceberg::IcebergBuffer>>,
@@ -175,6 +179,7 @@ impl<S: ObjectStore + Send + Sync + 'static> BrokerState<S> {
         let backpressure = Arc::new(RwLock::new(false));
         let in_flight_append = Arc::new(Mutex::new(HashMap::new()));
         let pending_flush_commands = Arc::new(AtomicUsize::new(0));
+        let cancel_token = CancellationToken::new();
 
         // Initialize Iceberg buffer if configured
         #[cfg(feature = "iceberg")]
@@ -215,6 +220,7 @@ impl<S: ObjectStore + Send + Sync + 'static> BrokerState<S> {
             backpressure: backpressure.clone(),
             in_flight_append,
             pending_flush_commands,
+            cancel_token,
             #[cfg(feature = "iceberg")]
             iceberg_buffer,
         });
@@ -228,6 +234,11 @@ impl<S: ObjectStore + Send + Sync + 'static> BrokerState<S> {
         });
 
         state
+    }
+
+    /// Get a clone of the cancellation token for crash simulation.
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
     }
 
     /// Check if backpressure is active.
@@ -347,6 +358,9 @@ async fn send_outbound(out_tx: &mpsc::Sender<OutboundMessage>, data: Vec<u8>) ->
     }
 }
 
+/// Reader group membership tracked per connection for cleanup on disconnect.
+type ReaderMemberships = Arc<StdMutex<Vec<(String, fluorite_common::ids::TopicId, String)>>>;
+
 /// Handle a single WebSocket connection.
 async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
     stream: TcpStream,
@@ -377,6 +391,8 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
         ConnectionContext { principal: None }
     };
 
+    let reader_memberships: ReaderMemberships = Arc::new(StdMutex::new(Vec::new()));
+
     let (out_tx, mut out_rx) = mpsc::channel::<OutboundMessage>(1024);
     let writer_task = tokio::spawn(async move {
         while let Some(outbound) = out_rx.recv().await {
@@ -406,13 +422,18 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
         }
     });
 
-    while let Some(msg) = read.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("WebSocket error from {}: {}", addr, e);
-                break;
-            }
+    let cancel = state.cancel_token.clone();
+    loop {
+        let msg = tokio::select! {
+            _ = cancel.cancelled() => break,
+            result = read.next() => match result {
+                Some(Ok(m)) => m,
+                Some(Err(e)) => {
+                    warn!("WebSocket error from {}: {}", addr, e);
+                    break;
+                }
+                None => break,
+            },
         };
 
         match msg {
@@ -476,6 +497,32 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                         }
                     }
                 } else {
+                    // Track reader group membership for cleanup on disconnect.
+                    // Optimistic: tracked before handler confirms success.
+                    // Calling leave_group for a non-member is a safe no-op.
+                    if let Ok((ref msg, used)) = decode_client_message(&data) {
+                        if used == data.len() {
+                            match msg {
+                                ClientMessage::JoinGroup(req) => {
+                                    let tid = req.topic_ids.first().copied()
+                                        .unwrap_or(fluorite_common::ids::TopicId(0));
+                                    reader_memberships.lock().unwrap().push(
+                                        (req.group_id.clone(), tid, req.reader_id.clone()),
+                                    );
+                                }
+                                ClientMessage::LeaveGroup(req) => {
+                                    let g = &req.group_id;
+                                    let t = req.topic_id;
+                                    let r = &req.reader_id;
+                                    reader_memberships.lock().unwrap().retain(
+                                        |(g2, t2, r2)| !(g2 == g && *t2 == t && r2 == r),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
                     // Non-append (or decode error): spawn concurrently.
                     // Re-decodes the message internally; the cost is
                     // negligible compared to the I/O work these handlers do.
@@ -508,6 +555,22 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                 break;
             }
             _ => {}
+        }
+    }
+
+    // Proactive leave_group on disconnect: release reader group ranges
+    // so other readers can pick up the work immediately.
+    let memberships = reader_memberships.lock().unwrap().clone();
+    for (group_id, topic_id, reader_id) in memberships {
+        if let Err(e) = state
+            .coordinator
+            .leave_group(&group_id, topic_id, &reader_id)
+            .await
+        {
+            warn!(
+                "Failed to leave group on disconnect: group={} reader={}: {}",
+                group_id, reader_id, e
+            );
         }
     }
 

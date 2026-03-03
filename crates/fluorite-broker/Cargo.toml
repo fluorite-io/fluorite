@@ -13,6 +13,7 @@ fluorite-iceberg = { path = "../fluorite-iceberg", optional = true }
 
 # Async runtime
 tokio = { workspace = true }
+tokio-util = "0.7"
 async-trait = "0.1"
 futures = "0.3"
 

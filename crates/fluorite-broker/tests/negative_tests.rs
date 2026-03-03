@@ -168,21 +168,37 @@ async fn test_produce_to_nonexistent_topic() {
 
     ws.send(Message::Binary(buf)).await.unwrap();
 
-    // Should get a response (even if it contains an error)
+    // Should get a response with an error (topic doesn't exist in topic_offsets,
+    // so the flush transaction will fail).
     let response = tokio::time::timeout(Duration::from_secs(5), ws.next())
         .await
         .expect("Timeout waiting for response")
         .expect("No response")
         .expect("WebSocket error");
 
-    // The server should respond with something (error or successful write)
-    // The important thing is it doesn't crash
     match response {
         Message::Binary(data) => {
-            assert!(!data.is_empty(), "Should get response data");
+            let msg = decode_server_frame(&data);
+            match msg {
+                ServerMessage::Append(resp) => {
+                    assert!(
+                        !resp.success,
+                        "Append to non-existent topic should fail, got success with acks: {:?}",
+                        resp.append_acks
+                    );
+                    assert_ne!(
+                        resp.error_code, 0,
+                        "Error code should be non-zero for non-existent topic"
+                    );
+                }
+                other => panic!(
+                    "Expected Append response for Append request, got {:?}",
+                    std::mem::discriminant(&other)
+                ),
+            }
         }
         Message::Close(_) => {
-            // Connection closed, acceptable for error case
+            // Connection closed with error — acceptable
         }
         _ => panic!("Unexpected message type"),
     }
@@ -221,28 +237,34 @@ async fn test_fetch_from_nonexistent_topic() {
 
     match response {
         Message::Binary(data) => {
-            // Try to decode - should be valid (possibly empty)
-            let result = match decode_server_frame(&data) {
-                ServerMessage::Read(resp) => Ok((resp, data.len())),
-                _ => Err(()),
-            };
-            match result {
-                Ok((resp, _)) => {
-                    // Either empty results or results with empty records
-                    for topic_result in &resp.results {
-                        assert!(
-                            topic_result.records.is_empty(),
-                            "Should have empty records for non-existent topic"
+            let msg = decode_server_frame(&data);
+            match msg {
+                ServerMessage::Read(resp) => {
+                    if resp.success {
+                        // Successful read of non-existent topic should return empty results
+                        let total_records: usize =
+                            resp.results.iter().map(|r| r.records.len()).sum();
+                        assert_eq!(
+                            total_records, 0,
+                            "Read from non-existent topic should return 0 records, got {}",
+                            total_records
+                        );
+                    } else {
+                        // Error response is acceptable — verify error code is set
+                        assert_ne!(
+                            resp.error_code, 0,
+                            "Failed read should have non-zero error code"
                         );
                     }
                 }
-                Err(()) => {
-                    // Error response is also acceptable
-                }
+                other => panic!(
+                    "Expected Read response for Read request, got {:?}",
+                    std::mem::discriminant(&other)
+                ),
             }
         }
         Message::Close(_) => {
-            // Acceptable
+            // Connection closed with error — acceptable
         }
         _ => panic!("Unexpected message type"),
     }

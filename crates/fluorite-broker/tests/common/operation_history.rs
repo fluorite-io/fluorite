@@ -360,4 +360,32 @@ impl OperationHistory {
         }
         Ok(())
     }
+
+    /// Verify that no values appear in reads that were never acknowledged.
+    ///
+    /// Catches "phantom writes" — data committed to the log but error returned
+    /// to the client (false negative from the client's perspective).
+    /// Verify that no values appear in reads that were never attempted by any writer.
+    /// This catches fabricated data (storage corruption, bugs) but allows "uncertain"
+    /// writes — writes that were attempted but not acked (e.g., due to timeout/partition)
+    /// which may still be committed by the broker's async flush.
+    pub fn verify_no_phantom_writes(&self) -> Result<(), String> {
+        let attempted_values: HashSet<&[u8]> =
+            self.writes.iter().map(|w| w.value.as_ref()).collect();
+
+        for read in &self.reads {
+            if read.success {
+                for value in &read.returned_values {
+                    if !attempted_values.contains(value.as_ref()) {
+                        return Err(format!(
+                            "Phantom write detected: value {:?} found in read but \
+                             was never attempted by any writer",
+                            value
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }

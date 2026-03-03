@@ -31,3 +31,4 @@ pub use error::BrokerError;
 pub use object_store::{LocalFsStore, ObjectStore, S3ObjectStore};
 pub use shutdown::{ConnectionTracker, TrackedConnection, shutdown_signal};
 pub use fl::{FlReader, FlWriter};
+pub use tokio_util::sync::CancellationToken;
