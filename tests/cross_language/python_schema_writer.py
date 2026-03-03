@@ -16,8 +16,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../sdks/python'))
 
 from dataclasses import dataclass
-from flourine import Writer, WriterConfig, schema
-from flourine.proto import flourine_wire_pb2 as pb
+from fluorite import Writer, WriterConfig, schema
+from fluorite.proto import fluorite_wire_pb2 as pb
 
 
 @schema

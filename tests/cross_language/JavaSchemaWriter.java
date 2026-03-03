@@ -1,9 +1,9 @@
-package io.flourine.test;
+package io.fluorite.test;
 
-import io.flourine.sdk.*;
-import io.flourine.sdk.proto.BatchAck;
-import io.flourine.sdk.proto.Record;
-import io.flourine.sdk.schema.*;
+import io.fluorite.sdk.*;
+import io.fluorite.sdk.proto.BatchAck;
+import io.fluorite.sdk.proto.Record;
+import io.fluorite.sdk.schema.*;
 import com.google.gson.*;
 import com.google.protobuf.ByteString;
 
@@ -13,11 +13,11 @@ import java.util.*;
  * Cross-language schema E2E test: Java writer with Avro-encoded values.
  *
  * Usage:
- *     java -cp <classpath> io.flourine.test.JavaSchemaWriter <url> <topic_id>
+ *     java -cp <classpath> io.fluorite.test.JavaSchemaWriter <url> <topic_id>
  */
 public class JavaSchemaWriter {
 
-    @FlourineSchema
+    @FluoriteSchema
     public static class TestOrder {
         public String name;
         public long amount;

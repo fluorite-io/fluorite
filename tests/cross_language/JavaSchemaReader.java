@@ -1,9 +1,9 @@
-package io.flourine.test;
+package io.fluorite.test;
 
-import io.flourine.sdk.*;
-import io.flourine.sdk.proto.TopicResult;
-import io.flourine.sdk.proto.Record;
-import io.flourine.sdk.schema.*;
+import io.fluorite.sdk.*;
+import io.fluorite.sdk.proto.TopicResult;
+import io.fluorite.sdk.proto.Record;
+import io.fluorite.sdk.schema.*;
 import com.google.gson.*;
 
 import java.util.*;
@@ -12,11 +12,11 @@ import java.util.*;
  * Cross-language schema E2E test: Java reader with Avro-decoded values.
  *
  * Usage:
- *     java -cp <classpath> io.flourine.test.JavaSchemaReader <url> <topic_id> <expected_count>
+ *     java -cp <classpath> io.fluorite.test.JavaSchemaReader <url> <topic_id> <expected_count>
  */
 public class JavaSchemaReader {
 
-    @FlourineSchema
+    @FluoriteSchema
     public static class TestOrder {
         public String name;
         public long amount;

@@ -170,6 +170,14 @@ proptest! {
         prop_assert_eq!(decoded.writer_id.0, req.writer_id.0);
         prop_assert_eq!(decoded.append_seq.0, req.append_seq.0);
         prop_assert_eq!(decoded.batches.len(), req.batches.len());
+        for (d, o) in decoded.batches.iter().zip(req.batches.iter()) {
+            prop_assert_eq!(d.topic_id.0, o.topic_id.0);
+            prop_assert_eq!(d.schema_id.0, o.schema_id.0);
+            prop_assert_eq!(d.records.len(), o.records.len());
+            for (dr, or) in d.records.iter().zip(o.records.iter()) {
+                prop_assert_eq!(&dr.value, &or.value);
+            }
+        }
     }
 
     #[test]
@@ -180,7 +188,15 @@ proptest! {
 
         prop_assert_eq!(decoded_len, encoded_len);
         prop_assert_eq!(decoded.append_seq.0, resp.append_seq.0);
+        prop_assert_eq!(decoded.success, resp.success);
+        prop_assert_eq!(decoded.error_code, resp.error_code);
         prop_assert_eq!(decoded.append_acks.len(), resp.append_acks.len());
+        for (d, o) in decoded.append_acks.iter().zip(resp.append_acks.iter()) {
+            prop_assert_eq!(d.topic_id.0, o.topic_id.0);
+            prop_assert_eq!(d.schema_id.0, o.schema_id.0);
+            prop_assert_eq!(d.start_offset.0, o.start_offset.0);
+            prop_assert_eq!(d.end_offset.0, o.end_offset.0);
+        }
     }
 }
 
@@ -281,7 +297,26 @@ proptest! {
         let (decoded, decoded_len) = reader::decode_read_response(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
+        prop_assert_eq!(decoded.success, resp.success);
+        prop_assert_eq!(decoded.error_code, resp.error_code);
         prop_assert_eq!(decoded.results.len(), resp.results.len());
+        for (d, o) in decoded.results.iter().zip(resp.results.iter()) {
+            prop_assert_eq!(d.topic_id.0, o.topic_id.0);
+            prop_assert_eq!(d.schema_id.0, o.schema_id.0);
+            prop_assert_eq!(d.high_watermark.0, o.high_watermark.0);
+            prop_assert_eq!(d.records.len(), o.records.len());
+            for (dr, or) in d.records.iter().zip(o.records.iter()) {
+                prop_assert_eq!(&dr.value, &or.value);
+                // Note: key comparison may differ for empty vs None due to protobuf3
+                // semantics. Only compare when original key is non-empty.
+                match (&dr.key, &or.key) {
+                    (Some(dk), Some(ok)) if !ok.is_empty() => prop_assert_eq!(dk, ok),
+                    (None, None) => {}
+                    (None, Some(k)) if k.is_empty() => {} // protobuf3 conflates empty with absent
+                    _ => {}
+                }
+            }
+        }
     }
 
     #[test]
@@ -304,9 +339,21 @@ proptest! {
         let (decoded, decoded_len) = reader::decode_poll_response(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded_len, encoded_len);
-        prop_assert_eq!(decoded.results.len(), resp.results.len());
+        prop_assert_eq!(decoded.success, resp.success);
+        prop_assert_eq!(decoded.error_code, resp.error_code);
         prop_assert_eq!(decoded.start_offset.0, resp.start_offset.0);
         prop_assert_eq!(decoded.end_offset.0, resp.end_offset.0);
+        prop_assert_eq!(decoded.lease_deadline_ms, resp.lease_deadline_ms);
+        prop_assert_eq!(decoded.results.len(), resp.results.len());
+        for (d, o) in decoded.results.iter().zip(resp.results.iter()) {
+            prop_assert_eq!(d.topic_id.0, o.topic_id.0);
+            prop_assert_eq!(d.schema_id.0, o.schema_id.0);
+            prop_assert_eq!(d.high_watermark.0, o.high_watermark.0);
+            prop_assert_eq!(d.records.len(), o.records.len());
+            for (dr, or) in d.records.iter().zip(o.records.iter()) {
+                prop_assert_eq!(&dr.value, &or.value);
+            }
+        }
     }
 }
 
@@ -360,19 +407,34 @@ proptest! {
     }
 
     #[test]
-    fn prop_heartbeat_response_ext_roundtrip(_dummy: u64) {
-        let resp = reader::HeartbeatResponseExt {
-            success: true,
-            error_code: 0,
-            error_message: String::new(),
-            status: reader::HeartbeatStatus::Ok,
+    fn prop_heartbeat_response_ext_roundtrip(
+        success: bool,
+        error_code: u16,
+        error_message in "[a-z]{0,50}",
+        status_idx in 0u32..2,
+    ) {
+        let status = if status_idx == 0 {
+            reader::HeartbeatStatus::Ok
+        } else {
+            reader::HeartbeatStatus::UnknownMember
         };
 
-        let mut buf = vec![0u8; 64];
-        let encoded_len = reader::encode_heartbeat_response_ext(&resp, &mut buf);
-        let (decoded, _) = reader::decode_heartbeat_response_ext(&buf[..encoded_len]).unwrap();
+        let resp = reader::HeartbeatResponseExt {
+            success,
+            error_code,
+            error_message: error_message.clone(),
+            status,
+        };
 
-        prop_assert_eq!(decoded.status, reader::HeartbeatStatus::Ok);
+        let mut buf = vec![0u8; 256];
+        let encoded_len = reader::encode_heartbeat_response_ext(&resp, &mut buf);
+        let (decoded, decoded_len) = reader::decode_heartbeat_response_ext(&buf[..encoded_len]).unwrap();
+
+        prop_assert_eq!(decoded_len, encoded_len);
+        prop_assert_eq!(decoded.success, success);
+        prop_assert_eq!(decoded.error_code, error_code);
+        prop_assert_eq!(decoded.error_message, error_message);
+        prop_assert_eq!(decoded.status, status);
     }
 
     #[test]

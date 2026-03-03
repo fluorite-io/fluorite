@@ -35,4 +35,7 @@ pub enum DecodeError {
 
     #[error("invalid data: {msg}")]
     InvalidData { msg: &'static str },
+
+    #[error("varint value {value} overflows i32 range")]
+    I32Overflow { value: i64 },
 }

@@ -15,18 +15,18 @@ pip install -e .
 ### Java SDK
 
 ```bash
-cd sdks/java/flourine-sdk
+cd sdks/java/fluorite-sdk
 mvn package -DskipTests
 ```
 
-This creates `target/flourine-sdk-0.1.0-jar-with-dependencies.jar`.
+This creates `target/fluorite-sdk-0.1.0-jar-with-dependencies.jar`.
 
 ### Database
 
 Start a PostgreSQL instance:
 
 ```bash
-docker run -d --name flourine-test-db \
+docker run -d --name fluorite-test-db \
   -e POSTGRES_PASSWORD=postgres \
   -p 5433:5432 \
   postgres:16
@@ -79,15 +79,15 @@ python3 python_reader.py ws://localhost:9000 1 0 5
 ### Java Writer
 
 ```bash
-java -cp "../../sdks/java/flourine-sdk/target/*:." \
-  io.flourine.test.JavaWriter ws://localhost:9000 1 0 5
+java -cp "../../sdks/java/fluorite-sdk/target/*:." \
+  io.fluorite.test.JavaWriter ws://localhost:9000 1 0 5
 ```
 
 ### Java Reader
 
 ```bash
-java -cp "../../sdks/java/flourine-sdk/target/*:." \
-  io.flourine.test.JavaReader ws://localhost:9000 1 0 5
+java -cp "../../sdks/java/fluorite-sdk/target/*:." \
+  io.fluorite.test.JavaReader ws://localhost:9000 1 0 5
 ```
 
 ## Test Matrix

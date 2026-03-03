@@ -63,9 +63,13 @@ pub fn encode_i32(value: i32, buf: &mut [u8]) -> usize {
 }
 
 /// Decode a zigzag varint to signed 32-bit integer.
+/// Returns an error if the decoded value exceeds i32 range.
 #[inline]
 pub fn decode_i32(buf: &[u8]) -> Result<(i32, usize), DecodeError> {
     let (value, len) = decode_i64(buf)?;
+    if value < i32::MIN as i64 || value > i32::MAX as i64 {
+        return Err(DecodeError::I32Overflow { value });
+    }
     Ok((value as i32, len))
 }
 
@@ -158,6 +162,36 @@ mod tests {
         // 0x80 indicates more bytes follow, but there are none
         let result = decode_i64(&[0x80]);
         assert!(matches!(result, Err(DecodeError::UnexpectedEof { .. })));
+    }
+
+    #[test]
+    fn test_decode_i32_overflow() {
+        let mut buf = [0u8; 10];
+        // Encode a value that fits in i64 but not i32
+        let len = encode_i64(i32::MAX as i64 + 1, &mut buf);
+        let result = decode_i32(&buf[..len]);
+        assert!(matches!(result, Err(DecodeError::I32Overflow { .. })));
+
+        let len = encode_i64(i32::MIN as i64 - 1, &mut buf);
+        let result = decode_i32(&buf[..len]);
+        assert!(matches!(result, Err(DecodeError::I32Overflow { .. })));
+
+        let len = encode_i64(i64::MAX, &mut buf);
+        let result = decode_i32(&buf[..len]);
+        assert!(matches!(result, Err(DecodeError::I32Overflow { .. })));
+    }
+
+    #[test]
+    fn test_decode_i32_boundary_values() {
+        let mut buf = [0u8; 10];
+        // i32::MAX and i32::MIN should succeed
+        let len = encode_i32(i32::MAX, &mut buf);
+        let (decoded, _) = decode_i32(&buf[..len]).unwrap();
+        assert_eq!(decoded, i32::MAX);
+
+        let len = encode_i32(i32::MIN, &mut buf);
+        let (decoded, _) = decode_i32(&buf[..len]).unwrap();
+        assert_eq!(decoded, i32::MIN);
     }
 
     #[test]

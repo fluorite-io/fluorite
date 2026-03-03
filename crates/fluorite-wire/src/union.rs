@@ -261,6 +261,10 @@ pub fn decode_server_message(buf: &[u8]) -> Result<(ServerMessage, usize), Decod
     Ok((decoded, buf.len()))
 }
 
+/// Max retries for buffer growth in catch_unwind encode loop.
+/// 5 retries = 64KB * 2^5 = 2MB max buffer, sufficient for any reasonable message.
+const MAX_ENCODE_RETRIES: usize = 5;
+
 fn decode_from_encoded<T, M>(
     value: &T,
     encoder: fn(&T, &mut [u8]) -> usize,
@@ -270,21 +274,32 @@ where
     M: Message + Default,
 {
     let mut capacity = INITIAL_ENCODE_BUFFER;
+    let mut last_panic = None;
 
-    loop {
+    for _ in 0..MAX_ENCODE_RETRIES {
         let mut buf = vec![0u8; capacity];
         match catch_unwind(AssertUnwindSafe(|| encoder(value, &mut buf))) {
             Ok(len) => {
                 return M::decode(&buf[..len])
                     .map_err(|_| EncodeError::ValueTooLarge(format!("invalid {}", msg)));
             }
-            Err(_) => {
+            Err(panic_payload) => {
+                last_panic = Some(panic_payload);
                 capacity = capacity
                     .checked_mul(2)
                     .ok_or_else(|| EncodeError::ValueTooLarge(format!("invalid {}", msg)))?;
             }
         }
     }
+
+    // Exhausted retries — re-panic with original payload rather than looping forever
+    if let Some(payload) = last_panic {
+        std::panic::resume_unwind(payload);
+    }
+    Err(EncodeError::ValueTooLarge(format!(
+        "{} exceeded max encode buffer",
+        msg
+    )))
 }
 
 fn decode_from_encoded_result<T, M>(

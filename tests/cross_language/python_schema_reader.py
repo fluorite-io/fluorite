@@ -16,7 +16,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../sdks/python'))
 
 from dataclasses import dataclass
-from flourine import GroupReader, ReaderConfig, schema
+from fluorite import GroupReader, ReaderConfig, schema
 
 
 @schema

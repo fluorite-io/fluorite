@@ -1,8 +1,8 @@
-package io.flourine.test;
+package io.fluorite.test;
 
-import io.flourine.sdk.*;
-import io.flourine.sdk.proto.BatchAck;
-import io.flourine.sdk.proto.Record;
+import io.fluorite.sdk.*;
+import io.fluorite.sdk.proto.BatchAck;
+import io.fluorite.sdk.proto.Record;
 import com.google.gson.*;
 import com.google.protobuf.ByteString;
 
@@ -12,7 +12,7 @@ import java.util.*;
  * Cross-language E2E test: Java writer.
  *
  * Usage:
- *     java -cp <classpath> io.flourine.test.JavaWriter <url> <topic_id> <num_records>
+ *     java -cp <classpath> io.fluorite.test.JavaWriter <url> <topic_id> <num_records>
  *
  * Appends records and prints the ack JSON to stdout.
  */

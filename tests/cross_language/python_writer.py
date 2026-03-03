@@ -16,8 +16,8 @@ import os
 # Add the SDK to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../sdks/python'))
 
-from flourine import Writer, WriterConfig
-from flourine.proto import flourine_wire_pb2 as pb
+from fluorite import Writer, WriterConfig
+from fluorite.proto import fluorite_wire_pb2 as pb
 
 
 async def main():
