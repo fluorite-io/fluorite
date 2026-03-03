@@ -35,11 +35,11 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use fluorite_broker::buffer::BufferConfig;
 use fluorite_broker::{BrokerConfig, BrokerState, LocalFsStore};
-use fluorite_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
+use fluorite_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
 use fluorite_common::types::{Record, RecordBatch};
 use fluorite_wire::{
-    ClientMessage, ERR_BACKPRESSURE, ServerMessage, reader, decode_server_message,
-    encode_client_message, writer,
+    ClientMessage, ERR_BACKPRESSURE, ServerMessage, decode_server_message, encode_client_message,
+    reader, writer,
 };
 
 use common::TestDb;
@@ -218,10 +218,11 @@ fn decode_read_response(data: &[u8]) -> reader::ReadResponse {
 }
 
 fn websocket_client_config() -> WebSocketConfig {
-    let mut config = WebSocketConfig::default();
-    config.max_frame_size = Some(64 << 20);
-    config.max_message_size = Some(64 << 20);
-    config
+    WebSocketConfig {
+        max_frame_size: Some(64 << 20),
+        max_message_size: Some(64 << 20),
+        ..Default::default()
+    }
 }
 
 fn env_u32(name: &str, default: u32) -> u32 {
@@ -332,6 +333,8 @@ async fn start_server(
         flush_interval,
         require_auth: false,
         auth_timeout: Duration::from_secs(10),
+        #[cfg(feature = "iceberg")]
+        iceberg: None,
     };
 
     let state = BrokerState::new(pool, store, config).await;
@@ -486,12 +489,7 @@ async fn run_producer_worker(
     }
 }
 
-async fn fetch_all_records(
-    url: &str,
-    topic_id: TopicId,
-    expected_total: u64,
-    timeout: Duration,
-) {
+async fn fetch_all_records(url: &str, topic_id: TopicId, expected_total: u64, timeout: Duration) {
     let (mut ws, _) = connect_async_with_config(url, Some(websocket_client_config()), false)
         .await
         .expect("read connect");
@@ -615,13 +613,7 @@ async fn run_load_scenario(scenario: LoadScenario, capture_otel: bool) -> LoadRu
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     let fetch_start = Instant::now();
-    fetch_all_records(
-        &url,
-        topic_id,
-        record_count,
-        scenario.fetch_timeout,
-    )
-    .await;
+    fetch_all_records(&url, topic_id, record_count, scenario.fetch_timeout).await;
     let fetch_elapsed = fetch_start.elapsed();
     let total_elapsed = produce_elapsed + fetch_elapsed;
 

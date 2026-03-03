@@ -13,9 +13,9 @@ use fluorite_wire::{
 use crate::BrokerError;
 use crate::object_store::ObjectStore;
 
-use super::encoding::{encode_server_message_vec, RESPONSE_CAPACITY_SMALL};
-use super::fetch::fetch_records;
 use super::BrokerState;
+use super::encoding::{RESPONSE_CAPACITY_SMALL, encode_server_message_vec};
+use super::fetch::fetch_records;
 
 /// Handle a JoinGroupRequest.
 #[tracing::instrument(
@@ -65,11 +65,7 @@ pub(crate) async fn handle_heartbeat<S: ObjectStore + Send + Sync>(
 ) -> Vec<u8> {
     let result = state
         .coordinator
-        .heartbeat(
-            &req.group_id,
-            req.topic_id,
-            &req.reader_id,
-        )
+        .heartbeat(&req.group_id, req.topic_id, &req.reader_id)
         .await;
 
     let response = match result {
@@ -164,12 +160,7 @@ async fn process_poll<S: ObjectStore + Send + Sync>(
 ) -> Result<(Vec<reader::TopicResult>, Offset, Offset, u64), BrokerError> {
     let poll_result = state
         .coordinator
-        .poll(
-            &req.group_id,
-            req.topic_id,
-            &req.reader_id,
-            req.max_bytes,
-        )
+        .poll(&req.group_id, req.topic_id, &req.reader_id, req.max_bytes)
         .await?;
 
     if poll_result.status == crate::coordinator::PollStatus::MaxInflight {

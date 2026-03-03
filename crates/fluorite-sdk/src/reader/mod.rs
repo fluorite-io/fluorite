@@ -220,16 +220,14 @@ impl GroupReader {
             max_bytes: self.config.max_bytes,
         };
 
-        let resp = self
-            .send_request(ClientMessage::Poll(req), 8192)
-            .await?;
+        let resp = self.send_request(ClientMessage::Poll(req), 8192).await?;
         let response = match resp {
             ServerMessage::Poll(r) if r.success => r,
             ServerMessage::Poll(r) => {
                 return Err(SdkError::Server {
                     code: r.error_code,
                     message: r.error_message,
-                })
+                });
             }
             _ => return Err(SdkError::InvalidResponse),
         };
@@ -271,14 +269,15 @@ impl GroupReader {
             end_offset: batch.end_offset,
         };
 
-        let resp = self
-            .send_request(ClientMessage::Commit(req), 8192)
-            .await?;
+        let resp = self.send_request(ClientMessage::Commit(req), 8192).await?;
         match resp {
             ServerMessage::Commit(r) if r.success => {
                 let s = batch.start_offset;
                 let e = batch.end_offset;
-                self.inflight.write().await.retain(|(ss, ee)| *ss != s || *ee != e);
+                self.inflight
+                    .write()
+                    .await
+                    .retain(|(ss, ee)| *ss != s || *ee != e);
                 Ok(())
             }
             ServerMessage::Commit(r) => Err(SdkError::Server {
@@ -306,7 +305,7 @@ impl GroupReader {
                 return Err(SdkError::Server {
                     code: r.error_code,
                     message: r.error_message,
-                })
+                });
             }
             _ => return Err(SdkError::InvalidResponse),
         }
@@ -331,7 +330,10 @@ impl GroupReader {
                 lease_deadline_ms: 0,
             };
             if let Err(e) = self.commit(&batch).await {
-                warn!("Failed to commit range [{}, {}) during leave: {}", start.0, end.0, e);
+                warn!(
+                    "Failed to commit range [{}, {}) during leave: {}",
+                    start.0, end.0, e
+                );
             }
         }
 
@@ -350,7 +352,7 @@ impl GroupReader {
                 return Err(SdkError::Server {
                     code: r.error_code,
                     message: r.error_message,
-                })
+                });
             }
             _ => return Err(SdkError::InvalidResponse),
         }
@@ -374,9 +376,7 @@ impl GroupReader {
                 reader_id: self.config.reader_id.clone(),
             };
 
-            let result = self
-                .send_request(ClientMessage::Heartbeat(req), 256)
-                .await;
+            let result = self.send_request(ClientMessage::Heartbeat(req), 256).await;
 
             match result {
                 Ok(ServerMessage::Heartbeat(response)) if response.success => {
@@ -417,8 +417,8 @@ impl GroupReader {
         buf_size: usize,
     ) -> Result<ServerMessage, SdkError> {
         let mut buf = vec![0u8; buf_size];
-        let len = encode_client_message(&msg, &mut buf)
-            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let len =
+            encode_client_message(&msg, &mut buf).map_err(|e| SdkError::Protocol(e.to_string()))?;
         buf.truncate(len);
 
         let response_data = self.send_and_receive(buf).await?;
@@ -426,9 +426,7 @@ impl GroupReader {
         let (response_msg, used) =
             decode_server_message(&response_data).map_err(|e| SdkError::Decode(e.to_string()))?;
         if used != response_data.len() {
-            return Err(SdkError::Decode(
-                "trailing bytes in response".to_string(),
-            ));
+            return Err(SdkError::Decode("trailing bytes in response".to_string()));
         }
 
         Ok(response_msg)

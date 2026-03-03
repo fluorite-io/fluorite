@@ -158,7 +158,7 @@ impl<'a> SchemaConstructionState<'a> {
             },
         ) = object
         {
-            let name: &str = &*name.0;
+            let name: &str = &name.0;
             let name_key = if let Some((namespace, name)) = name.rsplit_once('.') {
                 NameKey {
                     namespace: Some(namespace).filter(|&s| !s.is_empty()),
@@ -178,7 +178,7 @@ impl<'a> SchemaConstructionState<'a> {
                     name,
                 }
             };
-            if let Some(_) = self.names.insert(name_key, idx) {
+            if self.names.insert(name_key, idx).is_some() {
                 return Err(SchemaError::msg(format_args!(
                     "The Schema contains duplicate definitions for {}",
                     name_key

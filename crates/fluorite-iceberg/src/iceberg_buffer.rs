@@ -129,7 +129,9 @@ impl IcebergBuffer {
             let seg_bytes: usize = segment.records.iter().map(|r| r.size()).sum();
             global_bytes += seg_bytes;
 
-            let table_buf = tables.entry(batch.topic_id).or_insert_with(TableBuffer::new);
+            let table_buf = tables
+                .entry(batch.topic_id)
+                .or_insert_with(TableBuffer::new);
             table_buf.push(segment);
 
             if table_buf.total_bytes >= self.config.table_flush_size {
@@ -168,10 +170,11 @@ impl IcebergBuffer {
 
         let mut to_flush = Vec::new();
         for (tid, buf) in tables.iter() {
-            if let Some(first) = buf.first_record_at {
-                if first.elapsed() >= deadline && buf.total_bytes > 0 {
-                    to_flush.push(*tid);
-                }
+            if let Some(first) = buf.first_record_at
+                && first.elapsed() >= deadline
+                && buf.total_bytes > 0
+            {
+                to_flush.push(*tid);
             }
         }
 
@@ -194,8 +197,17 @@ impl IcebergBuffer {
         }
     }
 
-    async fn send_flush(&self, topic_id: TopicId, segments: Vec<CommittedSegment>, total_bytes: usize) {
-        let req = FlushRequest { topic_id, segments, total_bytes };
+    async fn send_flush(
+        &self,
+        topic_id: TopicId,
+        segments: Vec<CommittedSegment>,
+        total_bytes: usize,
+    ) {
+        let req = FlushRequest {
+            topic_id,
+            segments,
+            total_bytes,
+        };
         if let Err(e) = self.flush_tx.send(req).await {
             error!("iceberg flush channel closed: {}", e);
         }

@@ -176,10 +176,10 @@ async fn main() -> Result<()> {
 
     info!("Fluorite broker stopped");
 
-    if let Some(provider) = otel_provider {
-        if let Err(e) = provider.shutdown() {
-            error!("Failed to flush OpenTelemetry provider: {}", e);
-        }
+    if let Some(provider) = otel_provider
+        && let Err(e) = provider.shutdown()
+    {
+        error!("Failed to flush OpenTelemetry provider: {}", e);
     }
 
     Ok(())

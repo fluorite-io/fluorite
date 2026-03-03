@@ -2,18 +2,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-use std::time::Duration;
 use fluorite_broker::{BrokerBuffer, BufferConfig};
-use fluorite_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
+use fluorite_common::ids::{AppendSeq, SchemaId, TopicId, WriterId};
 use fluorite_common::types::{Record, RecordBatch};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Create a batch with specified record count and value size.
-fn make_segment(
-    topic_id: u32,
-    record_count: usize,
-    value_size: usize,
-) -> RecordBatch {
+fn make_segment(topic_id: u32, record_count: usize, value_size: usize) -> RecordBatch {
     RecordBatch {
         topic_id: TopicId(topic_id),
         schema_id: SchemaId(100),
@@ -51,7 +47,7 @@ pub fn bench_buffer_insert(c: &mut Criterion) {
                     },
                     |(mut buffer, seg)| {
                         let writer_id = WriterId(Uuid::new_v4());
-                        black_box(buffer.insert(writer_id, AppendSeq(1), vec![seg]))
+                        drop(black_box(buffer.insert(writer_id, AppendSeq(1), vec![seg])));
                     },
                     criterion::BatchSize::SmallInput,
                 )
@@ -88,7 +84,7 @@ pub fn bench_buffer_merge(c: &mut Criterion) {
                         for i in 0..(count - 1) {
                             let writer_id = WriterId(Uuid::from_u128(i as u128));
                             let batch = make_segment(1, record_count, value_size);
-                            let _ = buffer.insert(writer_id, AppendSeq(1), vec![batch]);
+                            drop(buffer.insert(writer_id, AppendSeq(1), vec![batch]));
                         }
 
                         let last_segment = make_segment(1, record_count, value_size);
@@ -96,7 +92,7 @@ pub fn bench_buffer_merge(c: &mut Criterion) {
                     },
                     |(mut buffer, seg)| {
                         let writer_id = WriterId(Uuid::new_v4());
-                        black_box(buffer.insert(writer_id, AppendSeq(1), vec![seg]))
+                        drop(black_box(buffer.insert(writer_id, AppendSeq(1), vec![seg])));
                     },
                     criterion::BatchSize::SmallInput,
                 )
@@ -131,7 +127,7 @@ pub fn bench_buffer_drain(c: &mut Criterion) {
                             let writer_id = WriterId(Uuid::from_u128(i as u128));
                             let topic = (i % topic_count) as u32 + 1;
                             let batch = make_segment(topic, 10, 256);
-                            let _ = buffer.insert(writer_id, AppendSeq(1), vec![batch]);
+                            drop(buffer.insert(writer_id, AppendSeq(1), vec![batch]));
                         }
 
                         buffer
@@ -190,7 +186,8 @@ pub fn bench_distribute_acks(c: &mut Criterion) {
                         (drain_result, segment_offsets, receivers)
                     },
                     |(drain_result, segment_offsets, _receivers)| {
-                        black_box(BrokerBuffer::distribute_acks(drain_result, &segment_offsets))
+                        BrokerBuffer::distribute_acks(drain_result, &segment_offsets);
+                        black_box(())
                     },
                     criterion::BatchSize::SmallInput,
                 )

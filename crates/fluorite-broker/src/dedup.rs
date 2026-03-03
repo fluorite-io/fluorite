@@ -8,10 +8,10 @@
 
 use std::collections::HashMap;
 
+use fluorite_common::ids::{AppendSeq, WriterId};
+use fluorite_common::types::BatchAck;
 use sqlx::PgPool;
 use tokio::sync::RwLock;
-use fluorite_common::ids::{WriterId, AppendSeq};
-use fluorite_common::types::BatchAck;
 
 /// Cached writer state.
 #[derive(Debug, Clone)]
@@ -104,7 +104,8 @@ impl LruCache {
             self.evict_oldest();
         }
 
-        self.map.insert(key, (CachedWriterState::Missing, self.order));
+        self.map
+            .insert(key, (CachedWriterState::Missing, self.order));
     }
 
     fn evict_oldest(&mut self) {
@@ -198,7 +199,12 @@ impl DedupCache {
     }
 
     /// Update cache after successful commit.
-    pub async fn update(&self, writer_id: WriterId, append_seq: AppendSeq, append_acks: Vec<BatchAck>) {
+    pub async fn update(
+        &self,
+        writer_id: WriterId,
+        append_seq: AppendSeq,
+        append_acks: Vec<BatchAck>,
+    ) {
         let mut cache = self.cache.write().await;
         Self::update_locked(&mut cache, writer_id, append_seq, append_acks);
     }
@@ -209,12 +215,10 @@ impl DedupCache {
         append_seq: AppendSeq,
         append_acks: Vec<BatchAck>,
     ) {
-        if let Some((existing, _)) = cache.map.get(&writer_id) {
-            if let CachedWriterState::Known(existing) = existing {
-                if append_seq.0 <= existing.last_seq.0 {
-                    return;
-                }
-            }
+        if let Some((CachedWriterState::Known(existing), _)) = cache.map.get(&writer_id)
+            && append_seq.0 <= existing.last_seq.0
+        {
+            return;
         }
         cache.insert_known(
             writer_id,

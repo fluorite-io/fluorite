@@ -17,19 +17,17 @@ use fluorite_broker::{Coordinator, CoordinatorConfig};
 use fluorite_common::ids::{Offset, TopicId};
 use fluorite_common::types::Record;
 
-use common::{CrashableBroker, CrashableWsBroker, TestDb, produce_records};
 use common::ws_helpers;
+use common::{CrashableBroker, CrashableWsBroker, TestDb, produce_records};
 
 /// Get high watermark from database.
 async fn get_watermark(pool: &sqlx::PgPool, topic_id: TopicId) -> i64 {
-    sqlx::query_scalar(
-        "SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id.0 as i32)
-    .fetch_optional(pool)
-    .await
-    .unwrap()
-    .unwrap_or(0)
+    sqlx::query_scalar("SELECT COALESCE(next_offset, 0) FROM topic_offsets WHERE topic_id = $1")
+        .bind(topic_id.0 as i32)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+        .unwrap_or(0)
 }
 
 /// Test that broker restart sees fresh watermark from DB.
@@ -398,13 +396,7 @@ async fn test_consumer_group_state_persists() {
 
         // Commit range [0, 50)
         let status = coordinator
-            .commit_range(
-                "persist-cg",
-                topic_id,
-                "reader-1",
-                Offset(0),
-                Offset(50),
-            )
+            .commit_range("persist-cg", topic_id, "reader-1", Offset(0), Offset(50))
             .await
             .expect("Commit should succeed");
         assert_eq!(status, fluorite_broker::CommitStatus::Ok);
@@ -499,10 +491,7 @@ async fn ws_produce(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);

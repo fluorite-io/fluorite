@@ -9,9 +9,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use fluorite_common::ids::{AppendSeq, SchemaId, TopicId, WriterId};
+use fluorite_common::types::{BatchAck, Record, RecordBatch};
 use tokio::sync::oneshot;
-use fluorite_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
-use fluorite_common::types::{Record, RecordBatch, BatchAck};
 
 /// Key for grouping records in the buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -167,10 +167,7 @@ impl BrokerBuffer {
             segment_keys.push(key);
             record_counts.push(batch.records.len());
 
-            let buffered = self
-                .batches
-                .entry(key)
-                .or_insert_with(BufferedSegment::new);
+            let buffered = self.batches.entry(key).or_insert_with(BufferedSegment::new);
 
             // Capture starting position before adding records
             start_indices.push(buffered.records.len());
@@ -202,10 +199,10 @@ impl BrokerBuffer {
         }
 
         // Flush on time
-        if let Some(start) = self.batch_start {
-            if start.elapsed() >= self.config.max_wait {
-                return true;
-            }
+        if let Some(start) = self.batch_start
+            && start.elapsed() >= self.config.max_wait
+        {
+            return true;
         }
 
         false

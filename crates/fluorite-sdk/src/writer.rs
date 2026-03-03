@@ -22,8 +22,8 @@ use tokio::sync::{Mutex, Semaphore, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::{debug, warn};
 
-use fluorite_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
-use fluorite_common::types::{Record, RecordBatch, BatchAck};
+use fluorite_common::ids::{AppendSeq, SchemaId, TopicId, WriterId};
+use fluorite_common::types::{BatchAck, Record, RecordBatch};
 use fluorite_wire::{
     ClientMessage, ERR_BACKPRESSURE, ServerMessage, auth as wire_auth, decode_server_message,
     encode_client_message, writer,
@@ -267,7 +267,10 @@ impl Writer {
             records,
         }];
         let append_acks = self.append_batch(batches).await?;
-        append_acks.into_iter().next().ok_or(SdkError::InvalidResponse)
+        append_acks
+            .into_iter()
+            .next()
+            .ok_or(SdkError::InvalidResponse)
     }
 
     /// Append records across multiple topics in a single request.
@@ -295,7 +298,11 @@ impl Writer {
                     retries += 1;
                 }
                 Ok(append_acks) => {
-                    debug!("Sent {} batches, got {} append_acks", batches.len(), append_acks.len());
+                    debug!(
+                        "Sent {} batches, got {} append_acks",
+                        batches.len(),
+                        append_acks.len()
+                    );
                     return Ok(append_acks);
                 }
                 Err(e) => return Err(e),
@@ -320,9 +327,7 @@ impl Writer {
         records: Vec<Record>,
     ) -> tokio::task::JoinHandle<Result<BatchAck, SdkError>> {
         let writer = Arc::clone(self);
-        tokio::spawn(async move {
-            writer.append(topic_id, schema_id, records).await
-        })
+        tokio::spawn(async move { writer.append(topic_id, schema_id, records).await })
     }
 
     /// Send a single append request and wait for response.
@@ -380,7 +385,8 @@ impl Writer {
         key: Option<Bytes>,
         value: Bytes,
     ) -> Result<BatchAck, SdkError> {
-        self.append(topic_id, schema_id, vec![Record { key, value }]).await
+        self.append(topic_id, schema_id, vec![Record { key, value }])
+            .await
     }
 }
 

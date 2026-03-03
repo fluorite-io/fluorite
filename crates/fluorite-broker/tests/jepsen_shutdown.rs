@@ -103,7 +103,10 @@ async fn test_drain_timeout_returns_false_when_connections_remain() {
     tracker.increment(); // Simulate a stuck connection
 
     let drained = tracker.wait_for_drain(Duration::from_millis(200)).await;
-    assert!(!drained, "should return false when connections remain after timeout");
+    assert!(
+        !drained,
+        "should return false when connections remain after timeout"
+    );
     assert_eq!(tracker.count(), 1, "connection count should still be 1");
 }
 

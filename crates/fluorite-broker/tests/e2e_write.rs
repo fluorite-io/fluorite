@@ -273,21 +273,19 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
     assert!(first_resp.success);
     assert_eq!(first_resp.append_acks.len(), 1);
 
-    let offset_after_first: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let offset_after_first: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
 
-    let batch_count_after_first: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let batch_count_after_first: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(batch_count_after_first, 1);
 
     let (last_seq, last_acks): (i64, serde_json::Value) =
@@ -335,22 +333,20 @@ async fn test_duplicate_seq_dedup_survives_broker_restart() {
     assert_eq!(retry_resp.append_acks.len(), 1);
     assert_eq!(retry_resp.append_acks[0], first_resp.append_acks[0]);
 
-    let offset_after_retry: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let offset_after_retry: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(offset_after_retry, offset_after_first);
 
-    let batch_count_after_retry: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let batch_count_after_retry: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(batch_count_after_retry, 1);
 
     ws2.close(None).await.ok();
@@ -406,13 +402,12 @@ async fn test_produce_uuid_first_byte_collision_is_safe() {
     );
     assert_eq!(resp.append_acks.len(), 1);
 
-    let next_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let next_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(next_offset, 1);
 
     ws.close(None).await.ok();
@@ -480,13 +475,12 @@ async fn test_inflight_duplicate_seq_coalesced_single_commit() {
     assert_eq!(r2.append_acks.len(), 1);
     assert_eq!(r1.append_acks[0], r2.append_acks[0]);
 
-    let next_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let next_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(next_offset, 1);
 
     ws1.close(None).await.ok();
@@ -506,7 +500,6 @@ async fn test_multiple_producers() {
     let mut handles = vec![];
     for i in 0..5 {
         let url = url.clone();
-        let topic_id = topic_id;
 
         let handle = tokio::spawn(async move {
             let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
@@ -554,13 +547,12 @@ async fn test_multiple_producers() {
         append_acks.push(handle.await.unwrap());
     }
 
-    let total_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let total_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(total_offset, 5);
 
     // Read all records to verify

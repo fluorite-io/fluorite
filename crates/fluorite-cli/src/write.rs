@@ -23,8 +23,11 @@ fn json_to_avro(json: &serde_json::Value, schema: &AvroSchema) -> Result<AvroVal
             let obj = json
                 .as_object()
                 .ok_or_else(|| anyhow::anyhow!("expected JSON object for record schema"))?;
-            let known: std::collections::HashSet<&str> =
-                record_schema.fields.iter().map(|f| f.name.as_str()).collect();
+            let known: std::collections::HashSet<&str> = record_schema
+                .fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect();
             for key in obj.keys() {
                 if !known.contains(key.as_str()) {
                     bail!("unknown field '{}' (schema has: {:?})", key, known);
@@ -62,17 +65,15 @@ fn json_to_avro(json: &serde_json::Value, schema: &AvroSchema) -> Result<AvroVal
         }
         AvroSchema::Union(union_schema) => {
             // Try null first for JSON null
-            if json.is_null() {
-                if union_schema.variants().iter().any(|v| *v == AvroSchema::Null) {
-                    return Ok(AvroValue::Union(
-                        union_schema
-                            .variants()
-                            .iter()
-                            .position(|v| *v == AvroSchema::Null)
-                            .unwrap() as u32,
-                        Box::new(AvroValue::Null),
-                    ));
-                }
+            if json.is_null() && union_schema.variants().contains(&AvroSchema::Null) {
+                return Ok(AvroValue::Union(
+                    union_schema
+                        .variants()
+                        .iter()
+                        .position(|v| *v == AvroSchema::Null)
+                        .unwrap() as u32,
+                    Box::new(AvroValue::Null),
+                ));
             }
             // Try each non-null variant
             for (i, variant) in union_schema.variants().iter().enumerate() {
@@ -113,8 +114,7 @@ pub async fn run(
     // Fetch schema and encode as Avro binary
     let schema_resp = client.get_schema(schema_id).await?;
     let schema_json = serde_json::to_string(&schema_resp.schema)?;
-    let avro_schema =
-        AvroSchema::parse_str(&schema_json).context("failed to parse Avro schema")?;
+    let avro_schema = AvroSchema::parse_str(&schema_json).context("failed to parse Avro schema")?;
 
     let json_value: serde_json::Value =
         serde_json::from_str(&value).context("value is not valid JSON")?;

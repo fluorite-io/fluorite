@@ -278,8 +278,5 @@ async fn test_committed_watermark_survives_churn() {
     .await
     .expect("query group state");
 
-    assert!(
-        state_exists,
-        "Group state should survive reader churn"
-    );
+    assert!(state_exists, "Group state should survive reader churn");
 }

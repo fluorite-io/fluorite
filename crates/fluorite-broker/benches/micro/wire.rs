@@ -2,11 +2,10 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-use fluorite_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
-use fluorite_common::types::{Record, RecordBatch, BatchAck};
+use fluorite_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
+use fluorite_common::types::{BatchAck, Record, RecordBatch};
 use fluorite_wire::writer::{
-    AppendRequest, AppendResponse, decode_request, decode_response, encode_request,
-    encode_response,
+    AppendRequest, AppendResponse, decode_request, decode_response, encode_request, encode_response,
 };
 use uuid::Uuid;
 
@@ -138,10 +137,14 @@ pub fn bench_response_encode(c: &mut Criterion) {
         let resp = make_response(*ack_count);
 
         group.throughput(Throughput::Elements(*ack_count as u64));
-        group.bench_with_input(BenchmarkId::new("append_acks", ack_count), &resp, |b, resp| {
-            let mut buf = vec![0u8; 16 * 1024];
-            b.iter(|| black_box(encode_response(black_box(resp), &mut buf)))
-        });
+        group.bench_with_input(
+            BenchmarkId::new("append_acks", ack_count),
+            &resp,
+            |b, resp| {
+                let mut buf = vec![0u8; 16 * 1024];
+                b.iter(|| black_box(encode_response(black_box(resp), &mut buf)))
+            },
+        );
     }
 
     group.finish();
@@ -160,9 +163,11 @@ pub fn bench_response_decode(c: &mut Criterion) {
         let encoded = &buf[..len];
 
         group.throughput(Throughput::Elements(*ack_count as u64));
-        group.bench_with_input(BenchmarkId::new("append_acks", ack_count), &encoded, |b, data| {
-            b.iter(|| black_box(decode_response(black_box(data)).unwrap()))
-        });
+        group.bench_with_input(
+            BenchmarkId::new("append_acks", ack_count),
+            &encoded,
+            |b, data| b.iter(|| black_box(decode_response(black_box(data)).unwrap())),
+        );
     }
 
     group.finish();

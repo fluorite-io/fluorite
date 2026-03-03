@@ -4,8 +4,8 @@
 //! Bootstrap command — run migrations and create an admin API key.
 
 use anyhow::{Context, Result};
-use sqlx::postgres::PgPoolOptions;
 use fluorite_broker::{AclChecker, ApiKeyValidator, Operation, ResourceType};
+use sqlx::postgres::PgPoolOptions;
 
 const MIGRATION_SQL: &str = include_str!("../../../migrations/001_init.sql");
 
@@ -32,7 +32,13 @@ pub async fn run(database_url: &str) -> Result<()> {
         .context("failed to create API key")?;
 
     checker
-        .create_acl("admin:cli", ResourceType::Cluster, "*", Operation::Admin, true)
+        .create_acl(
+            "admin:cli",
+            ResourceType::Cluster,
+            "*",
+            Operation::Admin,
+            true,
+        )
         .await
         .context("failed to create admin ACL")?;
 

@@ -23,8 +23,7 @@ use tokio_tungstenite::{MaybeTlsStream, connect_async};
 use fluorite_common::ids::*;
 use fluorite_common::types::{Record, RecordBatch};
 use fluorite_wire::{
-    ClientMessage, ServerMessage, reader, writer,
-    decode_server_message, encode_client_message,
+    ClientMessage, ServerMessage, decode_server_message, encode_client_message, reader, writer,
 };
 
 use common::ws_helpers;
@@ -290,8 +289,7 @@ async fn test_reader_group_broker_crash_redispatch() {
 
     // The re-dispatched range should overlap with or start at the uncommitted range
     assert!(
-        poll2.start_offset.0 <= dispatched_range.0
-            || poll2.start_offset.0 == dispatched_range.1,
+        poll2.start_offset.0 <= dispatched_range.0 || poll2.start_offset.0 == dispatched_range.1,
         "Re-dispatched range should cover uncommitted offsets"
     );
 }
@@ -367,7 +365,10 @@ async fn test_reader_group_session_timeout_work_redistribution() {
 
     // Reader 1 heartbeats (triggers expired member cleanup)
     let hb = ws_heartbeat(&mut ws_r1, group_id, topic_id, "reader-1").await;
-    eprintln!("  [rg-timeout] r1 heartbeat: {:?}", hb.as_ref().map(|h| &h.status));
+    eprintln!(
+        "  [rg-timeout] r1 heartbeat: {:?}",
+        hb.as_ref().map(|h| &h.status)
+    );
 
     // Reader 1 keeps polling until all work is consumed
     let mut total_committed = HashSet::new();
@@ -489,7 +490,10 @@ async fn test_reader_group_s3_partition_during_poll() {
     let poll2 = ws_poll(&mut ws_reader, group_id, topic_id, "reader-1")
         .await
         .expect("poll after heal");
-    assert!(poll2.success, "poll should succeed after S3 partition heals");
+    assert!(
+        poll2.success,
+        "poll should succeed after S3 partition heals"
+    );
 }
 
 /// Multiple readers poll and commit concurrently. No offset range is committed
@@ -644,10 +648,7 @@ async fn test_disconnect_triggers_fast_redistribution() {
     let poll_b = ws_poll(&mut ws_b, group_id, topic_id, "reader-b")
         .await
         .expect("poll B");
-    assert!(
-        poll_b.success,
-        "reader-b poll should succeed"
-    );
+    assert!(poll_b.success, "reader-b poll should succeed");
 
     let range_b = (poll_b.start_offset.0, poll_b.end_offset.0);
     eprintln!(
@@ -677,7 +678,8 @@ async fn test_disconnect_triggers_fast_redistribution() {
         range_b.0 <= range_a.0,
         "reader-b should start at or before reader-a's range \
          (reader-b starts at {}, reader-a started at {})",
-        range_b.0, range_a.0
+        range_b.0,
+        range_a.0
     );
 
     // Commit and verify

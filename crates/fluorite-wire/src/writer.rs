@@ -3,9 +3,9 @@
 
 //! Writer protocol messages: AppendRequest and AppendResponse.
 
-use prost::Message;
 use fluorite_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
 use fluorite_common::types::{BatchAck, RecordBatch};
+use prost::Message;
 use uuid::Uuid;
 
 use crate::proto_conv::{encode_proto_checked, from_proto_record, to_proto_record};

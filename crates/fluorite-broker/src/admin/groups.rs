@@ -9,8 +9,8 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
-use serde::Serialize;
 use fluorite_common::ids::TopicId;
+use serde::Serialize;
 
 use super::AdminState;
 
@@ -47,10 +47,7 @@ pub fn router() -> Router<AdminState> {
     Router::new()
         .route("/", get(list_groups))
         .route("/:group_id/topics/:topic_id", get(get_group))
-        .route(
-            "/:group_id/topics/:topic_id/reset",
-            post(force_reset),
-        )
+        .route("/:group_id/topics/:topic_id/reset", post(force_reset))
         .route(
             "/:group_id/topics/:topic_id/members/:member_id",
             delete(force_remove_member),

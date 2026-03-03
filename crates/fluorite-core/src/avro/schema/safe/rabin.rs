@@ -34,52 +34,6 @@ impl std::fmt::Write for Rabin {
     }
 }
 
-const EMPTY64: u64 = 0xC15D213A_A4D7A795;
-
-#[cfg(test)]
-mod tests {
-    use {super::Rabin, pretty_assertions::assert_eq};
-
-    #[test]
-    fn test() {
-        let data: &[(&str, i64)] = &[
-            (r#""null""#, 7195948357588979594),
-            (r#""boolean""#, -6970731678124411036),
-            (
-                r#"{"name":"foo","type":"fixed","size":15}"#,
-                1756455273707447556,
-            ),
-            (
-                r#"{"name":"PigValue","type":"record","fields":[{"name":"value","type":["null","int","long","PigValue"]}]}"#,
-                -1759257747318642341,
-            ),
-            ("hello world", 2906301498937520992),
-        ];
-
-        for (s, fp) in data {
-            let mut hasher = Rabin::default();
-            hasher.write(s.as_bytes());
-            let result = i64::from_le_bytes(hasher.finish());
-            assert_eq!(*fp, result);
-        }
-    }
-
-    #[test]
-    fn fp_table() {
-        let mut fp_table: [u64; 256] = [0; 256];
-        for i in 0..256 {
-            let mut fp = i;
-            for _ in 0..8 {
-                fp = (fp >> 1)
-                    ^ (super::EMPTY64 & u64::from_ne_bytes((-((fp & 1) as i64)).to_ne_bytes()));
-            }
-            fp_table[i as usize] = fp;
-            println!("\t{:#018X},", fp);
-        }
-        assert!(super::FP_TABLE as &[_] == &fp_table as &[_]);
-    }
-}
-
 impl std::fmt::Debug for Rabin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Rabin")
@@ -87,6 +41,8 @@ impl std::fmt::Debug for Rabin {
             .finish()
     }
 }
+
+const EMPTY64: u64 = 0xC15D213A_A4D7A795;
 
 const FP_TABLE: &[u64; 256] = &[
     0x0000000000000000,
@@ -346,3 +302,47 @@ const FP_TABLE: &[u64; 256] = &[
     0xB6C8B317E2F8A44A,
     0x9A3978B155ABF5B0,
 ];
+
+#[cfg(test)]
+mod tests {
+    use {super::Rabin, pretty_assertions::assert_eq};
+
+    #[test]
+    fn test() {
+        let data: &[(&str, i64)] = &[
+            (r#""null""#, 7195948357588979594),
+            (r#""boolean""#, -6970731678124411036),
+            (
+                r#"{"name":"foo","type":"fixed","size":15}"#,
+                1756455273707447556,
+            ),
+            (
+                r#"{"name":"PigValue","type":"record","fields":[{"name":"value","type":["null","int","long","PigValue"]}]}"#,
+                -1759257747318642341,
+            ),
+            ("hello world", 2906301498937520992),
+        ];
+
+        for (s, fp) in data {
+            let mut hasher = Rabin::default();
+            hasher.write(s.as_bytes());
+            let result = i64::from_le_bytes(hasher.finish());
+            assert_eq!(*fp, result);
+        }
+    }
+
+    #[test]
+    fn fp_table() {
+        let mut fp_table: [u64; 256] = [0; 256];
+        for i in 0..256 {
+            let mut fp = i;
+            for _ in 0..8 {
+                fp = (fp >> 1)
+                    ^ (super::EMPTY64 & u64::from_ne_bytes((-((fp & 1) as i64)).to_ne_bytes()));
+            }
+            fp_table[i as usize] = fp;
+            println!("\t{:#018X},", fp);
+        }
+        assert!(super::FP_TABLE as &[_] == &fp_table as &[_]);
+    }
+}

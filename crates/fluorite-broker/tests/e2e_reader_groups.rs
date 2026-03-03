@@ -22,16 +22,14 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use fluorite_broker::{
-    BrokerConfig, BrokerState, BufferConfig, CoordinatorConfig, LocalFsStore,
-};
 use bytes::Bytes;
+use fluorite_broker::{BrokerConfig, BrokerState, BufferConfig, CoordinatorConfig, LocalFsStore};
+use fluorite_common::ids::{AppendSeq, WriterId};
 use fluorite_common::ids::{Offset, SchemaId, TopicId};
 use fluorite_common::types::{Record, RecordBatch};
 use fluorite_wire::{
-    ClientMessage, ServerMessage, reader, writer, decode_server_message, encode_client_message,
+    ClientMessage, ServerMessage, decode_server_message, encode_client_message, reader, writer,
 };
-use fluorite_common::ids::{AppendSeq, WriterId};
 
 use common::TestDb;
 
@@ -57,6 +55,8 @@ async fn start_server(
         flush_interval: Duration::from_millis(10),
         require_auth: false,
         auth_timeout: Duration::from_secs(10),
+        #[cfg(feature = "iceberg")]
+        iceberg: None,
     };
 
     // Short session timeout for testing
@@ -65,8 +65,7 @@ async fn start_server(
         ..Default::default()
     };
 
-    let state =
-        BrokerState::with_coordinator_config(pool, store, config, coordinator_config).await;
+    let state = BrokerState::with_coordinator_config(pool, store, config, coordinator_config).await;
 
     let handle = tokio::spawn(async move {
         if let Err(e) = fluorite_broker::run(state).await {
@@ -253,13 +252,7 @@ async fn test_single_reader_joins_group() {
     let url = format!("ws://{}", addr);
     let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
 
-    let resp = join_group(
-        &mut ws,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let resp = join_group(&mut ws, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
     assert!(resp.success);
 
@@ -278,36 +271,18 @@ async fn test_two_readers_join_group() {
 
     // First reader joins
     let (mut ws1, _) = connect_async(&url).await.expect("Failed to connect");
-    let resp1 = join_group(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let resp1 = join_group(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
     assert!(resp1.success);
 
     // Second reader joins
     let (mut ws2, _) = connect_async(&url).await.expect("Failed to connect");
-    let resp2 = join_group(
-        &mut ws2,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-2",
-    )
-    .await;
+    let resp2 = join_group(&mut ws2, "test-group", TopicId(topic_id as u32), "reader-2").await;
 
     assert!(resp2.success);
 
     // First reader heartbeats - should succeed (still a member)
-    let hb1 = send_heartbeat(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let hb1 = send_heartbeat(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
     assert_eq!(
         hb1.status,
         reader::HeartbeatStatus::Ok,
@@ -330,41 +305,18 @@ async fn test_reader_leave_triggers_membership_change() {
 
     // Two readers join
     let (mut ws1, _) = connect_async(&url).await.expect("Failed to connect");
-    let _resp1 = join_group(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let _resp1 = join_group(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
     let (mut ws2, _) = connect_async(&url).await.expect("Failed to connect");
-    let _resp2 = join_group(
-        &mut ws2,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-2",
-    )
-    .await;
+    let _resp2 = join_group(&mut ws2, "test-group", TopicId(topic_id as u32), "reader-2").await;
 
     // Reader 2 leaves
-    let leave_resp = leave_group(
-        &mut ws2,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-2",
-    )
-    .await;
+    let leave_resp =
+        leave_group(&mut ws2, "test-group", TopicId(topic_id as u32), "reader-2").await;
     assert!(leave_resp.success);
 
     // Reader 1 heartbeats - should still be a member
-    let hb1 = send_heartbeat(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let hb1 = send_heartbeat(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
     assert_eq!(hb1.status, reader::HeartbeatStatus::Ok);
 
@@ -459,8 +411,14 @@ async fn test_commit_offsets() {
     // Produce some records first.
     let (mut ws_writer, _) = connect_async(&url).await.expect("Failed to connect");
     let records = vec![
-        Record { key: Some(Bytes::from("k1")), value: Bytes::from("v1") },
-        Record { key: Some(Bytes::from("k2")), value: Bytes::from("v2") },
+        Record {
+            key: Some(Bytes::from("k1")),
+            value: Bytes::from("v1"),
+        },
+        Record {
+            key: Some(Bytes::from("k2")),
+            value: Bytes::from("v2"),
+        },
     ];
     let append_resp = ws_append(&mut ws_writer, TopicId(topic_id as u32), records).await;
     assert!(append_resp.success, "Append should succeed");
@@ -471,25 +429,16 @@ async fn test_commit_offsets() {
 
     // Reader joins, polls, and commits.
     let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
-    let join_resp = join_group(
-        &mut ws,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let join_resp = join_group(&mut ws, "test-group", TopicId(topic_id as u32), "reader-1").await;
     assert!(join_resp.success);
 
     // Poll for dispatched work.
-    let poll_resp = ws_poll(
-        &mut ws,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let poll_resp = ws_poll(&mut ws, "test-group", TopicId(topic_id as u32), "reader-1").await;
     assert!(poll_resp.success, "Poll should succeed");
-    assert!(poll_resp.end_offset.0 > poll_resp.start_offset.0, "Should have dispatched records");
+    assert!(
+        poll_resp.end_offset.0 > poll_resp.start_offset.0,
+        "Should have dispatched records"
+    );
 
     // Commit the polled range.
     let commit_resp = commit_offsets(
@@ -518,25 +467,13 @@ async fn test_heartbeat_maintains_membership() {
     let url = format!("ws://{}", addr);
 
     let (mut ws, _) = connect_async(&url).await.expect("Failed to connect");
-    let _resp = join_group(
-        &mut ws,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let _resp = join_group(&mut ws, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
     // Send heartbeats
     for _ in 0..3 {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let hb = send_heartbeat(
-            &mut ws,
-            "test-group",
-            TopicId(topic_id as u32),
-            "reader-1",
-        )
-        .await;
+        let hb = send_heartbeat(&mut ws, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
         assert_eq!(hb.status, reader::HeartbeatStatus::Ok);
     }
@@ -556,13 +493,7 @@ async fn test_session_timeout_removes_member() {
 
     // First reader joins but doesn't heartbeat
     let (mut ws1, _) = connect_async(&url).await.expect("Failed to connect");
-    let _resp1 = join_group(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let _resp1 = join_group(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
 
     // Wait for session timeout (2 seconds + buffer)
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -571,31 +502,13 @@ async fn test_session_timeout_removes_member() {
     // Expired member detection runs during heartbeat processing, so reader-2
     // must heartbeat before reader-1 tries.
     let (mut ws2, _) = connect_async(&url).await.expect("Failed to connect");
-    let _resp2 = join_group(
-        &mut ws2,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-2",
-    )
-    .await;
+    let _resp2 = join_group(&mut ws2, "test-group", TopicId(topic_id as u32), "reader-2").await;
 
-    let hb2 = send_heartbeat(
-        &mut ws2,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-2",
-    )
-    .await;
+    let hb2 = send_heartbeat(&mut ws2, "test-group", TopicId(topic_id as u32), "reader-2").await;
     assert_eq!(hb2.status, reader::HeartbeatStatus::Ok);
 
     // First reader heartbeat should fail with UnknownMember (evicted by reader-2's heartbeat)
-    let hb1 = send_heartbeat(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let hb1 = send_heartbeat(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
     assert_eq!(
         hb1.status,
         reader::HeartbeatStatus::UnknownMember,
@@ -660,8 +573,14 @@ async fn test_pipelined_poll_and_out_of_order_commit() {
     assert!(poll2.success, "poll2 should succeed");
 
     // Verify lease_deadline_ms is populated
-    assert!(poll1.lease_deadline_ms > 0, "poll1 lease_deadline_ms should be non-zero");
-    assert!(poll2.lease_deadline_ms > 0, "poll2 lease_deadline_ms should be non-zero");
+    assert!(
+        poll1.lease_deadline_ms > 0,
+        "poll1 lease_deadline_ms should be non-zero"
+    );
+    assert!(
+        poll2.lease_deadline_ms > 0,
+        "poll2 lease_deadline_ms should be non-zero"
+    );
 
     // Commit second batch FIRST (out of order)
     if poll2.start_offset != poll2.end_offset {
@@ -706,35 +625,17 @@ async fn test_three_readers_join_group() {
 
     // First reader joins
     let (mut ws1, _) = connect_async(&url).await.expect("Failed to connect");
-    let resp1 = join_group(
-        &mut ws1,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-1",
-    )
-    .await;
+    let resp1 = join_group(&mut ws1, "test-group", TopicId(topic_id as u32), "reader-1").await;
     assert!(resp1.success);
 
     // Second reader joins
     let (mut ws2, _) = connect_async(&url).await.expect("Failed to connect");
-    let resp2 = join_group(
-        &mut ws2,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-2",
-    )
-    .await;
+    let resp2 = join_group(&mut ws2, "test-group", TopicId(topic_id as u32), "reader-2").await;
     assert!(resp2.success);
 
     // Third reader joins
     let (mut ws3, _) = connect_async(&url).await.expect("Failed to connect");
-    let resp3 = join_group(
-        &mut ws3,
-        "test-group",
-        TopicId(topic_id as u32),
-        "reader-3",
-    )
-    .await;
+    let resp3 = join_group(&mut ws3, "test-group", TopicId(topic_id as u32), "reader-3").await;
     assert!(resp3.success);
 
     ws1.close(None).await.ok();

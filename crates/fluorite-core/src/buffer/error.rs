@@ -8,7 +8,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum FluoriteError {
     #[error("Avro parsing error: {0}")]
-    AvroParse(#[from] apache_avro::Error),
+    AvroParse(Box<apache_avro::Error>),
 
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
@@ -36,6 +36,12 @@ impl IntoResponse for FluoriteError {
         };
 
         (status, self.to_string()).into_response()
+    }
+}
+
+impl From<apache_avro::Error> for FluoriteError {
+    fn from(e: apache_avro::Error) -> Self {
+        FluoriteError::AvroParse(Box::new(e))
     }
 }
 

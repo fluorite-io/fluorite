@@ -12,9 +12,7 @@ use tracing::{debug, error};
 
 use fluorite_common::ids::{AppendSeq, WriterId};
 use fluorite_common::types::BatchAck;
-use fluorite_wire::{
-    ERR_BACKPRESSURE, ERR_INTERNAL_ERROR, ERR_STALE_SEQUENCE, STATUS_OK, writer,
-};
+use fluorite_wire::{ERR_BACKPRESSURE, ERR_INTERNAL_ERROR, ERR_STALE_SEQUENCE, STATUS_OK, writer};
 
 use crate::dedup::DedupResult;
 use crate::metrics::{
@@ -66,9 +64,7 @@ pub(crate) enum EnqueueResult {
     },
 }
 
-pub(crate) fn total_inflight_requests(
-    in_flight: &HashMap<WriterId, WriterInFlightState>,
-) -> usize {
+pub(crate) fn total_inflight_requests(in_flight: &HashMap<WriterId, WriterInFlightState>) -> usize {
     in_flight.values().map(|state| state.entries.len()).sum()
 }
 
@@ -85,9 +81,12 @@ pub(crate) async fn in_flight_append_decision<S: ObjectStore + Send + Sync + 'st
         return InFlightAppendDecision::Wait(rx);
     }
 
-    writer_in_flight
-        .entries
-        .insert(append_seq.0, InFlightAppendEntry { waiters: Vec::new() });
+    writer_in_flight.entries.insert(
+        append_seq.0,
+        InFlightAppendEntry {
+            waiters: Vec::new(),
+        },
+    );
     writer_in_flight.seqs.insert(append_seq.0);
     INFLIGHT_APPEND_REQUESTS.set(total_inflight_requests(&in_flight) as f64);
     InFlightAppendDecision::Proceed
@@ -361,8 +360,7 @@ pub(crate) async fn await_append_ack<S: ObjectStore + Send + Sync + 'static>(
             enqueue_started,
         } => match response_rx.await {
             Ok(append_acks) => {
-                APPEND_ENQUEUE_TO_ACK_SECONDS
-                    .observe(enqueue_started.elapsed().as_secs_f64());
+                APPEND_ENQUEUE_TO_ACK_SECONDS.observe(enqueue_started.elapsed().as_secs_f64());
                 state
                     .dedup_cache
                     .update(writer_id, append_seq, append_acks.clone())
@@ -379,8 +377,7 @@ pub(crate) async fn await_append_ack<S: ObjectStore + Send + Sync + 'static>(
                 result
             }
             Err(_) => {
-                APPEND_ENQUEUE_TO_ACK_SECONDS
-                    .observe(enqueue_started.elapsed().as_secs_f64());
+                APPEND_ENQUEUE_TO_ACK_SECONDS.observe(enqueue_started.elapsed().as_secs_f64());
                 error!("Response channel closed");
                 let result = encode_append_response(
                     append_seq,

@@ -113,13 +113,7 @@ async fn test_committed_offset_persists() {
 
     // Commit range [0, 42)
     let status = coordinator
-        .commit_range(
-            "persist-group",
-            topic_id,
-            "reader-a",
-            Offset(0),
-            Offset(42),
-        )
+        .commit_range("persist-group", topic_id, "reader-a", Offset(0), Offset(42))
         .await
         .expect("Commit should succeed");
     assert_eq!(status, CommitStatus::Ok, "Commit should return Ok");
@@ -212,13 +206,7 @@ async fn test_concurrent_commit_same_reader() {
         let end = offset * 10;
         handles.push(tokio::spawn(async move {
             coord
-                .commit_range(
-                    "cc-group",
-                    topic_id,
-                    "reader-a",
-                    Offset(start),
-                    Offset(end),
-                )
+                .commit_range("cc-group", topic_id, "reader-a", Offset(start), Offset(end))
                 .await
         }));
     }
@@ -315,13 +303,7 @@ async fn test_commit_during_membership_change() {
         // Small delay to allow B's join to start
         tokio::time::sleep(Duration::from_millis(10)).await;
         coord_commit
-            .commit_range(
-                "cr-group",
-                topic_id,
-                "reader-a",
-                Offset(0),
-                Offset(50),
-            )
+            .commit_range("cr-group", topic_id, "reader-a", Offset(0), Offset(50))
             .await
     });
 
@@ -581,9 +563,7 @@ async fn test_concurrent_join_group_serialization() {
         let coord = coordinator.clone();
         let reader_id = format!("reader-{}", i);
         handles.push(tokio::spawn(async move {
-            coord
-                .join_group("cj8-group", topic_id, &reader_id)
-                .await
+            coord.join_group("cj8-group", topic_id, &reader_id).await
         }));
     }
 
@@ -674,7 +654,10 @@ async fn test_commit_rejected_for_wrong_reader() {
         .poll("wrc-group", topic_id, "reader-a", 1024 * 1024)
         .await
         .expect("poll a");
-    assert!(poll_a.start_offset != poll_a.end_offset, "reader-a should get work");
+    assert!(
+        poll_a.start_offset != poll_a.end_offset,
+        "reader-a should get work"
+    );
 
     // Reader B tries to commit A's range
     let status = coordinator
@@ -726,7 +709,10 @@ async fn test_concurrent_pipelined_polls_no_data_loss() {
             let mut ranges = vec![];
             for _ in 0..3 {
                 match coord.poll("cp-group", topic_id, &reader_id, 1024).await {
-                    Ok(poll) if poll.status == PollStatus::Ok && poll.start_offset != poll.end_offset => {
+                    Ok(poll)
+                        if poll.status == PollStatus::Ok
+                            && poll.start_offset != poll.end_offset =>
+                    {
                         ranges.push((poll.start_offset, poll.end_offset));
                     }
                     _ => break,
@@ -749,18 +735,17 @@ async fn test_concurrent_pipelined_polls_no_data_loss() {
         .collect();
 
     // Flatten all ranges and verify no overlaps
-    let all_ranges: Vec<(u64, u64)> = results
-        .iter()
-        .flatten()
-        .map(|(s, e)| (s.0, e.0))
-        .collect();
+    let all_ranges: Vec<(u64, u64)> = results.iter().flatten().map(|(s, e)| (s.0, e.0)).collect();
 
     for (i, r1) in all_ranges.iter().enumerate() {
         for r2 in all_ranges.iter().skip(i + 1) {
             assert!(
                 r1.1 <= r2.0 || r2.1 <= r1.0,
                 "ranges must not overlap: [{}, {}) vs [{}, {})",
-                r1.0, r1.1, r2.0, r2.1,
+                r1.0,
+                r1.1,
+                r2.0,
+                r2.1,
             );
         }
     }
@@ -804,12 +789,18 @@ async fn test_concurrent_poll_commit_stress() {
             let mut committed = 0u64;
             for _ in 0..5 {
                 match coord.poll("pcs-group", topic_id, &reader_id, 1024).await {
-                    Ok(poll) if poll.status == PollStatus::Ok && poll.start_offset != poll.end_offset => {
+                    Ok(poll)
+                        if poll.status == PollStatus::Ok
+                            && poll.start_offset != poll.end_offset =>
+                    {
                         let range_size = poll.end_offset.0 - poll.start_offset.0;
                         if let Ok(CommitStatus::Ok) = coord
                             .commit_range(
-                                "pcs-group", topic_id, &reader_id,
-                                poll.start_offset, poll.end_offset,
+                                "pcs-group",
+                                topic_id,
+                                &reader_id,
+                                poll.start_offset,
+                                poll.end_offset,
                             )
                             .await
                         {

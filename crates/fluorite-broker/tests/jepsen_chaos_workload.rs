@@ -194,17 +194,14 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
 
                 match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
-                        history.lock().await.record_write_complete(idx, offset, true);
-                    }
-                    _ => {
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                         history
                             .lock()
                             .await
-                            .record_write_complete(idx, None, false);
+                            .record_write_complete(idx, offset, true);
+                    }
+                    _ => {
+                        history.lock().await.record_write_complete(idx, None, false);
                         ws = None; // reconnect
                     }
                 }
@@ -266,12 +263,10 @@ async fn run_chaos_workload(cfg: ChaosConfig) {
                             .record_read_complete(idx, values, hwm, true);
                     }
                     _ => {
-                        history.lock().await.record_read_complete(
-                            idx,
-                            vec![],
-                            Offset(0),
-                            false,
-                        );
+                        history
+                            .lock()
+                            .await
+                            .record_read_complete(idx, vec![], Offset(0), false);
                         ws = None;
                     }
                 }
@@ -490,17 +485,14 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
 
                 match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
-                        history.lock().await.record_write_complete(idx, offset, true);
-                    }
-                    _ => {
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                         history
                             .lock()
                             .await
-                            .record_write_complete(idx, None, false);
+                            .record_write_complete(idx, offset, true);
+                    }
+                    _ => {
+                        history.lock().await.record_write_complete(idx, None, false);
                         ws = None;
                     }
                 }
@@ -562,12 +554,10 @@ async fn run_randomized_chaos_workload(cfg: RandomChaosConfig) {
                             .record_read_complete(idx, values, hwm, true);
                     }
                     _ => {
-                        history.lock().await.record_read_complete(
-                            idx,
-                            vec![],
-                            Offset(0),
-                            false,
-                        );
+                        history
+                            .lock()
+                            .await
+                            .record_read_complete(idx, vec![], Offset(0), false);
                         ws = None;
                     }
                 }
@@ -741,11 +731,11 @@ async fn test_randomized_chaos_full() {
 
 #[derive(Debug, Clone, Copy)]
 enum MultiBrokerFault {
-    S3LatencyBroker(usize, u64),
-    TransientPutBroker(usize, u32),
-    S3PartitionBroker(usize),
-    CrashBroker(usize),
-    GetLatencyBroker(usize, u64),
+    S3Latency(usize, u64),
+    TransientPut(usize, u32),
+    S3Partition(usize),
+    Crash(usize),
+    GetLatency(usize, u64),
 }
 
 /// 2-minute multi-broker soak: 2 brokers, 6 producers, 3 consumers.
@@ -805,17 +795,14 @@ async fn test_soak_2min() {
 
                 match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
-                        history.lock().await.record_write_complete(idx, offset, true);
-                    }
-                    _ => {
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                         history
                             .lock()
                             .await
-                            .record_write_complete(idx, None, false);
+                            .record_write_complete(idx, offset, true);
+                    }
+                    _ => {
+                        history.lock().await.record_write_complete(idx, None, false);
                         ws = None;
                     }
                 }
@@ -878,12 +865,10 @@ async fn test_soak_2min() {
                             .record_read_complete(idx, values, hwm, true);
                     }
                     _ => {
-                        history.lock().await.record_read_complete(
-                            idx,
-                            vec![],
-                            Offset(0),
-                            false,
-                        );
+                        history
+                            .lock()
+                            .await
+                            .record_read_complete(idx, vec![], Offset(0), false);
                         ws = None;
                     }
                 }
@@ -894,14 +879,14 @@ async fn test_soak_2min() {
 
     // --- 12 fault cycles of 10s each ---
     let all_multi_faults = [
-        MultiBrokerFault::S3LatencyBroker(0, 300),
-        MultiBrokerFault::S3LatencyBroker(1, 200),
-        MultiBrokerFault::TransientPutBroker(0, 3),
-        MultiBrokerFault::S3PartitionBroker(0),
-        MultiBrokerFault::S3PartitionBroker(1),
-        MultiBrokerFault::CrashBroker(0),
-        MultiBrokerFault::CrashBroker(1),
-        MultiBrokerFault::GetLatencyBroker(0, 200),
+        MultiBrokerFault::S3Latency(0, 300),
+        MultiBrokerFault::S3Latency(1, 200),
+        MultiBrokerFault::TransientPut(0, 3),
+        MultiBrokerFault::S3Partition(0),
+        MultiBrokerFault::S3Partition(1),
+        MultiBrokerFault::Crash(0),
+        MultiBrokerFault::Crash(1),
+        MultiBrokerFault::GetLatency(0, 200),
     ];
 
     for cycle in 0..12 {
@@ -916,22 +901,22 @@ async fn test_soak_2min() {
 
         for fault in &chosen {
             match fault {
-                MultiBrokerFault::S3LatencyBroker(b, ms) => {
+                MultiBrokerFault::S3Latency(b, ms) => {
                     cluster.broker_store(*b).set_put_delay_ms(*ms);
                 }
-                MultiBrokerFault::TransientPutBroker(b, n) => {
+                MultiBrokerFault::TransientPut(b, n) => {
                     cluster.broker_store(*b).fail_put_transiently(*n);
                 }
-                MultiBrokerFault::S3PartitionBroker(b) => {
+                MultiBrokerFault::S3Partition(b) => {
                     cluster.broker_store(*b).partition_puts();
                 }
-                MultiBrokerFault::CrashBroker(b) => {
+                MultiBrokerFault::Crash(b) => {
                     cluster.crash_broker(*b).await;
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     cluster.restart_broker(*b).await;
                     *addrs.lock().await = cluster.addrs();
                 }
-                MultiBrokerFault::GetLatencyBroker(b, ms) => {
+                MultiBrokerFault::GetLatency(b, ms) => {
                     cluster.broker_store(*b).set_get_delay_ms(*ms);
                 }
             }

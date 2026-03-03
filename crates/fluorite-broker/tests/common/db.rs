@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use fluorite_broker::{ObjectStore, FlWriter};
+use fluorite_broker::{FlWriter, ObjectStore};
 use fluorite_common::ids::{Offset, SchemaId, TopicId};
 use fluorite_common::types::{Record, RecordBatch};
 
@@ -30,6 +30,15 @@ impl TestDb {
     pub async fn new() -> Self {
         let base_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5433".to_string());
+
+        // Strip any database name from the URL (e.g. /fluorite) to get the server base
+        let base_url = match base_url.rfind("://") {
+            Some(scheme_end) => match base_url[scheme_end + 3..].find('/') {
+                Some(path_start) => base_url[..scheme_end + 3 + path_start].to_string(),
+                None => base_url,
+            },
+            None => base_url,
+        };
 
         let admin_url = format!("{}/postgres", base_url);
         let admin_pool = PgPoolOptions::new()
@@ -92,13 +101,12 @@ impl TestDb {
 
     /// Create a test topic.
     pub async fn create_topic(&self, name: &str) -> i32 {
-        let topic_id: i32 = sqlx::query_scalar(
-            "INSERT INTO topics (name) VALUES ($1) RETURNING topic_id",
-        )
-        .bind(name)
-        .fetch_one(&self.pool)
-        .await
-        .expect("Failed to create topic");
+        let topic_id: i32 =
+            sqlx::query_scalar("INSERT INTO topics (name) VALUES ($1) RETURNING topic_id")
+                .bind(name)
+                .fetch_one(&self.pool)
+                .await
+                .expect("Failed to create topic");
 
         topic_id
     }

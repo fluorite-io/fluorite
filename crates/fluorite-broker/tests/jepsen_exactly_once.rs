@@ -193,21 +193,14 @@ fn spawn_producer(
             // would create a false WW causal ordering violation.
             let history_idx = {
                 let mut h = history.lock().await;
-                let idx = h.record_write(
-                    writer_id,
-                    TopicId(0),
-                    Bytes::from(val.clone()),
-                );
+                let idx = h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()));
                 if !is_retry { Some(idx) } else { None }
             };
 
             match ws_produce(w, writer_id, seq, topic_id, &val).await {
                 Ok(resp) if resp.success => {
                     if let Some(idx) = history_idx {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                         history
                             .lock()
                             .await
@@ -220,10 +213,7 @@ fn spawn_producer(
                 Ok(resp) if resp.error_code == ERR_STALE_SEQUENCE => {
                     // Already committed by a previous incarnation.
                     if let Some(idx) = history_idx {
-                        history
-                            .lock()
-                            .await
-                            .record_write_complete(idx, None, false);
+                        history.lock().await.record_write_complete(idx, None, false);
                     }
                     let mut s = state.lock().await;
                     s.last_unacked_seq = None;
@@ -231,10 +221,7 @@ fn spawn_producer(
                 }
                 _ => {
                     if let Some(idx) = history_idx {
-                        history
-                            .lock()
-                            .await
-                            .record_write_complete(idx, None, false);
+                        history.lock().await.record_write_complete(idx, None, false);
                     }
                     ws = None;
                 }
@@ -295,12 +282,10 @@ fn spawn_consumer(
                         .record_read_complete(idx, values, hwm, true);
                 }
                 _ => {
-                    history.lock().await.record_read_complete(
-                        idx,
-                        vec![],
-                        Offset(0),
-                        false,
-                    );
+                    history
+                        .lock()
+                        .await
+                        .record_read_complete(idx, vec![], Offset(0), false);
                     ws = None;
                 }
             }
@@ -388,7 +373,10 @@ async fn final_read_and_verify(
     let failed_writes = total_writes - successful_writes;
     eprintln!(
         "  [exactly-once] done: {}/{} writes succeeded, {} failed, {} records in log",
-        successful_writes, total_writes, failed_writes, all_values.len()
+        successful_writes,
+        total_writes,
+        failed_writes,
+        all_values.len()
     );
 
     assert!(
@@ -517,11 +505,7 @@ async fn run_single_broker_workload(cfg: SingleBrokerConfig) {
 
     // Chaos cycles.
     for cycle in 0..cfg.num_cycles {
-        let action = pick_single_broker_action(
-            &mut rng,
-            cfg.num_producers,
-            cfg.num_consumers,
-        );
+        let action = pick_single_broker_action(&mut rng, cfg.num_producers, cfg.num_consumers);
         eprintln!(
             "  [exactly-once] cycle {}/{}: {:?}",
             cycle + 1,
@@ -637,10 +621,21 @@ enum MultiBrokerChaosAction {
     KillProducers(Vec<usize>),
     KillConsumers(Vec<usize>),
     CrashBrokers(Vec<usize>),
-    S3Latency { broker: usize, ms: u64 },
-    TransientPutFailure { broker: usize, count: u32 },
-    S3Partition { broker: usize },
-    Combined { producers: Vec<usize>, brokers: Vec<usize> },
+    S3Latency {
+        broker: usize,
+        ms: u64,
+    },
+    TransientPutFailure {
+        broker: usize,
+        count: u32,
+    },
+    S3Partition {
+        broker: usize,
+    },
+    Combined {
+        producers: Vec<usize>,
+        brokers: Vec<usize>,
+    },
 }
 
 fn pick_multi_broker_action(
@@ -717,7 +712,10 @@ struct MultiBrokerConfig {
 
 async fn run_multi_broker_workload(cfg: MultiBrokerConfig) {
     let mut rng = StdRng::seed_from_u64(cfg.seed);
-    eprintln!("  [exactly-once] seed={} brokers={}", cfg.seed, cfg.num_brokers);
+    eprintln!(
+        "  [exactly-once] seed={} brokers={}",
+        cfg.seed, cfg.num_brokers
+    );
 
     let db = TestDb::new().await;
     let topic_id = TopicId(db.create_topic("exactly-once").await as u32);

@@ -51,10 +51,10 @@ impl ApiKeyValidator {
         }
 
         // Check expiration
-        if let Some(expires_at) = row.expires_at {
-            if expires_at < chrono::Utc::now() {
-                return Err(AuthError::ExpiredApiKey);
-            }
+        if let Some(expires_at) = row.expires_at
+            && expires_at < chrono::Utc::now()
+        {
+            return Err(AuthError::ExpiredApiKey);
         }
 
         // Verify the secret against the bcrypt hash

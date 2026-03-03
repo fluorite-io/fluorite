@@ -10,15 +10,15 @@
 //! - **Catch-up path**: a periodic task finds un-ingested batches via
 //!   an anti-join on `iceberg_claims` and re-reads them from S3.
 
+pub mod catchup;
 pub mod config;
 pub mod error;
 pub mod iceberg_buffer;
-pub mod schema_mapping;
-pub mod schema_evolution;
-pub mod record_converter;
 pub mod iceberg_writer;
+pub mod record_converter;
+pub mod schema_evolution;
+pub mod schema_mapping;
 pub mod tracking;
-pub mod catchup;
 
 pub use config::IcebergConfig;
 pub use error::{IcebergError, Result};

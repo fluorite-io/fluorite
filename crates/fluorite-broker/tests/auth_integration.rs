@@ -138,12 +138,7 @@ async fn test_acl_check_allow() {
 
     // Should be allowed
     let allowed = checker
-        .check(
-            &principal,
-            ResourceType::Topic,
-            "orders",
-            Operation::Append,
-        )
+        .check(&principal, ResourceType::Topic, "orders", Operation::Append)
         .await;
     assert!(allowed);
 
@@ -186,12 +181,7 @@ async fn test_acl_check_wildcard() {
 
     // Should be allowed for any topic
     let allowed = checker
-        .check(
-            &principal,
-            ResourceType::Topic,
-            "orders",
-            Operation::Append,
-        )
+        .check(&principal, ResourceType::Topic, "orders", Operation::Append)
         .await;
     assert!(allowed);
 
@@ -234,23 +224,13 @@ async fn test_acl_check_deny_precedence() {
 
     // Should be allowed for normal topics
     let allowed = checker
-        .check(
-            &principal,
-            ResourceType::Topic,
-            "orders",
-            Operation::Append,
-        )
+        .check(&principal, ResourceType::Topic, "orders", Operation::Append)
         .await;
     assert!(allowed);
 
     // Should be denied for the specific topic (deny takes precedence)
     let allowed = checker
-        .check(
-            &principal,
-            ResourceType::Topic,
-            "secret",
-            Operation::Append,
-        )
+        .check(&principal, ResourceType::Topic, "secret", Operation::Append)
         .await;
     assert!(!allowed);
 }

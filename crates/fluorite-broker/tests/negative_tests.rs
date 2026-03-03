@@ -17,10 +17,10 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use fluorite_broker::buffer::BufferConfig;
 use fluorite_broker::{BrokerConfig, BrokerState, LocalFsStore};
-use fluorite_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
+use fluorite_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
 use fluorite_common::types::{Record, RecordBatch};
 use fluorite_wire::{
-    ClientMessage, ServerMessage, reader, decode_server_message, encode_client_message, writer,
+    ClientMessage, ServerMessage, decode_server_message, encode_client_message, reader, writer,
 };
 
 use common::{CrashableWsBroker, TestDb};
@@ -47,6 +47,8 @@ async fn start_server(
         flush_interval: Duration::from_millis(50),
         require_auth: false,
         auth_timeout: Duration::from_secs(10),
+        #[cfg(feature = "iceberg")]
+        iceberg: None,
     };
 
     let state = BrokerState::new(pool, store, config).await;
@@ -95,14 +97,12 @@ async fn test_malformed_websocket_message() {
     let result = tokio::time::timeout(Duration::from_secs(2), ws.next()).await;
 
     let handled_correctly = match &result {
-        Ok(Some(Ok(Message::Close(frame)))) => {
-            // Connection closed - verify it's not a normal close if we got a frame
-            if let Some(f) = frame {
-                // Close with an error code (not 1000 = normal closure)
-                f.code != tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal
-            } else {
-                true // Close without frame is acceptable
-            }
+        Ok(Some(Ok(Message::Close(Some(f))))) => {
+            // Close with an error code (not 1000 = normal closure)
+            f.code != tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal
+        }
+        Ok(Some(Ok(Message::Close(None)))) => {
+            true // Close without frame is acceptable
         }
         Ok(Some(Ok(Message::Binary(data)))) => {
             // Error response - should have content
@@ -372,10 +372,7 @@ async fn test_connection_close_during_produce() {
     };
 
     // Verify we have at least the baseline record
-    assert!(
-        !fetch_resp.results.is_empty(),
-        "Should have topic results"
-    );
+    assert!(!fetch_resp.results.is_empty(), "Should have topic results");
     assert!(
         !fetch_resp.results[0].records.is_empty(),
         "Should have at least baseline record"
@@ -477,7 +474,10 @@ async fn test_connection_drop_mid_append_broker_stays_healthy() {
         ServerMessage::Append(r) => r,
         _ => panic!("expected append response"),
     };
-    assert!(append_resp.success, "fresh write should succeed after connection drop");
+    assert!(
+        append_resp.success,
+        "fresh write should succeed after connection drop"
+    );
 
     // Read all records -- verify consistency
     let fetch_req = reader::ReadRequest {
@@ -515,7 +515,11 @@ async fn test_connection_drop_mid_append_broker_stays_healthy() {
 
     // Contiguous offsets: record count == watermark
     let total_records: usize = read_resp.results.iter().map(|r| r.records.len()).sum();
-    let hwm = read_resp.results.first().map(|r| r.high_watermark.0).unwrap_or(0);
+    let hwm = read_resp
+        .results
+        .first()
+        .map(|r| r.high_watermark.0)
+        .unwrap_or(0);
     assert_eq!(
         total_records as u64, hwm,
         "offsets should be contiguous: {} records but watermark {}",
@@ -621,10 +625,16 @@ async fn test_rapid_connect_disconnect_no_state_corruption() {
     );
 
     // All offsets unique (no gaps or duplicates relative to watermark)
-    let hwm = read_resp.results.first().map(|r| r.high_watermark.0).unwrap_or(0);
+    let hwm = read_resp
+        .results
+        .first()
+        .map(|r| r.high_watermark.0)
+        .unwrap_or(0);
     assert_eq!(
-        all_values.len() as u64, hwm,
+        all_values.len() as u64,
+        hwm,
         "record count {} should equal watermark {}",
-        all_values.len(), hwm
+        all_values.len(),
+        hwm
     );
 }

@@ -6,9 +6,9 @@
 use fluorite_common::ids::{Offset, SchemaId, TopicId};
 use fluorite_wire::reader;
 
+use crate::BrokerError;
 use crate::fl::{Codec, FlReader, SegmentMeta};
 use crate::object_store::ObjectStore;
-use crate::BrokerError;
 
 use super::BrokerState;
 
@@ -104,29 +104,28 @@ pub(crate) async fn fetch_records<S: ObjectStore + Send + Sync>(
         }
 
         if current_schema != Some(schema_id) {
-            if let Some(prev_schema) = current_schema {
-                if !current_records.is_empty() {
-                    grouped_results.push(reader::TopicResult {
-                        topic_id,
-                        schema_id: prev_schema,
-                        high_watermark: Offset(high_watermark as u64),
-                        records: std::mem::take(&mut current_records),
-                    });
-                }
+            if let Some(prev_schema) = current_schema
+                && !current_records.is_empty()
+            {
+                grouped_results.push(reader::TopicResult {
+                    topic_id,
+                    schema_id: prev_schema,
+                    high_watermark: Offset(high_watermark as u64),
+                    records: std::mem::take(&mut current_records),
+                });
             }
             current_schema = Some(schema_id);
         }
 
         let mut record_offset = batch_start as u64 + skip as u64;
         for record in records.into_iter().skip(skip) {
-            if let Some(end) = end_offset {
-                if record_offset >= end.0 {
-                    break;
-                }
+            if let Some(end) = end_offset
+                && record_offset >= end.0
+            {
+                break;
             }
             record_offset += 1;
-            total_bytes +=
-                record.value.len() + record.key.as_ref().map(|k| k.len()).unwrap_or(0);
+            total_bytes += record.value.len() + record.key.as_ref().map(|k| k.len()).unwrap_or(0);
             current_records.push(record);
             if total_bytes >= max_bytes {
                 reached_limit = true;

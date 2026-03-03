@@ -19,11 +19,11 @@
 //! ```
 
 use bytes::{Bytes, BytesMut};
-use std::time::{SystemTime, UNIX_EPOCH};
-use thiserror::Error;
 use fluorite_common::ids::{Offset, SchemaId, TopicId};
 use fluorite_common::types::{Record, RecordBatch};
 use fluorite_wire::{record, varint};
+use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
 
 /// Magic bytes for FL format.
 const MAGIC: &[u8; 4] = b"FLRN";

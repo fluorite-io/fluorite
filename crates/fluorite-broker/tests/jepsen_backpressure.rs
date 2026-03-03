@@ -31,12 +31,7 @@ async fn ws_connect(addr: std::net::SocketAddr) -> Ws {
     ws
 }
 
-fn make_append(
-    writer_id: WriterId,
-    seq: u64,
-    topic_id: TopicId,
-    payload_bytes: usize,
-) -> Vec<u8> {
+fn make_append(writer_id: WriterId, seq: u64, topic_id: TopicId, payload_bytes: usize) -> Vec<u8> {
     let value = Bytes::from(vec![b'x'; payload_bytes]);
     let req = writer::AppendRequest {
         writer_id,

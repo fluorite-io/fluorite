@@ -11,15 +11,15 @@ use std::time::Duration;
 use anyhow::Result;
 use apache_avro::Schema as AvroSchema;
 use apache_avro::from_avro_datum;
+use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::ExecutableCommand;
+use fluorite_common::ids::{SchemaId, TopicId};
+use fluorite_sdk::reader::{Reader, ReaderConfig};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use serde::Serialize;
 use tokio::sync::{Mutex, mpsc};
-use fluorite_common::ids::{SchemaId, TopicId};
-use fluorite_sdk::reader::{Reader, ReaderConfig};
 
 use crate::client::FluoriteClient;
 
@@ -66,24 +66,23 @@ impl SchemaCache {
     async fn decode(&mut self, schema_id: SchemaId, bytes: &[u8]) -> String {
         let sid = schema_id.0;
         // Try Avro decode if we have or can fetch the schema
-        if let Some(schema) = self.get_or_fetch(sid).await {
-            if let Ok(value) = from_avro_datum(&schema, &mut &*bytes, None) {
-                if let Ok(json) = serde_json::Value::try_from(value) {
-                    return serde_json::to_string(&json).unwrap_or_else(|_| format!("{json:?}"));
-                }
-            }
+        if let Some(schema) = self.get_or_fetch(sid).await
+            && let Ok(value) = from_avro_datum(schema, &mut &*bytes, None)
+            && let Ok(json) = serde_json::Value::try_from(value)
+        {
+            return serde_json::to_string(&json).unwrap_or_else(|_| format!("{json:?}"));
         }
         // Fallback: show as UTF-8 string (for pre-Avro records or decode failures)
         String::from_utf8_lossy(bytes).into_owned()
     }
 
     async fn get_or_fetch(&mut self, schema_id: u32) -> Option<&AvroSchema> {
-        if !self.schemas.contains_key(&schema_id) {
-            if let Ok(resp) = self.client.get_schema(schema_id).await {
-                let json = serde_json::to_string(&resp.schema).ok()?;
-                if let Ok(schema) = AvroSchema::parse_str(&json) {
-                    self.schemas.insert(schema_id, schema);
-                }
+        if !self.schemas.contains_key(&schema_id)
+            && let Ok(resp) = self.client.get_schema(schema_id).await
+        {
+            let json = serde_json::to_string(&resp.schema).ok()?;
+            if let Ok(schema) = AvroSchema::parse_str(&json) {
+                self.schemas.insert(schema_id, schema);
             }
         }
         self.schemas.get(&schema_id)
@@ -130,10 +129,7 @@ pub async fn run(
 }
 
 #[allow(dead_code)] // used via lib crate in integration tests
-pub async fn poll_loop(
-    reader: Arc<Reader>,
-    tx: mpsc::Sender<TailRecord>,
-) {
+pub async fn poll_loop(reader: Arc<Reader>, tx: mpsc::Sender<TailRecord>) {
     poll_loop_with_cache(reader, tx, None).await;
 }
 
@@ -164,15 +160,7 @@ async fn poll_loop_with_cache(
                             None => String::from_utf8_lossy(&record.value).into_owned(),
                         };
 
-                        if tx
-                            .send(TailRecord {
-                                offset,
-                                key,
-                                value,
-                            })
-                            .await
-                            .is_err()
-                        {
+                        if tx.send(TailRecord { offset, key, value }).await.is_err() {
                             return;
                         }
                     }
@@ -233,14 +221,12 @@ async fn run_tui(mut rx: mpsc::Receiver<TailRecord>, topic_id: u32) -> Result<()
 
         terminal.draw(|f| render(f, &app))?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press
-                    && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                {
-                    break;
-                }
-            }
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+        {
+            break;
         }
     }
 
@@ -292,10 +278,7 @@ fn render(f: &mut Frame, app: &TuiApp) {
 
     f.render_widget(table, chunks[0]);
 
-    let status = format!(
-        " Records: {} | Press q to quit ",
-        total,
-    );
+    let status = format!(" Records: {} | Press q to quit ", total,);
     let status_bar = Paragraph::new(status).style(Style::default().fg(Color::DarkGray));
     f.render_widget(status_bar, chunks[1]);
 }

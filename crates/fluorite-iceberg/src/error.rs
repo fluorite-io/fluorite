@@ -23,7 +23,7 @@ pub enum IcebergError {
     Parquet(#[from] parquet::errors::ParquetError),
 
     #[error("avro error: {0}")]
-    Avro(#[from] apache_avro::Error),
+    Avro(#[from] Box<apache_avro::Error>),
 
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),

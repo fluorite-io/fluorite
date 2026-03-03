@@ -9,6 +9,9 @@ license.workspace = true
 name = "fluorite"
 path = "src/main.rs"
 
+[features]
+iceberg = ["fluorite-broker/iceberg"]
+
 [dependencies]
 fluorite-broker = { path = "../fluorite-broker" }
 fluorite-sdk = { path = "../fluorite-sdk" }

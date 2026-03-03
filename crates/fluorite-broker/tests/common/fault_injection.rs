@@ -165,26 +165,20 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
             self.unpartition_notify.notified().await;
             if self.black_hole_put.load(Ordering::SeqCst) {
                 return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "injected fault: put partitioned",
-                    ),
+                    std::io::Error::other("injected fault: put partitioned"),
                 ));
             }
         }
 
         // Transient failure: atomically decrement remaining count, fail if was > 0
-        let was_positive = self.fail_put_remaining.fetch_update(
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |n| if n > 0 { Some(n - 1) } else { None },
-        );
+        let was_positive =
+            self.fail_put_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    if n > 0 { Some(n - 1) } else { None }
+                });
         if was_positive.is_ok() {
             return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "injected fault: transient put failure",
-                ),
+                std::io::Error::other("injected fault: transient put failure"),
             ));
         }
 
@@ -193,14 +187,14 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
         let put_number = count + 1;
         if put_number >= self.fail_on_put_n.load(Ordering::SeqCst) {
             return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                std::io::Error::new(std::io::ErrorKind::Other, "injected fault: put failed"),
+                std::io::Error::other("injected fault: put failed"),
             ));
         }
 
         // One-shot failure
         if self.fail_next_put.swap(false, Ordering::SeqCst) {
             return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                std::io::Error::new(std::io::ErrorKind::Other, "injected fault: put failed"),
+                std::io::Error::other("injected fault: put failed"),
             ));
         }
 
@@ -222,10 +216,7 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
             self.unpartition_notify.notified().await;
             if self.black_hole_get.load(Ordering::SeqCst) {
                 return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "injected fault: get partitioned",
-                    ),
+                    std::io::Error::other("injected fault: get partitioned"),
                 ));
             }
         }
@@ -238,7 +229,7 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
 
         if self.fail_next_get.swap(false, Ordering::SeqCst) {
             return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                std::io::Error::new(std::io::ErrorKind::Other, "injected fault: get failed"),
+                std::io::Error::other("injected fault: get failed"),
             ));
         }
         self.inner.get(key).await
@@ -255,10 +246,7 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
             self.unpartition_notify.notified().await;
             if self.black_hole_get.load(Ordering::SeqCst) {
                 return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "injected fault: get_range partitioned",
-                    ),
+                    std::io::Error::other("injected fault: get_range partitioned"),
                 ));
             }
         }
@@ -266,10 +254,7 @@ impl fluorite_broker::ObjectStore for FaultyObjectStore {
         // One-shot get_range failure
         if self.fail_next_get_range.swap(false, Ordering::SeqCst) {
             return Err(fluorite_broker::object_store::ObjectStoreError::Io(
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "injected fault: get_range failed",
-                ),
+                std::io::Error::other("injected fault: get_range failed"),
             ));
         }
 
@@ -527,11 +512,10 @@ impl CrashableWsBroker {
             flush_interval: Duration::from_millis(50),
             require_auth: false,
             auth_timeout: Duration::from_secs(10),
+            #[cfg(feature = "iceberg")]
+            iceberg: None,
         };
-        let coordinator_config = self
-            .coordinator_config
-            .clone()
-            .unwrap_or_default();
+        let coordinator_config = self.coordinator_config.clone().unwrap_or_default();
         let state = BrokerState::with_coordinator_config(
             self.pool.clone(),
             self.store.clone(),
@@ -584,11 +568,10 @@ impl CrashableWsBroker {
             flush_interval: Duration::from_millis(50),
             require_auth: false,
             auth_timeout: Duration::from_secs(10),
+            #[cfg(feature = "iceberg")]
+            iceberg: None,
         };
-        let coordinator_config = self
-            .coordinator_config
-            .clone()
-            .unwrap_or_default();
+        let coordinator_config = self.coordinator_config.clone().unwrap_or_default();
         let state = BrokerState::with_coordinator_config(
             self.pool.clone(),
             self.store.clone(),
@@ -599,7 +582,9 @@ impl CrashableWsBroker {
         self.cancel_token = Some(state.cancel_token());
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
-            let shutdown = async { rx.await.ok(); };
+            let shutdown = async {
+                rx.await.ok();
+            };
             let _ = fluorite_broker::run_with_shutdown(state, shutdown).await;
         });
         tokio::time::sleep(Duration::from_millis(200)).await;

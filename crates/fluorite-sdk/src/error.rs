@@ -12,7 +12,7 @@ pub enum SdkError {
     Connection(String),
 
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(Box<tokio_tungstenite::tungstenite::Error>),
 
     #[error("encoding error: {0}")]
     Encode(String),
@@ -49,4 +49,10 @@ pub enum SdkError {
 
     #[error("commit failed")]
     CommitFailed,
+}
+
+impl From<tokio_tungstenite::tungstenite::Error> for SdkError {
+    fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
+        SdkError::WebSocket(Box::new(e))
+    }
 }

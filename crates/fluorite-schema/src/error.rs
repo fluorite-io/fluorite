@@ -3,8 +3,8 @@
 
 //! Schema registry errors.
 
-use thiserror::Error;
 use fluorite_common::ids::{SchemaId, TopicId};
+use thiserror::Error;
 
 /// Schema registry error type.
 #[derive(Debug, Error)]

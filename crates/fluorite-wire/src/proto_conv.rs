@@ -4,8 +4,8 @@
 //! Shared protobuf conversion helpers used by reader, writer, and union modules.
 
 use bytes::Bytes;
-use prost::Message;
 use fluorite_common::types::Record;
+use prost::Message;
 
 use crate::{DecodeError, EncodeError, proto};
 

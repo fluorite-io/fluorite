@@ -9,32 +9,31 @@
 //! At most one flush is in flight at a time, preserving offset ordering and
 //! dedup correctness.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use bumpalo::collections::Vec as BumpVec;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use tokio::sync::mpsc;
-use tracing::{debug, error};
 use tracing::Instrument;
+use tracing::{debug, error};
 
 use fluorite_common::ids::{AppendSeq, WriterId};
 use fluorite_common::types::RecordBatch;
 
 use crate::buffer::{BatchKey, BrokerBuffer, DrainResult};
+use crate::fl::FlWriter;
 use crate::metrics::{
-    BACKPRESSURE_ACTIVE, BUFFER_SIZE_BYTES, DB_COMMIT_LATENCY_SECONDS,
-    DB_COMMIT_OFFSETS_SECONDS, DB_COMMIT_TOPIC_BATCHES_SECONDS,
-    DB_COMMIT_TX_COMMIT_SECONDS, DB_COMMIT_WRITER_STATE_PREP_SECONDS,
-    DB_COMMIT_WRITER_STATE_UPSERT_SECONDS, ERRORS_TOTAL, FLUSH_ACK_DISTRIBUTE_SECONDS,
-    FLUSH_BATCH_PENDING_WRITERS, FLUSH_BATCH_RECORDS, FLUSH_BATCH_SEGMENTS,
-    FLUSH_BUFFER_RESIDENCY_SECONDS, FLUSH_LATENCY_SECONDS, FLUSH_QUEUE_DEPTH,
-    FLUSH_QUEUE_WAIT_SECONDS, FLUSH_FL_BUILD_SECONDS, FLUSH_TOTAL,
+    BACKPRESSURE_ACTIVE, BUFFER_SIZE_BYTES, DB_COMMIT_LATENCY_SECONDS, DB_COMMIT_OFFSETS_SECONDS,
+    DB_COMMIT_TOPIC_BATCHES_SECONDS, DB_COMMIT_TX_COMMIT_SECONDS,
+    DB_COMMIT_WRITER_STATE_PREP_SECONDS, DB_COMMIT_WRITER_STATE_UPSERT_SECONDS, ERRORS_TOTAL,
+    FLUSH_ACK_DISTRIBUTE_SECONDS, FLUSH_BATCH_PENDING_WRITERS, FLUSH_BATCH_RECORDS,
+    FLUSH_BATCH_SEGMENTS, FLUSH_BUFFER_RESIDENCY_SECONDS, FLUSH_FL_BUILD_SECONDS,
+    FLUSH_LATENCY_SECONDS, FLUSH_QUEUE_DEPTH, FLUSH_QUEUE_WAIT_SECONDS, FLUSH_TOTAL,
     S3_PUT_LATENCY_SECONDS,
 };
 use crate::object_store::ObjectStore;
-use crate::fl::FlWriter;
 
 use super::{BrokerState, FlushCommand, WRITER_STATE_ROWS_BUMP};
 
@@ -108,10 +107,10 @@ pub(crate) async fn flush_loop<S: ObjectStore + Send + Sync + 'static>(
 
                 if should_shutdown {
                     // Wait for in-flight flush to complete
-                    if flush_in_flight {
-                        if let Some(succeeded) = flush_done_rx.recv().await {
-                            handle_flush_done(succeeded, &mut buffer, &state).await;
-                        }
+                    if flush_in_flight
+                        && let Some(succeeded) = flush_done_rx.recv().await
+                    {
+                        handle_flush_done(succeeded, &mut buffer, &state).await;
                     }
                     // Flush any remaining buffered data synchronously
                     if !buffer.is_empty() {
@@ -367,9 +366,8 @@ async fn commit_batch(
             .map(|(&topic_id, &delta)| (topic_id, delta))
             .collect();
 
-        let mut offset_qb = QueryBuilder::<Postgres>::new(
-            "INSERT INTO topic_offsets (topic_id, next_offset) ",
-        );
+        let mut offset_qb =
+            QueryBuilder::<Postgres>::new("INSERT INTO topic_offsets (topic_id, next_offset) ");
         offset_qb.push_values(topic_delta_rows, |mut b, (topic_id, delta)| {
             b.push_bind(topic_id).push_bind(delta);
         });
@@ -382,27 +380,15 @@ async fn commit_batch(
         let updated_topic_offsets: Vec<(i32, i64)> =
             offset_qb.build_query_as().fetch_all(&mut *tx).await?;
         let updated_offset_by_topic: std::collections::HashMap<i32, i64> =
-            updated_topic_offsets
-                .into_iter()
-                .map(|(topic_id, next_offset)| (topic_id, next_offset))
-                .collect();
+            updated_topic_offsets.into_iter().collect();
 
         for (topic_key, input_indices) in &topic_to_segment_inputs {
             let total_delta = *topic_deltas.get(topic_key).ok_or_else(|| {
-                sqlx::Error::Protocol(format!(
-                    "missing topic delta for topic={}",
-                    topic_key
-                ))
+                sqlx::Error::Protocol(format!("missing topic delta for topic={}", topic_key))
             })?;
-            let topic_end =
-                *updated_offset_by_topic
-                    .get(topic_key)
-                    .ok_or_else(|| {
-                        sqlx::Error::Protocol(format!(
-                            "missing updated offset for topic={}",
-                            topic_key
-                        ))
-                    })?;
+            let topic_end = *updated_offset_by_topic.get(topic_key).ok_or_else(|| {
+                sqlx::Error::Protocol(format!("missing updated offset for topic={}", topic_key))
+            })?;
 
             let mut cursor = topic_end - total_delta;
             for input_idx in input_indices {
@@ -440,8 +426,7 @@ async fn commit_batch(
                 .push_bind(meta.crc32 as i64);
         });
         batch_qb.push(" RETURNING batch_id");
-        let returned_ids: Vec<(i64,)> =
-            batch_qb.build_query_as().fetch_all(&mut *tx).await?;
+        let returned_ids: Vec<(i64,)> = batch_qb.build_query_as().fetch_all(&mut *tx).await?;
         // Map returned batch_ids back to segment indices
         for (i, input) in segment_inputs.iter().enumerate() {
             if let Some(row) = returned_ids.get(i) {

@@ -72,10 +72,7 @@ async fn ws_produce(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -182,7 +179,11 @@ async fn test_multi_topic_partial_commit() {
             values.contains(&Bytes::from("t0-val")),
             "topic 0 acked value should be readable"
         );
-        assert_eq!(hwm.0, values.len() as u64, "topic 0 offsets should be consistent");
+        assert_eq!(
+            hwm.0,
+            values.len() as u64,
+            "topic 0 offsets should be consistent"
+        );
     }
 
     // Verify topics 1 and 2 have no committed data (or empty)
@@ -206,13 +207,14 @@ async fn test_multi_topic_partial_commit() {
     let mut ws = ws_connect(addr).await;
     for (idx, tid) in [(0, topic_id_0), (1, topic_id_1), (2, topic_id_2)] {
         let w = WriterId::new();
-        let resp = ws_produce(
-            &mut ws, w, 1, tid,
-            &format!("recover-t{}", idx),
-        )
-        .await
-        .expect("recovery write should succeed");
-        assert!(resp.success, "topic {} write should succeed after reset", idx);
+        let resp = ws_produce(&mut ws, w, 1, tid, &format!("recover-t{}", idx))
+            .await
+            .expect("recovery write should succeed");
+        assert!(
+            resp.success,
+            "topic {} write should succeed after reset",
+            idx
+        );
     }
 }
 
@@ -231,12 +233,9 @@ async fn test_partial_commit_offset_consistency() {
     let mut ws = ws_connect(addr).await;
     let w0 = WriterId::new();
     for i in 0..5 {
-        let resp = ws_produce(
-            &mut ws, w0, i + 1, topic_id_0,
-            &format!("t0-{}", i),
-        )
-        .await
-        .expect("t0 write should succeed");
+        let resp = ws_produce(&mut ws, w0, i + 1, topic_id_0, &format!("t0-{}", i))
+            .await
+            .expect("t0 write should succeed");
         assert!(resp.success);
     }
 

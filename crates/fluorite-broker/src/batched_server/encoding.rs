@@ -7,11 +7,9 @@ use std::time::Instant;
 
 use fluorite_common::ids::AppendSeq;
 use fluorite_common::types::BatchAck;
-use fluorite_wire::{
-    ClientMessage, ServerMessage, encode_server_message, reader, writer,
-};
+use fluorite_wire::{ClientMessage, ServerMessage, encode_server_message, reader, writer};
 
-use crate::metrics::{WS_ENCODE_SERVER_SECONDS};
+use crate::metrics::WS_ENCODE_SERVER_SECONDS;
 
 pub(crate) const RESPONSE_CAPACITY_SMALL: usize = 512;
 pub(crate) const RESPONSE_CAPACITY_PRODUCE: usize = 1024;

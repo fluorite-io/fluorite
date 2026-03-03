@@ -181,10 +181,10 @@ impl AclChecker {
         // Check cache first
         {
             let cache = self.cache.read().await;
-            if let Some(entry) = cache.get(&cache_key) {
-                if entry.fetched_at.elapsed() < self.cache_ttl {
-                    return Ok(entry.entries.clone());
-                }
+            if let Some(entry) = cache.get(&cache_key)
+                && entry.fetched_at.elapsed() < self.cache_ttl
+            {
+                return Ok(entry.entries.clone());
             }
         }
 

@@ -49,8 +49,7 @@ async fn ws_produce(
     topic_id: TopicId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
-        .await
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10)).await
 }
 
 async fn ws_produce_timeout(
@@ -128,10 +127,7 @@ async fn ws_read_at(
 
 /// Read ALL records from offset 0 for a topic by paginating.
 /// The broker returns at most 10 batches per read, so we must paginate.
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<reader::ReadResponse, String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<reader::ReadResponse, String> {
     let mut all_records = vec![];
     let mut high_watermark = Offset(0);
     let mut next_offset = Offset(0);
@@ -212,7 +208,11 @@ async fn test_s3_failure_drops_inflight_acks_not_buffered() {
         .await
         .expect("read should succeed");
     assert!(read.success);
-    let values: Vec<Bytes> = read.results.iter().flat_map(|r| r.records.iter().map(|rec| rec.value.clone())).collect();
+    let values: Vec<Bytes> = read
+        .results
+        .iter()
+        .flat_map(|r| r.records.iter().map(|rec| rec.value.clone()))
+        .collect();
     assert!(
         values.contains(&Bytes::from("should-work")),
         "Acked write should be visible in reads"
@@ -252,12 +252,11 @@ async fn test_concurrent_produce_consume_under_s3_faults() {
         let writer_id = WriterId::new();
         for i in 0..20 {
             let val = format!("v-{}", i);
-            let result =
-                ws_produce(&mut ws, writer_id, i + 1, topic_id, &val).await;
-            if let Ok(resp) = &result {
-                if resp.success {
-                    acked.lock().await.push(Bytes::from(val));
-                }
+            let result = ws_produce(&mut ws, writer_id, i + 1, topic_id, &val).await;
+            if let Ok(resp) = &result
+                && resp.success
+            {
+                acked.lock().await.push(Bytes::from(val));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -318,7 +317,6 @@ async fn test_slow_s3_does_not_lose_buffered_writes() {
     // Send writes from several producers in parallel.
     let mut handles = vec![];
     for p in 0..3 {
-        let addr = addr;
         let acked = acked.clone();
         handles.push(tokio::spawn(async move {
             let mut ws = ws_connect(addr).await;
@@ -334,10 +332,10 @@ async fn test_slow_s3_does_not_lose_buffered_writes() {
                     Duration::from_secs(30),
                 )
                 .await;
-                if let Ok(r) = &resp {
-                    if r.success {
-                        acked.lock().await.push(Bytes::from(val));
-                    }
+                if let Ok(r) = &resp
+                    && r.success
+                {
+                    acked.lock().await.push(Bytes::from(val));
                 }
             }
         }));
@@ -435,9 +433,7 @@ async fn test_db_blocked_flush_no_false_acks() {
 
     // Block the topic in the DB.
     let mut blocker = DbBlocker::new(db.pool.clone());
-    blocker
-        .block_topic(topic_id.0 as i32)
-        .await;
+    blocker.block_topic(topic_id.0 as i32).await;
 
     // Send a produce. The flush will stall on the DB lock, so we should
     // NOT receive an ack within a short timeout.
@@ -601,14 +597,16 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
     drop(produce_handle);
 
     // Verify only the first batch is in topic_batches
-    let batch_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
-    )
-    .bind(topic_id.0 as i32)
-    .fetch_one(&db.pool)
-    .await
-    .expect("query batch count");
-    assert_eq!(batch_count, 1, "only the first committed batch should exist in DB");
+    let batch_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1")
+            .bind(topic_id.0 as i32)
+            .fetch_one(&db.pool)
+            .await
+            .expect("query batch count");
+    assert_eq!(
+        batch_count, 1,
+        "only the first committed batch should exist in DB"
+    );
 
     // Watermark should reflect only the first batch
     let watermark: i64 = sqlx::query_scalar(
@@ -619,7 +617,10 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
     .await
     .expect("query watermark")
     .unwrap_or(0);
-    assert_eq!(watermark, 1, "watermark should be 1 (only first write committed)");
+    assert_eq!(
+        watermark, 1,
+        "watermark should be 1 (only first write committed)"
+    );
 
     // Restart broker — new writes should succeed and not collide with orphan
     broker.restart().await;
@@ -628,7 +629,10 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
     let resp = ws_produce(&mut ws, w3, 1, topic_id, "after-orphan")
         .await
         .expect("write after restart should succeed");
-    assert!(resp.success, "new write should succeed after restart with orphan");
+    assert!(
+        resp.success,
+        "new write should succeed after restart with orphan"
+    );
 
     // Verify data: first write + after-orphan visible, orphan-val NOT visible
     let read = ws_read_all(&mut ws, topic_id)
@@ -652,7 +656,6 @@ async fn test_orphan_s3_file_after_db_commit_failure() {
         !values.contains(&Bytes::from("orphan-val")),
         "orphan write should NOT be visible"
     );
-
 }
 
 /// Sustained S3 failure causes backpressure; recovery after fault clears.
@@ -672,8 +675,7 @@ async fn test_backpressure_under_sustained_s3_failure() {
     let mut failure_count = 0;
     for i in 0..5 {
         let writer_id = WriterId::new();
-        let result =
-            ws_produce(&mut ws, writer_id, 1, topic_id, &format!("bp-{}", i)).await;
+        let result = ws_produce(&mut ws, writer_id, 1, topic_id, &format!("bp-{}", i)).await;
         if result.is_err() || !result.as_ref().map(|r| r.success).unwrap_or(false) {
             failure_count += 1;
         }
@@ -694,14 +696,8 @@ async fn test_backpressure_under_sustained_s3_failure() {
     drop(ws);
     let mut ws = ws_connect(addr).await;
     let writer_id = WriterId::new();
-    let resp = ws_produce(
-        &mut ws,
-        writer_id,
-        1,
-        topic_id,
-        "after-recovery",
-    )
-    .await
-    .expect("Write after fault reset should succeed");
+    let resp = ws_produce(&mut ws, writer_id, 1, topic_id, "after-recovery")
+        .await
+        .expect("Write after fault reset should succeed");
     assert!(resp.success, "Write should succeed after recovery");
 }

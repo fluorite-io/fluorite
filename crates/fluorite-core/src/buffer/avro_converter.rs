@@ -9,7 +9,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
-use crate::buffer::error::{Result, FluoriteError};
+use crate::buffer::error::{FluoriteError, Result};
 
 pub fn avro_schema_to_arrow(avro_schema: &AvroSchema) -> Result<ArrowSchema> {
     match avro_schema {

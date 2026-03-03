@@ -13,22 +13,21 @@ pub mod buffer;
 pub mod coordinator;
 pub mod dedup;
 pub mod error;
+pub mod fl;
 pub mod metrics;
 pub mod object_store;
 pub mod shutdown;
-pub mod fl;
 
 pub use admin::{AdminConfig, AdminState, run_with_shutdown as run_admin_with_shutdown};
 pub use auth::{AclChecker, ApiKeyValidator, AuthError, Operation, Principal, ResourceType};
 pub use batched_server::{BrokerConfig, BrokerState, run, run_with_shutdown};
-pub use buffer::{BrokerBuffer, BufferConfig, DrainResult, PendingWriter, BatchKey};
+pub use buffer::{BatchKey, BrokerBuffer, BufferConfig, DrainResult, PendingWriter};
 pub use coordinator::{
-    CommitStatus, Coordinator, CoordinatorConfig, HeartbeatStatus,
-    PollResult, PollStatus,
+    CommitStatus, Coordinator, CoordinatorConfig, HeartbeatStatus, PollResult, PollStatus,
 };
 pub use dedup::{DedupCache, DedupCacheConfig, DedupResult, WriterState};
 pub use error::BrokerError;
+pub use fl::{FlReader, FlWriter};
 pub use object_store::{LocalFsStore, ObjectStore, S3ObjectStore};
 pub use shutdown::{ConnectionTracker, TrackedConnection, shutdown_signal};
-pub use fl::{FlReader, FlWriter};
 pub use tokio_util::sync::CancellationToken;

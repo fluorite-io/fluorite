@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use fluorite_broker::{LocalFsStore, ObjectStore, FlReader};
+use fluorite_broker::{FlReader, LocalFsStore, ObjectStore};
 use fluorite_common::ids::{Offset, TopicId};
 use fluorite_common::types::Record;
 
@@ -163,9 +163,7 @@ async fn test_offset_assignment_unique() {
                     value: Bytes::from(format!("value-{}-{}", producer_idx, i)),
                 }];
 
-                if let Ok((start, end)) =
-                    produce_records(&state_clone, topic_id, records).await
-                {
+                if let Ok((start, end)) = produce_records(&state_clone, topic_id, records).await {
                     // Collect all individual offsets in the range
                     let offsets: Vec<Offset> = (start.0..end.0).map(Offset).collect();
                     offsets_clone.lock().await.extend(offsets);
@@ -435,9 +433,7 @@ async fn test_offset_uniqueness_under_s3_faults() {
                     key: Some(Bytes::from(format!("key-{}-{}", producer_idx, i))),
                     value: Bytes::from(format!("value-{}-{}", producer_idx, i)),
                 }];
-                if let Ok((start, end)) =
-                    produce_records(&state_clone, topic_id, records).await
-                {
+                if let Ok((start, end)) = produce_records(&state_clone, topic_id, records).await {
                     let offsets: Vec<Offset> = (start.0..end.0).map(Offset).collect();
                     offsets_clone.lock().await.extend(offsets);
                 }

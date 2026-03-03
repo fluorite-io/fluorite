@@ -38,8 +38,7 @@ async fn ws_produce(
     topic_id: TopicId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
-        .await
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10)).await
 }
 
 async fn ws_produce_timeout(
@@ -83,10 +82,7 @@ async fn ws_produce_timeout(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<Vec<Bytes>, String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<Vec<Bytes>, String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
 
@@ -249,7 +245,11 @@ async fn test_retry_during_slow_flush_no_duplicate() {
     let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
-    assert_eq!(values.len(), 1, "exactly 1 record, no duplicate from slow flush retry");
+    assert_eq!(
+        values.len(),
+        1,
+        "exactly 1 record, no duplicate from slow flush retry"
+    );
 }
 
 /// Crash + restart clears LRU cache. Retry hits DB slow-path → Duplicate.
@@ -350,14 +350,21 @@ async fn test_dedup_cache_eviction_db_fallback() {
     let resp2 = ws_produce(&mut ws, writer_id, 1, topic_id, "evict-val")
         .await
         .expect("retry should succeed");
-    assert!(resp2.success, "DB dedup should return cached ack after eviction");
+    assert!(
+        resp2.success,
+        "DB dedup should return cached ack after eviction"
+    );
     assert_eq!(resp2.append_acks, ack1, "acks should match original");
 
     // Verify exactly 1 record — no duplicate
     let values = ws_read_all(&mut ws, topic_id)
         .await
         .expect("read should succeed");
-    assert_eq!(values.len(), 1, "no duplicate after cache eviction + DB fallback");
+    assert_eq!(
+        values.len(),
+        1,
+        "no duplicate after cache eviction + DB fallback"
+    );
     assert_eq!(values[0], Bytes::from("evict-val"));
 }
 
@@ -402,7 +409,7 @@ async fn test_writer_state_gc_does_not_break_active_writers() {
         .await
         .expect("read should succeed");
     assert!(
-        values.len() >= 1 && values.len() <= 2,
+        !values.is_empty() && values.len() <= 2,
         "should have 1 or 2 records after GC, got {}",
         values.len()
     );

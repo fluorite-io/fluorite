@@ -7,17 +7,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use apache_avro::{
-    Schema as AvroSchema, from_avro_datum, to_avro_datum,
-    types::Value as AvroValue,
+    Schema as AvroSchema, from_avro_datum, to_avro_datum, types::Value as AvroValue,
 };
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema as ArrowSchema, TimeUnit};
 use arrow::record_batch::RecordBatch as ArrowRecordBatch;
 use bytes::Bytes;
 use chrono::Utc;
-use criterion::{
-    BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::Rng;
 
 use fluorite_common::ids::SchemaId;
@@ -42,10 +39,7 @@ fn make_schema_json(field_count: usize) -> serde_json::Value {
         serde_json::json!({"name": "amount", "type": "double"}),
     ];
 
-    let mut fields: Vec<serde_json::Value> = typed_fields
-        .into_iter()
-        .take(field_count)
-        .collect();
+    let mut fields: Vec<serde_json::Value> = typed_fields.into_iter().take(field_count).collect();
 
     for i in fields.len()..field_count {
         fields.push(serde_json::json!({"name": format!("field_{i}"), "type": "string"}));
@@ -60,23 +54,22 @@ fn make_schema_json(field_count: usize) -> serde_json::Value {
 
 /// Generate a random string of given length.
 fn random_string(rng: &mut impl Rng, len: usize) -> String {
-    (0..len).map(|_| rng.gen_range(b'a'..=b'z') as char).collect()
+    (0..len)
+        .map(|_| rng.gen_range(b'a'..=b'z') as char)
+        .collect()
 }
 
 /// Build an AvroValue::Record matching `make_schema_json(field_count)`.
-fn make_avro_record(
-    rng: &mut impl Rng,
-    field_count: usize,
-    string_len: usize,
-) -> AvroValue {
+fn make_avro_record(rng: &mut impl Rng, field_count: usize, string_len: usize) -> AvroValue {
     let mut fields = Vec::with_capacity(field_count);
 
     // Typed fields (up to 5)
     let typed: Vec<(&str, AvroValue)> = vec![
         ("id", AvroValue::Long(rng.gen_range(1..1_000_000))),
-        ("timestamp", AvroValue::TimestampMillis(
-            chrono::Utc::now().timestamp_millis(),
-        )),
+        (
+            "timestamp",
+            AvroValue::TimestampMillis(chrono::Utc::now().timestamp_millis()),
+        ),
         ("user_id", AvroValue::String(random_string(rng, string_len))),
         ("action", AvroValue::String(random_string(rng, string_len))),
         ("amount", AvroValue::Double(rng.gen_range(0.0..10_000.0))),
@@ -87,7 +80,10 @@ fn make_avro_record(
     }
 
     for i in fields.len()..field_count {
-        fields.push((format!("field_{i}"), AvroValue::String(random_string(rng, string_len))));
+        fields.push((
+            format!("field_{i}"),
+            AvroValue::String(random_string(rng, string_len)),
+        ));
     }
 
     AvroValue::Record(fields)
@@ -136,7 +132,7 @@ fn baseline_convert(
 
     for (i, record) in records.iter().enumerate() {
         let mut cursor = Cursor::new(record.value.as_ref());
-        let value = from_avro_datum(&avro_schema, &mut cursor, None).unwrap();
+        let value = from_avro_datum(avro_schema, &mut cursor, None).unwrap();
 
         if let AvroValue::Record(fields) = value {
             for (idx, (_name, val)) in fields.into_iter().enumerate().take(field_count) {
@@ -146,16 +142,24 @@ fn baseline_convert(
 
         // Metadata columns
         builders[field_count]
-            .as_any_mut().downcast_mut::<Int64Builder>().unwrap()
+            .as_any_mut()
+            .downcast_mut::<Int64Builder>()
+            .unwrap()
             .append_value(i as i64);
         builders[field_count + 1]
-            .as_any_mut().downcast_mut::<Int32Builder>().unwrap()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .unwrap()
             .append_value(0);
         builders[field_count + 2]
-            .as_any_mut().downcast_mut::<TimestampMicrosecondBuilder>().unwrap()
+            .as_any_mut()
+            .downcast_mut::<TimestampMicrosecondBuilder>()
+            .unwrap()
             .append_value(ingest_ts);
         builders[field_count + 3]
-            .as_any_mut().downcast_mut::<BinaryBuilder>().unwrap()
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .unwrap()
             .append_null();
     }
 
@@ -168,12 +172,18 @@ fn baseline_append(builder: &mut Box<dyn ArrayBuilder>, val: AvroValue) {
         AvroValue::Long(v) => {
             if let Some(b) = builder.as_any_mut().downcast_mut::<Int64Builder>() {
                 b.append_value(v);
-            } else if let Some(b) = builder.as_any_mut().downcast_mut::<TimestampMillisecondBuilder>() {
+            } else if let Some(b) = builder
+                .as_any_mut()
+                .downcast_mut::<TimestampMillisecondBuilder>()
+            {
                 b.append_value(v);
             }
         }
         AvroValue::TimestampMillis(v) => {
-            if let Some(b) = builder.as_any_mut().downcast_mut::<TimestampMillisecondBuilder>() {
+            if let Some(b) = builder
+                .as_any_mut()
+                .downcast_mut::<TimestampMillisecondBuilder>()
+            {
                 b.append_value(v);
             } else if let Some(b) = builder.as_any_mut().downcast_mut::<Int64Builder>() {
                 b.append_value(v);
@@ -241,8 +251,7 @@ fn bench_convert_vs_baseline(c: &mut Criterion) {
     let record_count = 1000usize;
 
     for field_count in [5, 10, 20] {
-        let (schema_json, avro_schema, records) =
-            make_test_data(field_count, record_count, 64);
+        let (schema_json, avro_schema, records) = make_test_data(field_count, record_count, 64);
         let converter = RecordConverter::new(&schema_json, SchemaId(1)).unwrap();
         let arrow_schema = converter.arrow_schema().clone();
 
@@ -253,13 +262,9 @@ fn bench_convert_vs_baseline(c: &mut Criterion) {
             &records,
             |b, records| {
                 b.iter(|| {
-                    converter.convert(
-                        records,
-                        SchemaId(1),
-                        0..record_count as u64,
-                        0,
-                        Utc::now(),
-                    ).unwrap()
+                    converter
+                        .convert(records, SchemaId(1), 0..record_count as u64, 0, Utc::now())
+                        .unwrap()
                 });
             },
         );
@@ -268,9 +273,7 @@ fn bench_convert_vs_baseline(c: &mut Criterion) {
             BenchmarkId::new("old", format!("{field_count}f")),
             &records,
             |b, records| {
-                b.iter(|| {
-                    baseline_convert(records, &avro_schema, &arrow_schema, field_count)
-                });
+                b.iter(|| baseline_convert(records, &avro_schema, &arrow_schema, field_count));
             },
         );
     }
@@ -288,8 +291,7 @@ fn bench_convert_throughput(c: &mut Criterion) {
     let string_len = 64;
 
     for record_count in [10, 100, 1000, 10_000] {
-        let (schema_json, _, records) =
-            make_test_data(field_count, record_count, string_len);
+        let (schema_json, _, records) = make_test_data(field_count, record_count, string_len);
         let converter = RecordConverter::new(&schema_json, SchemaId(1)).unwrap();
 
         group.throughput(Throughput::Elements(record_count as u64));
@@ -299,13 +301,9 @@ fn bench_convert_throughput(c: &mut Criterion) {
             &records,
             |b, records| {
                 b.iter(|| {
-                    converter.convert(
-                        records,
-                        SchemaId(1),
-                        0..record_count as u64,
-                        0,
-                        Utc::now(),
-                    ).unwrap()
+                    converter
+                        .convert(records, SchemaId(1), 0..record_count as u64, 0, Utc::now())
+                        .unwrap()
                 });
             },
         );
@@ -329,8 +327,7 @@ fn bench_convert_payload_size(c: &mut Criterion) {
     ];
 
     for (label, field_count, string_len) in configs {
-        let (schema_json, _, records) =
-            make_test_data(field_count, record_count, string_len);
+        let (schema_json, _, records) = make_test_data(field_count, record_count, string_len);
         let converter = RecordConverter::new(&schema_json, SchemaId(1)).unwrap();
 
         let total_bytes: u64 = records.iter().map(|r| r.value.len() as u64).sum();
@@ -341,13 +338,9 @@ fn bench_convert_payload_size(c: &mut Criterion) {
             &records,
             |b, records| {
                 b.iter(|| {
-                    converter.convert(
-                        records,
-                        SchemaId(1),
-                        0..record_count as u64,
-                        0,
-                        Utc::now(),
-                    ).unwrap()
+                    converter
+                        .convert(records, SchemaId(1), 0..record_count as u64, 0, Utc::now())
+                        .unwrap()
                 });
             },
         );
@@ -370,8 +363,7 @@ fn bench_convert_schema_evolution(c: &mut Criterion) {
     let v1_avro = AvroSchema::parse_str(&v1_json.to_string()).unwrap();
 
     // v2: v1 + 2 new string fields with defaults
-    let mut v2_fields: Vec<serde_json::Value> = v1_json["fields"]
-        .as_array().unwrap().clone();
+    let mut v2_fields: Vec<serde_json::Value> = v1_json["fields"].as_array().unwrap().clone();
     v2_fields.push(serde_json::json!({
         "name": "new_field_a", "type": "string", "default": "default_a"
     }));
@@ -401,8 +393,14 @@ fn bench_convert_schema_evolution(c: &mut Criterion) {
             let AvroValue::Record(mut fields) = make_avro_record(&mut rng, 8, string_len) else {
                 unreachable!()
             };
-            fields.push(("new_field_a".into(), AvroValue::String(random_string(&mut rng, string_len))));
-            fields.push(("new_field_b".into(), AvroValue::String(random_string(&mut rng, string_len))));
+            fields.push((
+                "new_field_a".into(),
+                AvroValue::String(random_string(&mut rng, string_len)),
+            ));
+            fields.push((
+                "new_field_b".into(),
+                AvroValue::String(random_string(&mut rng, string_len)),
+            ));
             let bytes = to_avro_datum(&v2_avro, AvroValue::Record(fields)).unwrap();
             Record::new(Bytes::from(bytes))
         })
@@ -410,33 +408,39 @@ fn bench_convert_schema_evolution(c: &mut Criterion) {
 
     // Converter with v2 as reader, v1 registered as writer
     let mut converter = RecordConverter::new(&v2_json, SchemaId(2)).unwrap();
-    converter.register_writer_schema(SchemaId(1), &v1_json).unwrap();
+    converter
+        .register_writer_schema(SchemaId(1), &v1_json)
+        .unwrap();
 
     group.throughput(Throughput::Elements(record_count as u64));
 
     // Identity: v2 records read with v2 schema
     group.bench_function("identity", |b| {
         b.iter(|| {
-            converter.convert(
-                &v2_records,
-                SchemaId(2),
-                0..record_count as u64,
-                0,
-                Utc::now(),
-            ).unwrap()
+            converter
+                .convert(
+                    &v2_records,
+                    SchemaId(2),
+                    0..record_count as u64,
+                    0,
+                    Utc::now(),
+                )
+                .unwrap()
         });
     });
 
     // Evolved: v1 records read with v2 schema (2 defaults filled)
     group.bench_function("evolved_2_defaults", |b| {
         b.iter(|| {
-            converter.convert(
-                &v1_records,
-                SchemaId(1),
-                0..record_count as u64,
-                0,
-                Utc::now(),
-            ).unwrap()
+            converter
+                .convert(
+                    &v1_records,
+                    SchemaId(1),
+                    0..record_count as u64,
+                    0,
+                    Utc::now(),
+                )
+                .unwrap()
         });
     });
 

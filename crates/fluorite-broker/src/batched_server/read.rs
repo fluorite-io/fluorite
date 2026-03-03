@@ -8,13 +8,13 @@ use tracing::error;
 use fluorite_common::ids::Offset;
 use fluorite_wire::{ERR_INTERNAL_ERROR, STATUS_OK, ServerMessage, reader};
 
+use crate::BrokerError;
 use crate::metrics::{LatencyTimer, READ_LATENCY_SECONDS, READ_REQUESTS_TOTAL};
 use crate::object_store::ObjectStore;
-use crate::BrokerError;
 
+use super::BrokerState;
 use super::encoding::encode_server_message_vec;
 use super::fetch::fetch_records;
-use super::BrokerState;
 
 /// Handle a ReadRequest (direct read from S3, no consumer group).
 #[tracing::instrument(

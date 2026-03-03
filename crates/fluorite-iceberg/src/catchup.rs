@@ -77,15 +77,14 @@ async fn catchup_loop(
         }
 
         // Claim unclaimed batches
-        let claimed = match tracking::claim_batches(&pool, &topic_ids, config.catchup_batch_limit)
-            .await
-        {
-            Ok(batches) => batches,
-            Err(e) => {
-                error!(error = %e, "failed to claim batches for catchup");
-                continue;
-            }
-        };
+        let claimed =
+            match tracking::claim_batches(&pool, &topic_ids, config.catchup_batch_limit).await {
+                Ok(batches) => batches,
+                Err(e) => {
+                    error!(error = %e, "failed to claim batches for catchup");
+                    continue;
+                }
+            };
 
         if claimed.is_empty() {
             debug!("catchup: no unclaimed batches");
@@ -107,8 +106,10 @@ async fn catchup_loop(
                 continue;
             }
 
-            let batch_ids: Vec<(i64, chrono::DateTime<chrono::Utc>)> =
-                batches.iter().map(|b| (b.batch_id, b.ingest_time)).collect();
+            let batch_ids: Vec<(i64, chrono::DateTime<chrono::Utc>)> = batches
+                .iter()
+                .map(|b| (b.batch_id, b.ingest_time))
+                .collect();
             if let Err(e) = tracking::mark_completed(&pool, &batch_ids).await {
                 error!(error = %e, "catchup: failed to mark batches completed");
             }

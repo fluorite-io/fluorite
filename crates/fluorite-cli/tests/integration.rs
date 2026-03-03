@@ -14,11 +14,11 @@ use sqlx::postgres::PgPoolOptions;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
+use fluorite_broker::buffer::BufferConfig;
 use fluorite_broker::{
     AclChecker, AdminConfig, AdminState, ApiKeyValidator, BrokerConfig, BrokerState, Coordinator,
     CoordinatorConfig, LocalFsStore, Operation, ResourceType,
 };
-use fluorite_broker::buffer::BufferConfig;
 use fluorite_common::ids::{SchemaId, TopicId};
 use fluorite_common::types::Record;
 use fluorite_sdk::reader::{Reader, ReaderConfig};
@@ -116,6 +116,8 @@ impl TestCluster {
             flush_interval: Duration::from_millis(50),
             require_auth: false,
             auth_timeout: Duration::from_secs(10),
+            #[cfg(feature = "iceberg")]
+            iceberg: None,
         };
         let broker_state = BrokerState::new(pool.clone(), store, broker_config).await;
         tokio::spawn(async move {

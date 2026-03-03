@@ -41,8 +41,7 @@ async fn ws_produce(
     topic_id: TopicId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
-        .await
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10)).await
 }
 
 async fn ws_produce_timeout(
@@ -117,10 +116,7 @@ async fn ws_read(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -252,28 +248,18 @@ async fn test_s3_partition_concurrent_writes() {
                     h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
                 };
 
-                match ws_produce_timeout(
-                    w,
-                    writer_id,
-                    seq,
-                    topic_id,
-                    &val,
-                    Duration::from_secs(5),
-                )
-                .await
+                match ws_produce_timeout(w, writer_id, seq, topic_id, &val, Duration::from_secs(5))
+                    .await
                 {
                     Ok(resp) if resp.success => {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
-                        history.lock().await.record_write_complete(idx, offset, true);
-                    }
-                    _ => {
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                         history
                             .lock()
                             .await
-                            .record_write_complete(idx, None, false);
+                            .record_write_complete(idx, offset, true);
+                    }
+                    _ => {
+                        history.lock().await.record_write_complete(idx, None, false);
                         ws = None;
                     }
                 }

@@ -15,7 +15,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use fluorite_broker::{LocalFsStore, ObjectStore, FlReader};
+use fluorite_broker::{FlReader, LocalFsStore, ObjectStore};
 use fluorite_common::ids::{Offset, TopicId};
 use fluorite_common::types::Record;
 

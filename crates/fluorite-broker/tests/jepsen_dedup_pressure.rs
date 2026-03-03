@@ -76,10 +76,7 @@ async fn ws_produce(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -183,9 +180,7 @@ async fn test_many_writers_retry_after_eviction() {
     );
 
     // Verify: exactly num_writers records, no duplicates
-    let (values, _) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, _) = ws_read_all(&mut ws, topic_id).await.expect("final read");
 
     let unique: HashSet<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
     assert_eq!(
@@ -248,9 +243,7 @@ async fn test_concurrent_dedup_retries() {
 
     // Verify: no duplicates
     let mut ws = ws_connect(addr).await;
-    let (values, _) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, _) = ws_read_all(&mut ws, topic_id).await.expect("final read");
 
     let unique: HashSet<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
     assert_eq!(
@@ -258,12 +251,7 @@ async fn test_concurrent_dedup_retries() {
         unique.len(),
         "no duplicate values in committed log after concurrent retries"
     );
-    assert_eq!(
-        values.len(),
-        num_writers,
-        "exactly {} records",
-        num_writers
-    );
+    assert_eq!(values.len(), num_writers, "exactly {} records", num_writers);
 }
 
 /// Broker crash between write and retry. Writer reconnects with same WriterId
@@ -311,9 +299,7 @@ async fn test_dedup_survives_broker_crash() {
     assert!(resp.success, "next seq should succeed after crash");
 
     // Verify no duplicates
-    let (values, _) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, _) = ws_read_all(&mut ws, topic_id).await.expect("final read");
 
     let unique: HashSet<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
     assert_eq!(
@@ -371,9 +357,7 @@ async fn test_repeated_crash_retry_cycles() {
 
     // Final verification
     let mut ws = ws_connect(broker.addr()).await;
-    let (values, _) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, _) = ws_read_all(&mut ws, topic_id).await.expect("final read");
 
     let unique: HashSet<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
     assert_eq!(

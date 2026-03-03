@@ -342,7 +342,11 @@ pub fn decode_poll_response(buf: &[u8]) -> Result<(PollResponse, usize), DecodeE
             success: msg.success,
             error_code: msg.error_code as u16,
             error_message: msg.error_message,
-            results: msg.results.into_iter().map(from_proto_topic_result).collect(),
+            results: msg
+                .results
+                .into_iter()
+                .map(from_proto_topic_result)
+                .collect(),
             start_offset: Offset(msg.start_offset),
             end_offset: Offset(msg.end_offset),
             lease_deadline_ms: msg.lease_deadline_ms,

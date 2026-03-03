@@ -13,8 +13,8 @@
 use bytes::Bytes;
 use tempfile::TempDir;
 
-use fluorite_broker::{BrokerBuffer, BufferConfig, LocalFsStore, ObjectStore, FlReader, FlWriter};
-use fluorite_common::ids::{WriterId, SchemaId, AppendSeq, TopicId};
+use fluorite_broker::{BrokerBuffer, BufferConfig, FlReader, FlWriter, LocalFsStore, ObjectStore};
+use fluorite_common::ids::{AppendSeq, SchemaId, TopicId, WriterId};
 use fluorite_common::types::{Record, RecordBatch};
 
 /// Test the full append flow without database (FL + ObjectStore).
@@ -261,10 +261,7 @@ async fn test_wire_protocol_large_payload() {
         for i in 0..100 {
             records.push(Record {
                 key: Some(Bytes::from(format!("t{}-k{}", topic, i))),
-                value: Bytes::from(format!(
-                    r#"{{"topic":{},"index":{}}}"#,
-                    topic, i
-                )),
+                value: Bytes::from(format!(r#"{{"topic":{},"index":{}}}"#, topic, i)),
             });
         }
         batches.push(RecordBatch {

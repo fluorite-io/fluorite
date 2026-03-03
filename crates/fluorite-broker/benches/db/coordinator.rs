@@ -1,13 +1,13 @@
 //! Reader group coordinator benchmarks.
 
 use criterion::{BenchmarkId, Criterion, black_box};
+use fluorite_broker::{Coordinator, CoordinatorConfig};
+use fluorite_common::ids::{Offset, TopicId};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use fluorite_broker::{Coordinator, CoordinatorConfig};
-use fluorite_common::ids::{Offset, TopicId};
 
 static DB_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -16,6 +16,7 @@ fn db_available() -> bool {
 }
 
 /// Wrapper struct for benchmark database with automatic cleanup on drop.
+#[allow(dead_code)]
 pub struct BenchDb {
     pub pool: PgPool,
     db_name: String,
@@ -24,7 +25,7 @@ pub struct BenchDb {
 
 impl Drop for BenchDb {
     fn drop(&mut self) {
-        let _ = self.pool.close();
+        drop(self.pool.close());
 
         let admin_url = format!("{}/postgres", self.base_url);
         let db_name = self.db_name.clone();
@@ -445,9 +446,7 @@ pub fn bench_coordinator_reset(c: &mut Criterion) {
 
                         // Measure joining the Nth consumer
                         let reader_id = format!("reader-{}", count - 1);
-                        let result = coord
-                            .join_group(&group_id, TopicId(1), &reader_id)
-                            .await;
+                        let result = coord.join_group(&group_id, TopicId(1), &reader_id).await;
                         black_box(result)
                     }
                 })

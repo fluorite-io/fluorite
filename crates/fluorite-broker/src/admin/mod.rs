@@ -21,8 +21,8 @@ use std::net::SocketAddr;
 
 use axum::Router;
 use axum::routing::get;
-use sqlx::PgPool;
 use fluorite_schema::SchemaRegistry;
+use sqlx::PgPool;
 
 use crate::auth::{AclChecker, ApiKeyValidator};
 use crate::coordinator::Coordinator;

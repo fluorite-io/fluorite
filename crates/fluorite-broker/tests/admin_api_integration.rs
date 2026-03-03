@@ -417,7 +417,7 @@ async fn test_consumer_group_management() {
         .unwrap();
     let group: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(group["group_id"], "test-group");
-    assert!(group["members"].as_array().unwrap().len() > 0);
+    assert!(!group["members"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -429,11 +429,7 @@ async fn test_force_reset() {
     db.create_topic("reset-topic").await;
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
     coordinator
-        .join_group(
-            "reset-group",
-            fluorite_common::ids::TopicId(1),
-            "reader-1",
-        )
+        .join_group("reset-group", fluorite_common::ids::TopicId(1), "reader-1")
         .await
         .expect("Failed to join group");
 

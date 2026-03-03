@@ -21,7 +21,7 @@ mod common;
 use bytes::Bytes;
 use tempfile::TempDir;
 
-use fluorite_broker::{LocalFsStore, ObjectStore, FlWriter};
+use fluorite_broker::{FlWriter, LocalFsStore, ObjectStore};
 use fluorite_common::ids::{SchemaId, TopicId};
 use fluorite_common::types::{Record, RecordBatch};
 
@@ -100,35 +100,31 @@ async fn test_offset_management() {
     let topic_id = db.create_topic("offset-test").await;
 
     // Get initial offset
-    let offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
 
     assert_eq!(offset, 0);
 
     // Update offset (simulate append)
     let record_count = 100i64;
-    sqlx::query(
-        "UPDATE topic_offsets SET next_offset = next_offset + $2 WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .bind(record_count)
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE topic_offsets SET next_offset = next_offset + $2 WHERE topic_id = $1")
+        .bind(topic_id)
+        .bind(record_count)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Verify new offset
-    let new_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let new_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
 
     assert_eq!(new_offset, 100);
 }
@@ -140,15 +136,13 @@ async fn test_writer_state_dedup() {
     let writer_id = uuid::Uuid::new_v4();
 
     // Insert initial state
-    sqlx::query(
-        "INSERT INTO writer_state (writer_id, last_seq, last_acks) VALUES ($1, $2, $3)",
-    )
-    .bind(writer_id)
-    .bind(1i64)
-    .bind(serde_json::json!([]))
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO writer_state (writer_id, last_seq, last_acks) VALUES ($1, $2, $3)")
+        .bind(writer_id)
+        .bind(1i64)
+        .bind(serde_json::json!([]))
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Check if sequence is duplicate
     let last_seq: i64 =
@@ -232,26 +226,23 @@ async fn test_produce_flow_with_db() {
     let record_count = batch.records.len() as i64;
 
     // Get current offset with lock
-    let current_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1 FOR UPDATE",
-    )
-    .bind(topic_id)
-    .fetch_one(&mut *tx)
-    .await
-    .unwrap();
+    let current_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1 FOR UPDATE")
+            .bind(topic_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
 
     let start_offset = current_offset;
     let end_offset = current_offset + record_count;
 
     // Update topic offset
-    sqlx::query(
-        "UPDATE topic_offsets SET next_offset = $2 WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .bind(end_offset)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE topic_offsets SET next_offset = $2 WHERE topic_id = $1")
+        .bind(topic_id)
+        .bind(end_offset)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
 
     // Insert batch record
     sqlx::query(
@@ -280,13 +271,12 @@ async fn test_produce_flow_with_db() {
     tx.commit().await.unwrap();
 
     // Verify offset was updated
-    let final_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let final_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
 
     assert_eq!(final_offset, 3); // 3 records
 
@@ -337,13 +327,11 @@ async fn test_fetch_query() {
     }
 
     // Update topic offset
-    sqlx::query(
-        "UPDATE topic_offsets SET next_offset = 500 WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE topic_offsets SET next_offset = 500 WHERE topic_id = $1")
+        .bind(topic_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Read from offset 250 (should find batch starting at 200)
     let batches: Vec<(i64, i64, String)> = sqlx::query_as(
@@ -416,14 +404,12 @@ async fn test_concurrent_produces() {
             let new_offset = current + record_count;
 
             // Update offset
-            sqlx::query(
-                "UPDATE topic_offsets SET next_offset = $2 WHERE topic_id = $1",
-            )
-            .bind(topic_id)
-            .bind(new_offset)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
+            sqlx::query("UPDATE topic_offsets SET next_offset = $2 WHERE topic_id = $1")
+                .bind(topic_id)
+                .bind(new_offset)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
 
             // Insert batch
             sqlx::query(
@@ -462,13 +448,12 @@ async fn test_concurrent_produces() {
     }
 
     // Verify final offset is 100 (10 produces x 10 records each)
-    let final_offset: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let final_offset: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
 
     assert_eq!(final_offset, 100);
 
@@ -492,24 +477,20 @@ async fn test_delete_topic_cascades_reader_inflight() {
     let topic_id = db.create_topic("cascade-test").await;
 
     // Create a reader group
-    sqlx::query(
-        "INSERT INTO reader_groups (group_id, topic_id) VALUES ($1, $2)",
-    )
-    .bind("cascade-group")
-    .bind(topic_id)
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO reader_groups (group_id, topic_id) VALUES ($1, $2)")
+        .bind("cascade-group")
+        .bind(topic_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Create reader group state
-    sqlx::query(
-        "INSERT INTO reader_group_state (group_id, topic_id) VALUES ($1, $2)",
-    )
-    .bind("cascade-group")
-    .bind(topic_id)
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO reader_group_state (group_id, topic_id) VALUES ($1, $2)")
+        .bind("cascade-group")
+        .bind(topic_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Insert an inflight row
     sqlx::query(
@@ -551,7 +532,10 @@ async fn test_delete_topic_cascades_reader_inflight() {
     .fetch_one(&db.pool)
     .await
     .unwrap();
-    assert_eq!(inflight_count, 0, "inflight rows should be cascaded on topic delete");
+    assert_eq!(
+        inflight_count, 0,
+        "inflight rows should be cascaded on topic delete"
+    );
 
     // Verify reader_group_state is also gone
     let state_count: i64 = sqlx::query_scalar(
@@ -562,5 +546,8 @@ async fn test_delete_topic_cascades_reader_inflight() {
     .fetch_one(&db.pool)
     .await
     .unwrap();
-    assert_eq!(state_count, 0, "reader_group_state should be cascaded on topic delete");
+    assert_eq!(
+        state_count, 0,
+        "reader_group_state should be cascaded on topic delete"
+    );
 }

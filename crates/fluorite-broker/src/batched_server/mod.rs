@@ -43,25 +43,21 @@ use fluorite_wire::{
     encode_server_message,
 };
 
-use crate::auth::{AclChecker, ApiKeyValidator, AuthError, Principal};
 use crate::BrokerError;
+use crate::auth::{AclChecker, ApiKeyValidator, AuthError, Principal};
 use crate::buffer::BufferConfig;
 use crate::coordinator::{Coordinator, CoordinatorConfig};
 use crate::dedup::DedupCache;
 use crate::metrics::{
-    BUFFER_SIZE_BYTES, ConnectionGuard, FLUSH_QUEUE_DEPTH,
-    APPEND_LATENCY_SECONDS, APPEND_REQUESTS_TOTAL,
-    WS_DECODE_CLIENT_SECONDS, WS_HANDLE_MESSAGE_SECONDS,
-    WS_OUTBOUND_CHANNEL_WAIT_SECONDS, WS_OUTBOUND_QUEUE_WAIT_SECONDS,
-    WS_WRITE_SECONDS,
+    APPEND_LATENCY_SECONDS, APPEND_REQUESTS_TOTAL, BUFFER_SIZE_BYTES, ConnectionGuard,
+    FLUSH_QUEUE_DEPTH, WS_DECODE_CLIENT_SECONDS, WS_HANDLE_MESSAGE_SECONDS,
+    WS_OUTBOUND_CHANNEL_WAIT_SECONDS, WS_OUTBOUND_QUEUE_WAIT_SECONDS, WS_WRITE_SECONDS,
 };
 use crate::object_store::ObjectStore;
 
 use append::{EnqueueResult, WriterInFlightState, await_append_ack, enqueue_append};
 use authz::{can_append, can_consume_topic, can_group_consume, can_read};
-use encoding::{
-    ErrorResponseKind, client_message_kind, encode_error_response, error_kind_label,
-};
+use encoding::{ErrorResponseKind, client_message_kind, encode_error_response, error_kind_label};
 use flush::flush_loop;
 use read::handle_read_request;
 use reader_group::{
@@ -331,14 +327,8 @@ struct ConnectionContext {
 }
 
 enum OutboundMessage {
-    Binary {
-        data: Vec<u8>,
-        enqueued_at: Instant,
-    },
-    Pong {
-        data: Vec<u8>,
-        enqueued_at: Instant,
-    },
+    Binary { data: Vec<u8>, enqueued_at: Instant },
+    Pong { data: Vec<u8>, enqueued_at: Instant },
 }
 
 /// Send a binary response through the outbound channel. Returns false if channel is closed.
@@ -346,8 +336,7 @@ async fn send_outbound(out_tx: &mpsc::Sender<OutboundMessage>, data: Vec<u8>) ->
     let reserve_started = Instant::now();
     match out_tx.reserve().await {
         Ok(permit) => {
-            WS_OUTBOUND_CHANNEL_WAIT_SECONDS
-                .observe(reserve_started.elapsed().as_secs_f64());
+            WS_OUTBOUND_CHANNEL_WAIT_SECONDS.observe(reserve_started.elapsed().as_secs_f64());
             permit.send(OutboundMessage::Binary {
                 data,
                 enqueued_at: Instant::now(),
@@ -441,19 +430,14 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                 let handle_started = Instant::now();
                 let decode_started = Instant::now();
                 let decoded = decode_client_message(&data);
-                WS_DECODE_CLIENT_SECONDS
-                    .observe(decode_started.elapsed().as_secs_f64());
+                WS_DECODE_CLIENT_SECONDS.observe(decode_started.elapsed().as_secs_f64());
 
                 // Extract append if the decode succeeds and consumes all bytes.
                 // Appends are processed synchronously (enqueue_append) to
                 // preserve per-writer record ordering; all other message types
                 // are dispatched concurrently.
                 let append_req = match decoded {
-                    Ok((ClientMessage::Append(req), used))
-                        if used == data.len() =>
-                    {
-                        Some(req)
-                    }
+                    Ok((ClientMessage::Append(req), used)) if used == data.len() => Some(req),
                     _ => None,
                 };
 
@@ -466,8 +450,7 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                             ERR_AUTHZ_DENIED,
                             "append not authorized",
                         );
-                        APPEND_LATENCY_SECONDS
-                            .observe(handle_started.elapsed().as_secs_f64());
+                        APPEND_LATENCY_SECONDS.observe(handle_started.elapsed().as_secs_f64());
                         if !send_outbound(&out_tx, response).await {
                             break;
                         }
@@ -477,8 +460,7 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                     let enqueued = enqueue_append(req, &state).await;
                     match enqueued {
                         EnqueueResult::Resolved(response) => {
-                            APPEND_LATENCY_SECONDS
-                                .observe(handle_started.elapsed().as_secs_f64());
+                            APPEND_LATENCY_SECONDS.observe(handle_started.elapsed().as_secs_f64());
                             if !send_outbound(&out_tx, response).await {
                                 break;
                             }
@@ -487,11 +469,9 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                             let state = state.clone();
                             let out_tx = out_tx.clone();
                             tokio::spawn(async move {
-                                let response =
-                                    await_append_ack(pending, &state).await;
-                                APPEND_LATENCY_SECONDS.observe(
-                                    handle_started.elapsed().as_secs_f64(),
-                                );
+                                let response = await_append_ack(pending, &state).await;
+                                APPEND_LATENCY_SECONDS
+                                    .observe(handle_started.elapsed().as_secs_f64());
                                 send_outbound(&out_tx, response).await;
                             });
                         }
@@ -500,26 +480,32 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                     // Track reader group membership for cleanup on disconnect.
                     // Optimistic: tracked before handler confirms success.
                     // Calling leave_group for a non-member is a safe no-op.
-                    if let Ok((ref msg, used)) = decode_client_message(&data) {
-                        if used == data.len() {
-                            match msg {
-                                ClientMessage::JoinGroup(req) => {
-                                    let tid = req.topic_ids.first().copied()
-                                        .unwrap_or(fluorite_common::ids::TopicId(0));
-                                    reader_memberships.lock().unwrap().push(
-                                        (req.group_id.clone(), tid, req.reader_id.clone()),
-                                    );
-                                }
-                                ClientMessage::LeaveGroup(req) => {
-                                    let g = &req.group_id;
-                                    let t = req.topic_id;
-                                    let r = &req.reader_id;
-                                    reader_memberships.lock().unwrap().retain(
-                                        |(g2, t2, r2)| !(g2 == g && *t2 == t && r2 == r),
-                                    );
-                                }
-                                _ => {}
+                    if let Ok((ref msg, used)) = decode_client_message(&data)
+                        && used == data.len()
+                    {
+                        match msg {
+                            ClientMessage::JoinGroup(req) => {
+                                let tid = req
+                                    .topic_ids
+                                    .first()
+                                    .copied()
+                                    .unwrap_or(fluorite_common::ids::TopicId(0));
+                                reader_memberships.lock().unwrap().push((
+                                    req.group_id.clone(),
+                                    tid,
+                                    req.reader_id.clone(),
+                                ));
                             }
+                            ClientMessage::LeaveGroup(req) => {
+                                let g = &req.group_id;
+                                let t = req.topic_id;
+                                let r = &req.reader_id;
+                                reader_memberships
+                                    .lock()
+                                    .unwrap()
+                                    .retain(|(g2, t2, r2)| !(g2 == g && *t2 == t && r2 == r));
+                            }
+                            _ => {}
                         }
                     }
 
@@ -530,8 +516,7 @@ async fn handle_connection<S: ObjectStore + Send + Sync + 'static>(
                     let ctx = ctx.clone();
                     let out_tx = out_tx.clone();
                     tokio::spawn(async move {
-                        let response =
-                            handle_message(&data, &state, &ctx).await;
+                        let response = handle_message(&data, &state, &ctx).await;
                         send_outbound(&out_tx, response).await;
                     });
                 }
@@ -675,10 +660,7 @@ async fn handle_message<S: ObjectStore + Send + Sync + 'static>(
                     );
                 }
                 let (kind, decode_msg) = match field {
-                    1 => (
-                        ErrorResponseKind::Append,
-                        "failed to decode append request",
-                    ),
+                    1 => (ErrorResponseKind::Append, "failed to decode append request"),
                     2 => (ErrorResponseKind::Read, "failed to decode read request"),
                     3 => (
                         ErrorResponseKind::JoinGroup,

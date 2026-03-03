@@ -9,8 +9,8 @@
 
 mod db;
 
-use std::time::Duration;
 use fluorite_common::ids::Offset;
+use std::time::Duration;
 
 /// Coordinator configuration.
 #[derive(Debug, Clone)]

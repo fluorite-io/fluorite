@@ -76,10 +76,7 @@ async fn ws_produce(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -147,8 +144,9 @@ async fn test_multi_topic_concurrent_writes() {
     let addr = broker.addr();
 
     // Per-topic history
-    let histories: Vec<Arc<Mutex<OperationHistory>>> =
-        (0..num_topics).map(|_| OperationHistory::shared()).collect();
+    let histories: Vec<Arc<Mutex<OperationHistory>>> = (0..num_topics)
+        .map(|_| OperationHistory::shared())
+        .collect();
 
     // Spawn producers
     let mut handles = vec![];
@@ -158,43 +156,27 @@ async fn test_multi_topic_concurrent_writes() {
             let topic_id = topic_ids[t];
             handles.push(tokio::spawn(async move {
                 let writer_id = WriterId::new();
-                match connect_async(format!("ws://{}", addr)).await {
-                    Ok((mut ws, _)) => {
-                        for i in 0..10 {
-                            let val = format!("t{}-p{}-s{}", t, p, i);
-                            let idx = {
-                                let mut h = history.lock().await;
-                                h.record_write(writer_id, topic_id, Bytes::from(val.clone()))
-                            };
-                            match ws_produce(
-                                &mut ws,
-                                writer_id,
-                                (i + 1) as u64,
-                                topic_id,
-                                &val,
-                            )
-                            .await
-                            {
-                                Ok(resp) if resp.success => {
-                                    let offset = resp
-                                        .append_acks
-                                        .first()
-                                        .map(|a| Offset(a.start_offset.0));
-                                    history
-                                        .lock()
-                                        .await
-                                        .record_write_complete(idx, offset, true);
-                                }
-                                _ => {
-                                    history
-                                        .lock()
-                                        .await
-                                        .record_write_complete(idx, None, false);
-                                }
+                if let Ok((mut ws, _)) = connect_async(format!("ws://{}", addr)).await {
+                    for i in 0..10 {
+                        let val = format!("t{}-p{}-s{}", t, p, i);
+                        let idx = {
+                            let mut h = history.lock().await;
+                            h.record_write(writer_id, topic_id, Bytes::from(val.clone()))
+                        };
+                        match ws_produce(&mut ws, writer_id, (i + 1) as u64, topic_id, &val).await {
+                            Ok(resp) if resp.success => {
+                                let offset =
+                                    resp.append_acks.first().map(|a| Offset(a.start_offset.0));
+                                history
+                                    .lock()
+                                    .await
+                                    .record_write_complete(idx, offset, true);
+                            }
+                            _ => {
+                                history.lock().await.record_write_complete(idx, None, false);
                             }
                         }
                     }
-                    Err(_) => {}
                 }
             }));
         }
@@ -228,7 +210,10 @@ async fn test_multi_topic_concurrent_writes() {
         let successful = h.writes.iter().filter(|w| w.success).count();
         eprintln!(
             "  [multi-topic] topic {}: {}/{} writes succeeded, {} records",
-            t, successful, h.writes.len(), values.len()
+            t,
+            successful,
+            h.writes.len(),
+            values.len()
         );
     }
 }
@@ -247,8 +232,9 @@ async fn test_multi_topic_broker_crash_mid_flush() {
 
     let mut broker = CrashableWsBroker::start(db.pool.clone()).await;
     let addr = Arc::new(Mutex::new(broker.addr()));
-    let histories: Vec<Arc<Mutex<OperationHistory>>> =
-        (0..num_topics).map(|_| OperationHistory::shared()).collect();
+    let histories: Vec<Arc<Mutex<OperationHistory>>> = (0..num_topics)
+        .map(|_| OperationHistory::shared())
+        .collect();
 
     let (stop_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
@@ -290,11 +276,11 @@ async fn test_multi_topic_broker_crash_mid_flush() {
 
                 match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
-                        history.lock().await.record_write_complete(idx, offset, true);
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
+                        history
+                            .lock()
+                            .await
+                            .record_write_complete(idx, offset, true);
                     }
                     _ => {
                         history.lock().await.record_write_complete(idx, None, false);
@@ -353,7 +339,11 @@ async fn test_multi_topic_broker_crash_mid_flush() {
         let failed = h.writes.len() - successful;
         eprintln!(
             "  [mt-crash] topic {}: {}/{} succeeded, {} failed, {} records",
-            t, successful, h.writes.len(), failed, values.len()
+            t,
+            successful,
+            h.writes.len(),
+            failed,
+            values.len()
         );
     }
 }
@@ -412,7 +402,11 @@ async fn test_multi_topic_s3_partition() {
         let resp = ws_produce(&mut ws, w, 1, *topic_id, &format!("ms3-post-{}", t))
             .await
             .expect("post-partition write");
-        assert!(resp.success, "topic {} post-partition write should succeed", t);
+        assert!(
+            resp.success,
+            "topic {} post-partition write should succeed",
+            t
+        );
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -503,13 +497,19 @@ async fn test_crash_causes_inflight_write_failures() {
     // Reset failure counter, then crash
     failure_count.store(0, std::sync::atomic::Ordering::SeqCst);
     broker.crash();
-    eprintln!("  [crash-failures] broker crashed after {} successes", pre_crash_successes);
+    eprintln!(
+        "  [crash-failures] broker crashed after {} successes",
+        pre_crash_successes
+    );
 
     // Let writers run against the dead broker for a bit
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let crash_failures = failure_count.load(std::sync::atomic::Ordering::SeqCst);
-    eprintln!("  [crash-failures] {} failures during crash", crash_failures);
+    eprintln!(
+        "  [crash-failures] {} failures during crash",
+        crash_failures
+    );
 
     // Stop writers, restart broker
     let _ = stop_tx.send(());
@@ -538,7 +538,7 @@ async fn test_crash_causes_inflight_write_failures() {
         values.len()
     );
     assert!(
-        values.len() > 0,
+        !values.is_empty(),
         "should have some committed records after restart"
     );
 }

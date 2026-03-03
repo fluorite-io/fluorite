@@ -7,9 +7,7 @@
 //! (`_offset`, `_partition_id`, `_key`, `_ingest_time`).
 
 use apache_avro::Schema as AvroSchema;
-use iceberg::spec::{
-    NestedField, PrimitiveType, Schema as IcebergSchema, Type as IcebergType,
-};
+use iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type as IcebergType};
 
 use crate::error::{IcebergError, Result};
 
@@ -24,7 +22,11 @@ const META_FIELD_ID_BASE: i32 = 10_000;
 pub fn avro_to_iceberg_schema(avro: &AvroSchema) -> Result<(IcebergSchema, i32)> {
     let record = match avro {
         AvroSchema::Record(r) => r,
-        _ => return Err(IcebergError::Schema("root Avro schema must be a Record".into())),
+        _ => {
+            return Err(IcebergError::Schema(
+                "root Avro schema must be a Record".into(),
+            ));
+        }
     };
 
     let mut next_id = 1i32;
@@ -44,12 +46,20 @@ pub fn avro_to_iceberg_schema(avro: &AvroSchema) -> Result<(IcebergSchema, i32)>
 
     // Metadata columns
     fields.push(
-        NestedField::required(META_FIELD_ID_BASE, "_offset", IcebergType::Primitive(PrimitiveType::Long))
-            .into(),
+        NestedField::required(
+            META_FIELD_ID_BASE,
+            "_offset",
+            IcebergType::Primitive(PrimitiveType::Long),
+        )
+        .into(),
     );
     fields.push(
-        NestedField::required(META_FIELD_ID_BASE + 1, "_partition_id", IcebergType::Primitive(PrimitiveType::Int))
-            .into(),
+        NestedField::required(
+            META_FIELD_ID_BASE + 1,
+            "_partition_id",
+            IcebergType::Primitive(PrimitiveType::Int),
+        )
+        .into(),
     );
     fields.push(
         NestedField::required(
@@ -60,8 +70,12 @@ pub fn avro_to_iceberg_schema(avro: &AvroSchema) -> Result<(IcebergSchema, i32)>
         .into(),
     );
     fields.push(
-        NestedField::optional(META_FIELD_ID_BASE + 3, "_key", IcebergType::Primitive(PrimitiveType::Binary))
-            .into(),
+        NestedField::optional(
+            META_FIELD_ID_BASE + 3,
+            "_key",
+            IcebergType::Primitive(PrimitiveType::Binary),
+        )
+        .into(),
     );
 
     let schema = IcebergSchema::builder()
@@ -180,7 +194,8 @@ mod tests {
 
     #[test]
     fn test_simple_record() {
-        let avro = AvroSchema::parse_str(r#"{
+        let avro = AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "User",
             "fields": [
@@ -188,7 +203,9 @@ mod tests {
                 {"name": "name", "type": "string"},
                 {"name": "email", "type": ["null", "string"]}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let (schema, _next_id) = avro_to_iceberg_schema(&avro).unwrap();
         let fields = schema.as_struct();
@@ -214,7 +231,8 @@ mod tests {
 
     #[test]
     fn test_nested_record() {
-        let avro = AvroSchema::parse_str(r#"{
+        let avro = AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "Event",
             "fields": [
@@ -230,7 +248,9 @@ mod tests {
                     }
                 }
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let (schema, _) = avro_to_iceberg_schema(&avro).unwrap();
         assert_eq!(schema.as_struct().fields().len(), 6); // 2 user + 4 meta
@@ -238,27 +258,33 @@ mod tests {
 
     #[test]
     fn test_complex_union_rejected() {
-        let avro = AvroSchema::parse_str(r#"{
+        let avro = AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "Bad",
             "fields": [
                 {"name": "value", "type": ["null", "string", "long"]}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert!(avro_to_iceberg_schema(&avro).is_err());
     }
 
     #[test]
     fn test_array_and_map() {
-        let avro = AvroSchema::parse_str(r#"{
+        let avro = AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "Container",
             "fields": [
                 {"name": "tags", "type": {"type": "array", "items": "string"}},
                 {"name": "attrs", "type": {"type": "map", "values": "long"}}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let (schema, _) = avro_to_iceberg_schema(&avro).unwrap();
         assert_eq!(schema.as_struct().fields().len(), 6); // 2 user + 4 meta
@@ -266,7 +292,8 @@ mod tests {
 
     #[test]
     fn test_logical_types() {
-        let avro = AvroSchema::parse_str(r#"{
+        let avro = AvroSchema::parse_str(
+            r#"{
             "type": "record",
             "name": "Temporal",
             "fields": [
@@ -274,7 +301,9 @@ mod tests {
                 {"name": "ts", "type": {"type": "long", "logicalType": "timestamp-millis"}},
                 {"name": "uid", "type": {"type": "string", "logicalType": "uuid"}}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let (schema, _) = avro_to_iceberg_schema(&avro).unwrap();
         assert_eq!(schema.as_struct().fields().len(), 7); // 3 user + 4 meta

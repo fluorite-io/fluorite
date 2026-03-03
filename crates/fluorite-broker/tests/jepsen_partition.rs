@@ -51,13 +51,11 @@ async fn test_s3_failure_does_not_ack_writes() {
     );
 
     // Verify no records were persisted in DB
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1",
-    )
-    .bind(topic_id.0 as i32)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM topic_batches WHERE topic_id = $1")
+        .bind(topic_id.0 as i32)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
 
     assert_eq!(count, 0, "No batches should be recorded when S3 fails");
 
@@ -136,13 +134,7 @@ async fn test_consumer_survives_broker_restart() {
 
         // Commit range [0, 42)
         coordinator
-            .commit_range(
-                "survive-group",
-                topic_id,
-                "reader-1",
-                Offset(0),
-                Offset(42),
-            )
+            .commit_range("survive-group", topic_id, "reader-1", Offset(0), Offset(42))
             .await
             .expect("Commit should succeed");
     }
@@ -154,11 +146,7 @@ async fn test_consumer_survives_broker_restart() {
 
         // Send heartbeat -- reader should still be known
         let hb = coordinator
-            .heartbeat(
-                "survive-group",
-                topic_id,
-                "reader-1",
-            )
+            .heartbeat("survive-group", topic_id, "reader-1")
             .await
             .expect("Heartbeat should succeed");
 
@@ -178,10 +166,7 @@ async fn test_consumer_survives_broker_restart() {
         .await
         .expect("Query should succeed");
 
-        assert!(
-            state_exists,
-            "Group state should survive restart"
-        );
+        assert!(state_exists, "Group state should survive restart");
     }
 }
 
@@ -254,7 +239,7 @@ async fn test_s3_latency_does_not_cause_false_ack() {
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    use fluorite_broker::{LocalFsStore, ObjectStore, FlReader};
+    use fluorite_broker::{FlReader, LocalFsStore, ObjectStore};
     use fluorite_common::types::Record;
 
     use common::TestBrokerConfig;
@@ -295,13 +280,13 @@ async fn test_s3_latency_does_not_cause_false_ack() {
     // All offsets should be contiguous and non-overlapping.
     for i in 1..acked_offsets.len() {
         assert_eq!(
-            acked_offsets[i].0 .0,
-            acked_offsets[i - 1].1 .0,
+            acked_offsets[i].0.0,
+            acked_offsets[i - 1].1.0,
             "Offsets should be contiguous: batch {} ends at {}, batch {} starts at {}",
             i - 1,
-            acked_offsets[i - 1].1 .0,
+            acked_offsets[i - 1].1.0,
             i,
-            acked_offsets[i].0 .0
+            acked_offsets[i].0.0
         );
     }
 
@@ -318,18 +303,17 @@ async fn test_s3_latency_does_not_cause_false_ack() {
 
     assert_eq!(
         watermark as u64,
-        acked_offsets.last().unwrap().1 .0,
+        acked_offsets.last().unwrap().1.0,
         "Watermark should match the last acked offset"
     );
 
     // Read back records and verify all 5 are present.
-    let batches: Vec<(String,)> = sqlx::query_as(
-        "SELECT s3_key FROM topic_batches WHERE topic_id = $1",
-    )
-    .bind(topic_id.0 as i32)
-    .fetch_all(&db.pool)
-    .await
-    .unwrap();
+    let batches: Vec<(String,)> =
+        sqlx::query_as("SELECT s3_key FROM topic_batches WHERE topic_id = $1")
+            .bind(topic_id.0 as i32)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
 
     let mut all_records = vec![];
     for (s3_key,) in batches {

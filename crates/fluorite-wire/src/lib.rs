@@ -7,15 +7,15 @@
 //! length-prefixed bytes, and protobuf oneof-style envelopes.
 
 pub mod auth;
-pub mod reader;
 pub mod error;
-pub mod writer;
 pub(crate) mod proto;
 pub(crate) mod proto_conv;
+pub mod reader;
 pub mod record;
 pub mod status;
 pub mod union;
 pub mod varint;
+pub mod writer;
 
 #[cfg(test)]
 mod proptest_tests;

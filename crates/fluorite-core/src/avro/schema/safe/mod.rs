@@ -478,13 +478,13 @@ pub enum LogicalType {
     /// # use fluorite_core::avro::schema::LogicalType;
     /// # let logical_type = LogicalType::Unknown(fluorite_core::avro::schema::UnknownLogicalType::new("foo"));
     /// match logical_type {
-    /// 	LogicalType::Uuid => { /* ... */ }
-    /// 	LogicalType::TimestampMillis => { /* ... */ }
-    /// 	_ => match logical_type.as_str() {
-    /// 		"some-unknown-logical-type" => { /* ... */ }
-    /// 		"some-other-unknown-logical-type" => { /* ... */ }
-    /// 		_ => { /* ... */ }
-    /// 	},
+    ///     LogicalType::Uuid => { /* ... */ }
+    ///     LogicalType::TimestampMillis => { /* ... */ }
+    ///     _ => match logical_type.as_str() {
+    ///         "some-unknown-logical-type" => { /* ... */ }
+    ///         "some-other-unknown-logical-type" => { /* ... */ }
+    ///         _ => { /* ... */ }
+    ///     },
     /// }
     /// ```
     ///

@@ -95,10 +95,10 @@ impl TableWriter {
 
         // Register all writer schemas we'll need
         for seg in &segments {
-            if seg.schema_id != reader_schema_id {
-                if let Ok(writer_json) = self.get_schema_json(seg.schema_id).await {
-                    let _ = converter.register_writer_schema(seg.schema_id, &writer_json);
-                }
+            if seg.schema_id != reader_schema_id
+                && let Ok(writer_json) = self.get_schema_json(seg.schema_id).await
+            {
+                let _ = converter.register_writer_schema(seg.schema_id, &writer_json);
             }
         }
 
@@ -173,11 +173,8 @@ impl TableWriter {
 
         let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
             .map_err(|e| IcebergError::Iceberg(format!("location generator: {e}")))?;
-        let file_name_gen = DefaultFileNameGenerator::new(
-            "iceberg".to_string(),
-            None,
-            DataFileFormat::Parquet,
-        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("iceberg".to_string(), None, DataFileFormat::Parquet);
 
         let iceberg_schema = table.metadata().current_schema().clone();
 
@@ -244,15 +241,15 @@ impl TableWriter {
             .await
             .map_err(|e| IcebergError::Schema(format!("topic not found: {e}")))?;
 
-        self.topic_names.write().await.insert(topic_id, name.clone());
+        self.topic_names
+            .write()
+            .await
+            .insert(topic_id, name.clone());
         Ok(name)
     }
 
     /// Get the latest Avro schema JSON for a topic.
-    async fn get_latest_schema(
-        &self,
-        topic_id: TopicId,
-    ) -> Result<(serde_json::Value, SchemaId)> {
+    async fn get_latest_schema(&self, topic_id: TopicId) -> Result<(serde_json::Value, SchemaId)> {
         let row: (i32, serde_json::Value) = sqlx::query_as(
             r#"SELECT s.schema_id, s.schema_json
                FROM topic_schemas ts

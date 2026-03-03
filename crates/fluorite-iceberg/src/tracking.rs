@@ -14,6 +14,21 @@ use sqlx::PgPool;
 
 use crate::error::Result;
 
+/// Row type returned from the unclaimed-batch query.
+type UnclaimedRow = (
+    i64,
+    i32,
+    i32,
+    i64,
+    i64,
+    i32,
+    String,
+    i64,
+    i64,
+    DateTime<Utc>,
+    i64,
+);
+
 /// Batch info returned from the claim query.
 #[derive(Debug, Clone)]
 pub struct UnclaimedBatch {
@@ -45,9 +60,8 @@ pub async fn claim_batches(
     let mut tx = pool.begin().await?;
 
     // Step 1: Find unclaimed batches
-    let unclaimed: Vec<(i64, i32, i32, i64, i64, i32, String, i64, i64, DateTime<Utc>, i64)> =
-        sqlx::query_as(
-            r#"
+    let unclaimed: Vec<UnclaimedRow> = sqlx::query_as(
+        r#"
             SELECT tb.batch_id, tb.topic_id, tb.schema_id,
                    tb.start_offset, tb.end_offset, tb.record_count,
                    tb.s3_key, tb.byte_offset, tb.byte_length,
@@ -63,11 +77,11 @@ pub async fn claim_batches(
             LIMIT $2
             FOR UPDATE OF tb SKIP LOCKED
             "#,
-        )
-        .bind(topic_ids)
-        .bind(limit)
-        .fetch_all(&mut *tx)
-        .await?;
+    )
+    .bind(topic_ids)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
 
     if unclaimed.is_empty() {
         tx.commit().await?;
@@ -112,10 +126,7 @@ pub async fn claim_batches(
 /// Uses UPSERT so it works for both:
 /// - Hot path: inserts new row with 'completed' status
 /// - Catch-up path: updates existing 'pending' claim to 'completed'
-pub async fn mark_completed(
-    pool: &PgPool,
-    batch_ids: &[(i64, DateTime<Utc>)],
-) -> Result<()> {
+pub async fn mark_completed(pool: &PgPool, batch_ids: &[(i64, DateTime<Utc>)]) -> Result<()> {
     if batch_ids.is_empty() {
         return Ok(());
     }

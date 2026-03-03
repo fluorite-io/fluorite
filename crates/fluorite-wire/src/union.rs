@@ -7,7 +7,7 @@ use prost::Message;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::proto_conv::encode_proto_checked;
-use crate::{DecodeError, EncodeError, auth, reader, writer, proto};
+use crate::{DecodeError, EncodeError, auth, proto, reader, writer};
 
 const INITIAL_ENCODE_BUFFER: usize = 64 * 1024;
 
@@ -41,9 +41,11 @@ pub enum ServerMessage {
 pub fn encode_client_message(msg: &ClientMessage, buf: &mut [u8]) -> Result<usize, EncodeError> {
     let envelope = match msg {
         ClientMessage::Append(req) => proto::ClientMessage {
-            message: Some(proto::client_message::Message::Append(
-                decode_from_encoded(req, writer::encode_request, "append request")?,
-            )),
+            message: Some(proto::client_message::Message::Append(decode_from_encoded(
+                req,
+                writer::encode_request,
+                "append request",
+            )?)),
         },
         ClientMessage::Read(req) => proto::ClientMessage {
             message: Some(proto::client_message::Message::Read(decode_from_encoded(
@@ -106,22 +108,22 @@ pub fn decode_client_message(buf: &[u8]) -> Result<(ClientMessage, usize), Decod
             proto::client_message::Message::Append(inner) => ClientMessage::Append(
                 encode_and_decode(inner, writer::decode_request, "append request")?,
             ),
-            proto::client_message::Message::Read(inner) => ClientMessage::Read(
-                encode_and_decode(inner, reader::decode_read_request, "read request")?,
-            ),
+            proto::client_message::Message::Read(inner) => ClientMessage::Read(encode_and_decode(
+                inner,
+                reader::decode_read_request,
+                "read request",
+            )?),
             proto::client_message::Message::JoinGroup(inner) => ClientMessage::JoinGroup(
                 encode_and_decode(inner, reader::decode_join_request, "join request")?,
             ),
-            proto::client_message::Message::Heartbeat(inner) => {
-                ClientMessage::Heartbeat(encode_and_decode(
-                    inner,
-                    reader::decode_heartbeat_request,
-                    "heartbeat request",
-                )?)
-            }
-            proto::client_message::Message::Poll(inner) => ClientMessage::Poll(
-                encode_and_decode(inner, reader::decode_poll_request, "poll request")?,
+            proto::client_message::Message::Heartbeat(inner) => ClientMessage::Heartbeat(
+                encode_and_decode(inner, reader::decode_heartbeat_request, "heartbeat request")?,
             ),
+            proto::client_message::Message::Poll(inner) => ClientMessage::Poll(encode_and_decode(
+                inner,
+                reader::decode_poll_request,
+                "poll request",
+            )?),
             proto::client_message::Message::LeaveGroup(inner) => ClientMessage::LeaveGroup(
                 encode_and_decode(inner, reader::decode_leave_request, "leave request")?,
             ),
@@ -229,9 +231,11 @@ pub fn decode_server_message(buf: &[u8]) -> Result<(ServerMessage, usize), Decod
             proto::server_message::Message::Append(inner) => ServerMessage::Append(
                 encode_and_decode(inner, writer::decode_response, "append response")?,
             ),
-            proto::server_message::Message::Read(inner) => ServerMessage::Read(
-                encode_and_decode(inner, reader::decode_read_response, "read response")?,
-            ),
+            proto::server_message::Message::Read(inner) => ServerMessage::Read(encode_and_decode(
+                inner,
+                reader::decode_read_response,
+                "read response",
+            )?),
             proto::server_message::Message::JoinGroup(inner) => ServerMessage::JoinGroup(
                 encode_and_decode(inner, reader::decode_join_response, "join response")?,
             ),
@@ -242,9 +246,11 @@ pub fn decode_server_message(buf: &[u8]) -> Result<(ServerMessage, usize), Decod
                     "heartbeat response",
                 )?)
             }
-            proto::server_message::Message::Poll(inner) => ServerMessage::Poll(
-                encode_and_decode(inner, reader::decode_poll_response, "poll response")?,
-            ),
+            proto::server_message::Message::Poll(inner) => ServerMessage::Poll(encode_and_decode(
+                inner,
+                reader::decode_poll_response,
+                "poll response",
+            )?),
             proto::server_message::Message::LeaveGroup(inner) => ServerMessage::LeaveGroup(
                 encode_and_decode(inner, reader::decode_leave_response, "leave response")?,
             ),
@@ -331,9 +337,11 @@ where
     }
 }
 
+type Decoder<T> = fn(&[u8]) -> Result<(T, usize), DecodeError>;
+
 fn encode_and_decode<M, T>(
     message: M,
-    decoder: fn(&[u8]) -> Result<(T, usize), DecodeError>,
+    decoder: Decoder<T>,
     _msg: &'static str,
 ) -> Result<T, DecodeError>
 where
@@ -353,9 +361,7 @@ where
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use fluorite_common::ids::{
-        Offset, WriterId, SchemaId, AppendSeq, TopicId,
-    };
+    use fluorite_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
     use fluorite_common::types::{Record, RecordBatch};
 
     #[test]

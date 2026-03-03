@@ -65,11 +65,7 @@ async fn ws_produce(
     ws_helpers::decode_produce_response(&data)
 }
 
-async fn ws_read(
-    ws: &mut Ws,
-    topic_id: TopicId,
-    offset: Offset,
-) -> reader::ReadResponse {
+async fn ws_read(ws: &mut Ws, topic_id: TopicId, offset: Offset) -> reader::ReadResponse {
     let req = reader::ReadRequest {
         topic_id,
         offset,
@@ -111,7 +107,10 @@ async fn test_read_returns_error_on_s3_get_range_failure() {
 
     // Read should return an error, not hang
     let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
-    assert!(!resp.success, "read should fail with injected get_range fault");
+    assert!(
+        !resp.success,
+        "read should fail with injected get_range fault"
+    );
     assert_eq!(resp.error_code, ERR_INTERNAL_ERROR);
     assert_eq!(resp.error_message, "read failed");
 }
@@ -220,10 +219,7 @@ async fn test_stale_s3_read_after_batch_index_update() {
     // Write 3 records and confirm acks
     let writer_id = WriterId::new();
     for i in 0..3 {
-        let resp = ws_produce(
-            &mut ws, writer_id, i + 1, topic_id,
-            &format!("v{}", i),
-        ).await;
+        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("v{}", i)).await;
         assert!(resp.success, "write {} should succeed", i);
     }
 
@@ -231,14 +227,20 @@ async fn test_stale_s3_read_after_batch_index_update() {
     broker.faulty_store().fail_next_get_range();
 
     let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
-    assert!(!resp.success, "read should fail with injected get_range fault");
+    assert!(
+        !resp.success,
+        "read should fail with injected get_range fault"
+    );
     assert_eq!(resp.error_code, ERR_INTERNAL_ERROR);
 
     // Fault consumed — heal is implicit. Retry should succeed with correct data.
     let resp = ws_read(&mut ws, topic_id, Offset(0)).await;
     assert!(resp.success, "retry after heal should succeed");
     let record_count: usize = resp.results.iter().map(|r| r.records.len()).sum();
-    assert_eq!(record_count, 3, "retry should return all 3 committed records");
+    assert_eq!(
+        record_count, 3,
+        "retry should return all 3 committed records"
+    );
 
     // Verify values are correct (not stale/corrupt)
     let values: Vec<Bytes> = resp

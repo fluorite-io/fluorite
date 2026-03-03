@@ -24,7 +24,7 @@ use fluorite_common::types::{Record, RecordBatch};
 use fluorite_wire::{ClientMessage, reader, writer};
 
 use common::ws_helpers;
-use common::{DbBlocker, MultiBrokerCluster, OperationHistory, TestDb, CrashableWsBroker};
+use common::{CrashableWsBroker, DbBlocker, MultiBrokerCluster, OperationHistory, TestDb};
 
 type Ws = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -42,8 +42,7 @@ async fn ws_produce(
     topic_id: TopicId,
     value: &str,
 ) -> Result<writer::AppendResponse, String> {
-    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10))
-        .await
+    ws_produce_timeout(ws, writer_id, seq, topic_id, value, Duration::from_secs(10)).await
 }
 
 async fn ws_produce_timeout(
@@ -118,10 +117,7 @@ async fn ws_read(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -163,9 +159,15 @@ async fn test_db_lock_stalls_flush_and_recovers() {
     let mut ws = ws_connect(addr).await;
     let writer_id = WriterId::new();
     for i in 0..3 {
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("pre-lock-{}", i))
-            .await
-            .expect("pre-lock write");
+        let resp = ws_produce(
+            &mut ws,
+            writer_id,
+            i + 1,
+            topic_id,
+            &format!("pre-lock-{}", i),
+        )
+        .await
+        .expect("pre-lock write");
         assert!(resp.success);
     }
 
@@ -226,9 +228,15 @@ async fn test_db_partition_and_recovery() {
     let mut ws = ws_connect(addr).await;
     let writer_id = WriterId::new();
     for i in 0..5 {
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("pre-part-{}", i))
-            .await
-            .expect("pre-partition write");
+        let resp = ws_produce(
+            &mut ws,
+            writer_id,
+            i + 1,
+            topic_id,
+            &format!("pre-part-{}", i),
+        )
+        .await
+        .expect("pre-partition write");
         assert!(resp.success);
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -262,7 +270,11 @@ async fn test_db_partition_and_recovery() {
         .expect("read should succeed after recovery");
     for i in 0..5 {
         let expected = Bytes::from(format!("pre-part-{}", i));
-        assert!(values.contains(&expected), "pre-partition record {} missing", i);
+        assert!(
+            values.contains(&expected),
+            "pre-partition record {} missing",
+            i
+        );
     }
     assert!(
         values.contains(&Bytes::from("post-heal")),
@@ -291,38 +303,35 @@ async fn test_concurrent_writers_during_db_lock() {
         let history = history.clone();
         handles.push(tokio::spawn(async move {
             let writer_id = WriterId::new();
-            match connect_async(format!("ws://{}", addr)).await {
-                Ok((mut ws, _)) => {
-                    for i in 0..5 {
-                        let val = format!("locked-p{}-s{}", p, i);
-                        let idx = {
-                            let mut h = history.lock().await;
-                            h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
-                        };
-                        match ws_produce_timeout(
-                            &mut ws,
-                            writer_id,
-                            (i + 1) as u64,
-                            topic_id,
-                            &val,
-                            Duration::from_secs(8),
-                        )
-                        .await
-                        {
-                            Ok(resp) if resp.success => {
-                                let offset = resp
-                                    .append_acks
-                                    .first()
-                                    .map(|a| Offset(a.start_offset.0));
-                                history.lock().await.record_write_complete(idx, offset, true);
-                            }
-                            _ => {
-                                history.lock().await.record_write_complete(idx, None, false);
-                            }
+            if let Ok((mut ws, _)) = connect_async(format!("ws://{}", addr)).await {
+                for i in 0..5 {
+                    let val = format!("locked-p{}-s{}", p, i);
+                    let idx = {
+                        let mut h = history.lock().await;
+                        h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
+                    };
+                    match ws_produce_timeout(
+                        &mut ws,
+                        writer_id,
+                        (i + 1) as u64,
+                        topic_id,
+                        &val,
+                        Duration::from_secs(8),
+                    )
+                    .await
+                    {
+                        Ok(resp) if resp.success => {
+                            let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
+                            history
+                                .lock()
+                                .await
+                                .record_write_complete(idx, offset, true);
+                        }
+                        _ => {
+                            history.lock().await.record_write_complete(idx, None, false);
                         }
                     }
                 }
-                Err(_) => {}
             }
         }));
     }
@@ -388,7 +397,10 @@ async fn test_multi_broker_db_partition() {
             .await
             .expect("broker0 pre-write");
         let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
-        history.lock().await.record_write_complete(idx, offset, resp.success);
+        history
+            .lock()
+            .await
+            .record_write_complete(idx, offset, resp.success);
     }
     for i in 0..3 {
         let val = format!("b1-pre-{}", i);
@@ -400,7 +412,10 @@ async fn test_multi_broker_db_partition() {
             .await
             .expect("broker1 pre-write");
         let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
-        history.lock().await.record_write_complete(idx, offset, resp.success);
+        history
+            .lock()
+            .await
+            .record_write_complete(idx, offset, resp.success);
     }
 
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -420,7 +435,10 @@ async fn test_multi_broker_db_partition() {
         .await
         .expect("broker1 during partition");
     let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
-    history.lock().await.record_write_complete(idx, offset, resp.success);
+    history
+        .lock()
+        .await
+        .record_write_complete(idx, offset, resp.success);
 
     // Heal broker 0
     cluster.heal_broker_db(0).await;
@@ -440,7 +458,10 @@ async fn test_multi_broker_db_partition() {
         .await
         .expect("broker0 post-heal");
     let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
-    history.lock().await.record_write_complete(idx, offset, resp.success);
+    history
+        .lock()
+        .await
+        .record_write_complete(idx, offset, resp.success);
 
     // Final read from broker 1 (should see all data)
     drop(ws1);
@@ -490,38 +511,35 @@ async fn test_slow_s3_plus_db_contention() {
         let history = history.clone();
         handles.push(tokio::spawn(async move {
             let writer_id = WriterId::new();
-            match connect_async(format!("ws://{}", addr)).await {
-                Ok((mut ws, _)) => {
-                    for i in 0..5 {
-                        let val = format!("double-p{}-s{}", p, i);
-                        let idx = {
-                            let mut h = history.lock().await;
-                            h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
-                        };
-                        match ws_produce_timeout(
-                            &mut ws,
-                            writer_id,
-                            (i + 1) as u64,
-                            topic_id,
-                            &val,
-                            Duration::from_secs(15),
-                        )
-                        .await
-                        {
-                            Ok(resp) if resp.success => {
-                                let offset = resp
-                                    .append_acks
-                                    .first()
-                                    .map(|a| Offset(a.start_offset.0));
-                                history.lock().await.record_write_complete(idx, offset, true);
-                            }
-                            _ => {
-                                history.lock().await.record_write_complete(idx, None, false);
-                            }
+            if let Ok((mut ws, _)) = connect_async(format!("ws://{}", addr)).await {
+                for i in 0..5 {
+                    let val = format!("double-p{}-s{}", p, i);
+                    let idx = {
+                        let mut h = history.lock().await;
+                        h.record_write(writer_id, TopicId(0), Bytes::from(val.clone()))
+                    };
+                    match ws_produce_timeout(
+                        &mut ws,
+                        writer_id,
+                        (i + 1) as u64,
+                        topic_id,
+                        &val,
+                        Duration::from_secs(15),
+                    )
+                    .await
+                    {
+                        Ok(resp) if resp.success => {
+                            let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
+                            history
+                                .lock()
+                                .await
+                                .record_write_complete(idx, offset, true);
+                        }
+                        _ => {
+                            history.lock().await.record_write_complete(idx, None, false);
                         }
                     }
                 }
-                Err(_) => {}
             }
         }));
     }

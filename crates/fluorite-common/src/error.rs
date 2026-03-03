@@ -3,7 +3,7 @@
 
 //! Error types for Fluorite eventbus
 
-use crate::{WriterId, TopicId};
+use crate::{TopicId, WriterId};
 use thiserror::Error;
 
 /// Error codes matching wire protocol error messages
@@ -43,10 +43,7 @@ pub enum ErrorCode {
 impl ErrorCode {
     /// Whether this error is retryable
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            ErrorCode::RateLimited | ErrorCode::InternalError
-        )
+        matches!(self, ErrorCode::RateLimited | ErrorCode::InternalError)
     }
 }
 

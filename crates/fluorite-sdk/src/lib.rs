@@ -25,10 +25,10 @@
 //! reader.commit(&batch).await?;
 //! ```
 
-pub mod reader;
 pub mod error;
+pub mod reader;
 pub mod writer;
 
-pub use reader::{PollBatch, Reader, ReaderConfig};
 pub use error::SdkError;
+pub use reader::{PollBatch, Reader, ReaderConfig};
 pub use writer::Writer;

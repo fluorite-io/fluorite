@@ -17,6 +17,7 @@ fn db_available() -> bool {
 }
 
 /// Wrapper struct for benchmark database with automatic cleanup on drop.
+#[allow(dead_code)]
 pub struct BenchDb {
     pub pool: PgPool,
     db_name: String,
@@ -26,7 +27,7 @@ pub struct BenchDb {
 impl Drop for BenchDb {
     fn drop(&mut self) {
         // Close all connections to allow dropping (returns future but we can't await in Drop)
-        let _ = self.pool.close();
+        drop(self.pool.close());
 
         // Use a new runtime for cleanup since we can't use async in Drop
         let admin_url = format!("{}/postgres", self.base_url);
@@ -142,13 +143,12 @@ async fn create_test_db() -> Option<BenchDb> {
 
     // Create test topics and their offsets
     for t in 1..=32 {
-        let topic_id: i32 = sqlx::query_scalar(
-            "INSERT INTO topics (name) VALUES ($1) RETURNING topic_id",
-        )
-        .bind(format!("bench-{}", t))
-        .fetch_one(&pool)
-        .await
-        .ok()?;
+        let topic_id: i32 =
+            sqlx::query_scalar("INSERT INTO topics (name) VALUES ($1) RETURNING topic_id")
+                .bind(format!("bench-{}", t))
+                .fetch_one(&pool)
+                .await
+                .ok()?;
 
         sqlx::query("INSERT INTO topic_offsets (topic_id, next_offset) VALUES ($1, 0)")
             .bind(topic_id)
@@ -220,7 +220,7 @@ pub fn bench_commit_batch(c: &mut Criterion) {
                         )
                         .bind(current)
                         .bind(new_offset)
-                        .bind(count as i32)
+                        .bind(count)
                         .execute(&mut *tx)
                         .await
                         .unwrap();

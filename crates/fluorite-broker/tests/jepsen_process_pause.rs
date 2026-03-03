@@ -3,9 +3,9 @@
 
 //! Jepsen-inspired process pause simulation tests.
 //!
-//! Simulates a full process pause by combining per-broker S3 black-hole
-//! + DB pool close. When both S3 and DB are cut, the broker is alive but
-//! can't do anything — flush hangs, heartbeats fail, coordinator ops fail.
+//! Simulates a full process pause by combining per-broker S3 black-hole +
+//! DB pool close. When both S3 and DB are cut, the broker is alive but
+//! can't do anything -- flush hangs, heartbeats fail, coordinator ops fail.
 
 mod common;
 
@@ -105,10 +105,7 @@ async fn ws_read(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -291,9 +288,7 @@ async fn test_pause_broker_writes_stall() {
 
     // Verify all acked writes visible
     let mut ws = ws_connect(cluster.broker(1).addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, hwm) = ws_read_all(&mut ws, topic_id).await.expect("final read");
     for v in &acked {
         assert!(values.contains(v), "acked value {:?} missing", v);
     }
@@ -358,9 +353,7 @@ async fn test_pause_resume_no_data_loss() {
     }
 
     // Verify all 25 acked records visible
-    let (values, hwm) = ws_read_all(&mut ws0, topic_id)
-        .await
-        .expect("final read");
+    let (values, hwm) = ws_read_all(&mut ws0, topic_id).await.expect("final read");
 
     let acked = acked.lock().await;
     assert_eq!(

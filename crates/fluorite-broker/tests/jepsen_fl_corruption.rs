@@ -180,7 +180,10 @@ async fn test_corrupt_segment_detected_on_read() {
         .expect("read should succeed after corruption clears");
     assert!(resp.success, "read should succeed after corruption clears");
     let post_count: usize = resp.results.iter().map(|r| r.records.len()).sum();
-    assert_eq!(post_count, 5, "all records should be intact after corruption clears");
+    assert_eq!(
+        post_count, 5,
+        "all records should be intact after corruption clears"
+    );
 }
 
 /// Truncated get_range → decompression error → read fails gracefully.
@@ -253,9 +256,15 @@ async fn test_corruption_does_not_poison_broker() {
     let mut ws = ws_connect(addr).await;
     let writer_id = WriterId::new();
     for i in 0..10 {
-        let resp = ws_produce(&mut ws, writer_id, i + 1, topic_id, &format!("poison-{}", i))
-            .await
-            .expect("write should succeed");
+        let resp = ws_produce(
+            &mut ws,
+            writer_id,
+            i + 1,
+            topic_id,
+            &format!("poison-{}", i),
+        )
+        .await
+        .expect("write should succeed");
         assert!(resp.success);
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -313,13 +322,11 @@ async fn test_corrupt_crc_in_metadata_detected() {
     assert!(resp.success);
 
     // Corrupt the CRC in topic_batches
-    sqlx::query(
-        "UPDATE topic_batches SET crc32 = crc32 + 1 WHERE topic_id = $1",
-    )
-    .bind(topic_id.0 as i32)
-    .execute(&db.pool)
-    .await
-    .expect("corrupt crc32 in metadata");
+    sqlx::query("UPDATE topic_batches SET crc32 = crc32 + 1 WHERE topic_id = $1")
+        .bind(topic_id.0 as i32)
+        .execute(&db.pool)
+        .await
+        .expect("corrupt crc32 in metadata");
 
     // Read should fail with CRC mismatch
     drop(ws);
@@ -361,13 +368,11 @@ async fn test_corrupt_byte_offset_in_metadata() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Corrupt byte_offset in metadata (point to wrong location)
-    sqlx::query(
-        "UPDATE topic_batches SET byte_offset = byte_offset + 1000 WHERE topic_id = $1",
-    )
-    .bind(topic_id.0 as i32)
-    .execute(&db.pool)
-    .await
-    .expect("corrupt byte_offset in metadata");
+    sqlx::query("UPDATE topic_batches SET byte_offset = byte_offset + 1000 WHERE topic_id = $1")
+        .bind(topic_id.0 as i32)
+        .execute(&db.pool)
+        .await
+        .expect("corrupt byte_offset in metadata");
 
     // Read should fail (invalid range or wrong data)
     drop(ws);
@@ -376,7 +381,10 @@ async fn test_corrupt_byte_offset_in_metadata() {
 
     match resp {
         Ok(r) if !r.success => {
-            eprintln!("  [meta-offset] read failed as expected: {}", r.error_message);
+            eprintln!(
+                "  [meta-offset] read failed as expected: {}",
+                r.error_message
+            );
         }
         Err(_) => {
             eprintln!("  [meta-offset] connection error — acceptable");

@@ -28,7 +28,10 @@ use crate::error::{IcebergError, Result};
 #[derive(Debug, Clone)]
 enum FieldSource {
     /// Read from writer field at this index, with optional type promotion.
-    WriterField { index: usize, promote: Option<Promotion> },
+    WriterField {
+        index: usize,
+        promote: Option<Promotion>,
+    },
     /// Field not in writer — use this default value.
     Default(DefaultValue),
 }
@@ -98,42 +101,45 @@ impl RecordConverter {
     ///
     /// `reader_json` is the raw schema JSON (for extracting field info).
     /// `arrow_schema` is the pre-built Arrow schema for the output.
-    pub fn new(
-        reader_json: &serde_json::Value,
-        reader_schema_id: SchemaId,
-    ) -> Result<Self> {
+    pub fn new(reader_json: &serde_json::Value, reader_schema_id: SchemaId) -> Result<Self> {
         let reader_schema_str = reader_json.to_string();
-        let core_schema: CoreSchema = reader_schema_str.parse()
+        let core_schema: CoreSchema = reader_schema_str
+            .parse()
             .map_err(|e| IcebergError::Schema(format!("parse reader schema: {e}")))?;
 
         let fields = get_fields(reader_json)?;
         let reader_field_count = fields.len();
 
-        let reader_field_names: Vec<String> = fields.iter()
+        let reader_field_names: Vec<String> = fields
+            .iter()
             .map(|f| f["name"].as_str().unwrap_or("").to_string())
             .collect();
 
-        let reader_field_types: Vec<String> = fields.iter()
-            .map(|f| avro_type_name(&f["type"]))
-            .collect();
+        let reader_field_types: Vec<String> =
+            fields.iter().map(|f| avro_type_name(&f["type"])).collect();
 
-        let reader_field_defaults: Vec<Option<serde_json::Value>> = fields.iter()
-            .map(|f| f.get("default").cloned())
-            .collect();
+        let reader_field_defaults: Vec<Option<serde_json::Value>> =
+            fields.iter().map(|f| f.get("default").cloned()).collect();
 
         let arrow_schema = Arc::new(build_arrow_schema_from_json(&fields)?);
 
         // Register reader schema as a writer (identity mapping)
         let identity_mapping = FieldMapping {
             sources: (0..reader_field_count)
-                .map(|i| FieldSource::WriterField { index: i, promote: None })
+                .map(|i| FieldSource::WriterField {
+                    index: i,
+                    promote: None,
+                })
                 .collect(),
         };
         let mut writers = HashMap::new();
-        writers.insert(reader_schema_id, WriterState {
-            schema: core_schema,
-            mapping: identity_mapping,
-        });
+        writers.insert(
+            reader_schema_id,
+            WriterState {
+                schema: core_schema,
+                mapping: identity_mapping,
+            },
+        );
 
         Ok(Self {
             reader_schema_id,
@@ -156,7 +162,8 @@ impl RecordConverter {
         writer_json: &serde_json::Value,
     ) -> Result<()> {
         let writer_schema_str = writer_json.to_string();
-        let core_schema: CoreSchema = writer_schema_str.parse()
+        let core_schema: CoreSchema = writer_schema_str
+            .parse()
             .map_err(|e| IcebergError::Schema(format!("parse writer schema: {e}")))?;
 
         let writer_fields = get_fields(writer_json)?;
@@ -179,23 +186,24 @@ impl RecordConverter {
 
         // Also check for renames: if writer_json has fluorite.renames, the
         // old_name in writer might map to new_name in reader
-        let renames = writer_json.get("fluorite.renames")
+        let renames = writer_json
+            .get("fluorite.renames")
             .and_then(|v| v.as_object());
 
-        let writer_field_types: Vec<String> = writer_fields.iter()
+        let writer_field_types: Vec<String> = writer_fields
+            .iter()
             .map(|f| avro_type_name(&f["type"]))
             .collect();
 
-        let mapping = self.build_mapping(
-            &writer_by_name,
-            &writer_field_types,
-            renames,
-        );
+        let mapping = self.build_mapping(&writer_by_name, &writer_field_types, renames);
 
-        self.writers.insert(schema_id, WriterState {
-            schema: core_schema,
-            mapping,
-        });
+        self.writers.insert(
+            schema_id,
+            WriterState {
+                schema: core_schema,
+                mapping,
+            },
+        );
         Ok(())
     }
 
@@ -206,42 +214,49 @@ impl RecordConverter {
         writer_field_types: &[String],
         renames: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> FieldMapping {
-        let sources = (0..self.reader_field_count).map(|reader_idx| {
-            let reader_name = &self.reader_field_names[reader_idx];
+        let sources = (0..self.reader_field_count)
+            .map(|reader_idx| {
+                let reader_name = &self.reader_field_names[reader_idx];
 
-            // Try direct name match first
-            let writer_idx = writer_by_name.get(reader_name.as_str()).copied()
-                .or_else(|| {
-                    // Check if this reader field was renamed from a writer field
-                    renames.and_then(|r| {
-                        r.iter().find_map(|(old_name, new_name)| {
-                            if new_name.as_str() == Some(reader_name.as_str()) {
-                                writer_by_name.get(old_name.as_str()).copied()
-                            } else {
-                                None
-                            }
+                // Try direct name match first
+                let writer_idx = writer_by_name
+                    .get(reader_name.as_str())
+                    .copied()
+                    .or_else(|| {
+                        // Check if this reader field was renamed from a writer field
+                        renames.and_then(|r| {
+                            r.iter().find_map(|(old_name, new_name)| {
+                                if new_name.as_str() == Some(reader_name.as_str()) {
+                                    writer_by_name.get(old_name.as_str()).copied()
+                                } else {
+                                    None
+                                }
+                            })
                         })
-                    })
-                });
+                    });
 
-            match writer_idx {
-                Some(idx) => {
-                    let promote = detect_promotion(
-                        &writer_field_types[idx],
-                        &self.reader_field_types[reader_idx],
-                    );
-                    FieldSource::WriterField { index: idx, promote }
+                match writer_idx {
+                    Some(idx) => {
+                        let promote = detect_promotion(
+                            &writer_field_types[idx],
+                            &self.reader_field_types[reader_idx],
+                        );
+                        FieldSource::WriterField {
+                            index: idx,
+                            promote,
+                        }
+                    }
+                    None => {
+                        // Field not in writer — use reader default
+                        let default = self.reader_field_defaults[reader_idx]
+                            .as_ref()
+                            .map(json_to_default)
+                            .unwrap_or(DefaultValue::Null);
+                        FieldSource::Default(default)
+                    }
                 }
-                None => {
-                    // Field not in writer — use reader default
-                    let default = self.reader_field_defaults[reader_idx]
-                        .as_ref()
-                        .map(json_to_default)
-                        .unwrap_or(DefaultValue::Null);
-                    FieldSource::Default(default)
-                }
-            }
-        }).collect();
+            })
+            .collect();
 
         FieldMapping { sources }
     }
@@ -255,10 +270,10 @@ impl RecordConverter {
         partition_id: i32,
         ingest_time: DateTime<Utc>,
     ) -> Result<ArrowRecordBatch> {
-        let writer = self.writers.get(&schema_id)
-            .ok_or_else(|| IcebergError::Schema(
-                format!("unknown writer schema: {}", schema_id),
-            ))?;
+        let writer = self
+            .writers
+            .get(&schema_id)
+            .ok_or_else(|| IcebergError::Schema(format!("unknown writer schema: {}", schema_id)))?;
 
         let batch_de = BatchDeserializer::new(&writer.schema);
         let mapping = &writer.mapping;
@@ -268,7 +283,8 @@ impl RecordConverter {
         let ingest_ts_micros = ingest_time.timestamp_micros();
 
         for (record, offset) in records.iter().zip(offsets) {
-            let value = batch_de.deserialize(record.value.as_ref())
+            let value = batch_de
+                .deserialize(record.value.as_ref())
                 .map_err(|e| IcebergError::Conversion(format!("avro decode: {e}")))?;
 
             let fields = match &value {
@@ -319,7 +335,10 @@ impl RecordConverter {
         }
 
         let arrays: Vec<ArrayRef> = builders.iter_mut().map(|b| b.finish()).collect();
-        Ok(ArrowRecordBatch::try_new(self.arrow_schema.clone(), arrays)?)
+        Ok(ArrowRecordBatch::try_new(
+            self.arrow_schema.clone(),
+            arrays,
+        )?)
     }
 }
 
@@ -329,9 +348,10 @@ impl RecordConverter {
 
 /// Extract the "fields" array from a record schema JSON.
 fn get_fields(schema: &serde_json::Value) -> Result<Vec<serde_json::Value>> {
-    schema.get("fields")
+    schema
+        .get("fields")
         .and_then(|f| f.as_array())
-        .map(|a| a.clone())
+        .cloned()
         .ok_or_else(|| IcebergError::Schema("schema missing 'fields' array".into()))
 }
 
@@ -343,14 +363,15 @@ fn avro_type_name(type_val: &serde_json::Value) -> String {
             if let Some(lt) = obj.get("logicalType").and_then(|v| v.as_str()) {
                 lt.to_string()
             } else {
-                obj.get("type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
+                obj.get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string()
             }
         }
         serde_json::Value::Array(arr) => {
             // Union: find the non-null type
-            let non_null: Vec<_> = arr.iter()
-                .filter(|v| v.as_str() != Some("null"))
-                .collect();
+            let non_null: Vec<_> = arr.iter().filter(|v| v.as_str() != Some("null")).collect();
             if non_null.len() == 1 {
                 avro_type_name(non_null[0])
             } else {
@@ -398,7 +419,8 @@ fn json_to_default(val: &serde_json::Value) -> DefaultValue {
 // ============================================================================
 
 fn build_arrow_schema_from_json(fields: &[serde_json::Value]) -> Result<ArrowSchema> {
-    let mut arrow_fields: Vec<Field> = fields.iter()
+    let mut arrow_fields: Vec<Field> = fields
+        .iter()
         .map(|f| {
             let name = f["name"].as_str().unwrap_or("unknown");
             let type_val = &f["type"];
@@ -475,7 +497,8 @@ fn json_type_to_arrow(type_val: &serde_json::Value) -> DataType {
                                     vec![
                                         Field::new("key", DataType::Utf8, false),
                                         Field::new("value", val, true),
-                                    ].into(),
+                                    ]
+                                    .into(),
                                 ),
                                 false,
                             )),
@@ -494,9 +517,7 @@ fn json_type_to_arrow(type_val: &serde_json::Value) -> DataType {
         }
         serde_json::Value::Array(arr) => {
             // Union: find non-null type
-            let non_null: Vec<_> = arr.iter()
-                .filter(|v| v.as_str() != Some("null"))
-                .collect();
+            let non_null: Vec<_> = arr.iter().filter(|v| v.as_str() != Some("null")).collect();
             if non_null.len() == 1 {
                 json_type_to_arrow(non_null[0])
             } else {
@@ -552,16 +573,12 @@ fn create_builder(dt: &DataType) -> Result<Box<dyn ArrayBuilder>> {
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             Box::new(TimestampMicrosecondBuilder::new())
         }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            Box::new(TimestampNanosecondBuilder::new())
-        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(TimestampNanosecondBuilder::new()),
         DataType::FixedSizeBinary(size) => Box::new(FixedSizeBinaryBuilder::new(*size)),
         DataType::Decimal128(p, s) => {
             Box::new(Decimal128Builder::new().with_precision_and_scale(*p, *s)?)
         }
-        DataType::List(field) => {
-            Box::new(ListBuilder::new(create_builder(field.data_type())?))
-        }
+        DataType::List(field) => Box::new(ListBuilder::new(create_builder(field.data_type())?)),
         _ => Box::new(StringBuilder::new()),
     })
 }
@@ -575,18 +592,16 @@ fn append_bump_value(
     match value {
         BumpValue::Null => append_null(builder),
         BumpValue::Boolean(v) => try_append!(builder, BooleanBuilder, *v),
-        BumpValue::Int(v) => {
-            match promote {
-                Some(Promotion::IntToLong) => {
-                    try_append!(builder, Int64Builder, *v as i64);
-                }
-                _ => {
-                    try_append!(builder, Int32Builder, *v);
-                    try_append!(builder, Date32Builder, *v);
-                    try_append!(builder, Time32MillisecondBuilder, *v);
-                }
+        BumpValue::Int(v) => match promote {
+            Some(Promotion::IntToLong) => {
+                try_append!(builder, Int64Builder, *v as i64);
             }
-        }
+            _ => {
+                try_append!(builder, Int32Builder, *v);
+                try_append!(builder, Date32Builder, *v);
+                try_append!(builder, Time32MillisecondBuilder, *v);
+            }
+        },
         BumpValue::Long(v) => {
             try_append!(builder, Int64Builder, *v);
             try_append!(builder, TimestampMillisecondBuilder, *v);
@@ -594,14 +609,12 @@ fn append_bump_value(
             try_append!(builder, TimestampNanosecondBuilder, *v);
             try_append!(builder, Time64MicrosecondBuilder, *v);
         }
-        BumpValue::Float(v) => {
-            match promote {
-                Some(Promotion::FloatToDouble) => {
-                    try_append!(builder, Float64Builder, *v as f64);
-                }
-                _ => try_append!(builder, Float32Builder, *v),
+        BumpValue::Float(v) => match promote {
+            Some(Promotion::FloatToDouble) => {
+                try_append!(builder, Float64Builder, *v as f64);
             }
-        }
+            _ => try_append!(builder, Float32Builder, *v),
+        },
         BumpValue::Double(v) => try_append!(builder, Float64Builder, *v),
         BumpValue::Bytes(v) => try_append!(builder, BinaryBuilder, *v),
         BumpValue::String(v) => try_append!(builder, StringBuilder, *v),
@@ -610,7 +623,10 @@ fn append_bump_value(
             return append_bump_value(builder, inner, promote);
         }
         BumpValue::Fixed { data, .. } => {
-            if let Some(b) = builder.as_any_mut().downcast_mut::<FixedSizeBinaryBuilder>() {
+            if let Some(b) = builder
+                .as_any_mut()
+                .downcast_mut::<FixedSizeBinaryBuilder>()
+            {
                 b.append_value(data)?;
             }
         }
@@ -633,8 +649,7 @@ fn append_bump_value(
 
 /// Convert rust_decimal::Decimal to i128 for Arrow Decimal128.
 fn decimal_to_i128(d: rust_decimal::Decimal) -> i128 {
-    let mantissa = d.mantissa();
-    mantissa as i128
+    d.mantissa()
 }
 
 macro_rules! try_append {
@@ -730,15 +745,27 @@ mod tests {
         assert_eq!(batch.num_columns(), 6); // 2 user + 4 metadata
 
         // Check user fields
-        let ids = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(ids.value(0), 42);
         assert_eq!(ids.value(1), 42);
 
-        let names = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(names.value(0), "Alice");
 
         // Check _offset
-        let offsets = batch.column(2).as_any().downcast_ref::<Int64Array>().unwrap();
+        let offsets = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(offsets.value(0), 0);
         assert_eq!(offsets.value(1), 1);
     }
@@ -758,7 +785,9 @@ mod tests {
         });
 
         let mut converter = RecordConverter::new(&v2_json, SchemaId(200)).unwrap();
-        converter.register_writer_schema(SchemaId(100), &v1_json).unwrap();
+        converter
+            .register_writer_schema(SchemaId(100), &v1_json)
+            .unwrap();
 
         // Encode record with v1 schema
         let v1_avro = AvroSchema::parse_str(&v1_json.to_string()).unwrap();
@@ -772,7 +801,11 @@ mod tests {
 
         assert_eq!(batch.num_rows(), 1);
         // name should be filled with default "unknown"
-        let names = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(names.value(0), "unknown");
     }
 
@@ -788,7 +821,9 @@ mod tests {
         });
 
         let mut converter = RecordConverter::new(&v2_json, SchemaId(200)).unwrap();
-        converter.register_writer_schema(SchemaId(100), &v1_json).unwrap();
+        converter
+            .register_writer_schema(SchemaId(100), &v1_json)
+            .unwrap();
 
         // Encode record with v1 (int)
         let v1_avro = AvroSchema::parse_str(&v1_json.to_string()).unwrap();
@@ -801,7 +836,11 @@ mod tests {
             .unwrap();
 
         // count should be promoted to i64
-        let counts = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let counts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(counts.value(0), 42);
     }
 
@@ -815,11 +854,17 @@ mod tests {
         assert_eq!(writer.mapping.sources.len(), 2);
         assert!(matches!(
             writer.mapping.sources[0],
-            FieldSource::WriterField { index: 0, promote: None }
+            FieldSource::WriterField {
+                index: 0,
+                promote: None
+            }
         ));
         assert!(matches!(
             writer.mapping.sources[1],
-            FieldSource::WriterField { index: 1, promote: None }
+            FieldSource::WriterField {
+                index: 1,
+                promote: None
+            }
         ));
     }
 }

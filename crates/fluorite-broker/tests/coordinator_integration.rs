@@ -11,10 +11,10 @@
 
 mod common;
 
-use std::sync::Arc;
-use std::time::Duration;
 use fluorite_broker::{CommitStatus, Coordinator, CoordinatorConfig, HeartbeatStatus, PollStatus};
 use fluorite_common::ids::{Offset, TopicId};
+use std::sync::Arc;
+use std::time::Duration;
 
 use common::TestDb;
 
@@ -85,11 +85,7 @@ async fn test_two_consumers_join() {
 
     // A sends heartbeat - should be Ok (still a member)
     let hb_result = coordinator
-        .heartbeat(
-            "test-group",
-            TopicId(topic_id as u32),
-            "reader-a",
-        )
+        .heartbeat("test-group", TopicId(topic_id as u32), "reader-a")
         .await
         .expect("heartbeat failed");
 
@@ -124,11 +120,7 @@ async fn test_leave_group() {
 
     // B's heartbeat should succeed (still a member)
     let hb_result = coordinator
-        .heartbeat(
-            "test-group",
-            TopicId(topic_id as u32),
-            "reader-b",
-        )
+        .heartbeat("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("heartbeat failed");
 
@@ -180,11 +172,7 @@ async fn test_heartbeat_unknown_member() {
 
     // Unknown reader sends heartbeat
     let result = coordinator
-        .heartbeat(
-            "test-group",
-            TopicId(topic_id as u32),
-            "unknown-reader",
-        )
+        .heartbeat("test-group", TopicId(topic_id as u32), "unknown-reader")
         .await
         .expect("heartbeat failed");
 
@@ -222,11 +210,7 @@ async fn test_heartbeat_removes_expired_members() {
 
     // B heartbeats - should detect A expired
     let result = coordinator
-        .heartbeat(
-            "test-group",
-            TopicId(topic_id as u32),
-            "reader-b",
-        )
+        .heartbeat("test-group", TopicId(topic_id as u32), "reader-b")
         .await
         .expect("heartbeat failed");
 
@@ -261,11 +245,7 @@ async fn test_multiple_consumers_join() {
     // All members can heartbeat
     for reader_id in &["a", "b", "c"] {
         let hb = coordinator
-            .heartbeat(
-                "test-group",
-                TopicId(topic_id as u32),
-                reader_id,
-            )
+            .heartbeat("test-group", TopicId(topic_id as u32), reader_id)
             .await
             .expect("heartbeat failed");
         assert_eq!(hb, HeartbeatStatus::Ok);
@@ -447,9 +427,18 @@ async fn test_watermark_advancement_ordering() {
         .expect("poll 3");
 
     // All should have gotten work
-    assert!(poll1.start_offset != poll1.end_offset, "poll1 should get work");
-    assert!(poll2.start_offset != poll2.end_offset, "poll2 should get work");
-    assert!(poll3.start_offset != poll3.end_offset, "poll3 should get work");
+    assert!(
+        poll1.start_offset != poll1.end_offset,
+        "poll1 should get work"
+    );
+    assert!(
+        poll2.start_offset != poll2.end_offset,
+        "poll2 should get work"
+    );
+    assert!(
+        poll3.start_offset != poll3.end_offset,
+        "poll3 should get work"
+    );
 
     let get_watermark = || async {
         sqlx::query_scalar::<_, i64>(
@@ -574,8 +563,7 @@ async fn test_commit_range_happy_path() {
     .await
     .expect("query watermark");
     assert_eq!(
-        watermark,
-        poll.end_offset.0 as i64,
+        watermark, poll.end_offset.0 as i64,
         "committed_watermark should equal end_offset"
     );
 
@@ -589,8 +577,7 @@ async fn test_commit_range_happy_path() {
     .await
     .expect("query cursor");
     assert_eq!(
-        cursor,
-        poll.end_offset.0 as i64,
+        cursor, poll.end_offset.0 as i64,
         "dispatch_cursor should equal end_offset"
     );
 }
@@ -623,9 +610,13 @@ async fn test_max_inflight_enforcement() {
         let poll = coordinator
             .poll("mi-group", topic_id, "reader-a", 1024)
             .await
-            .expect(&format!("poll {} should succeed", i));
+            .unwrap_or_else(|e| panic!("poll {} should succeed: {}", i, e));
         assert_eq!(poll.status, PollStatus::Ok, "poll {} should be Ok", i);
-        assert!(poll.start_offset != poll.end_offset, "poll {} should get work", i);
+        assert!(
+            poll.start_offset != poll.end_offset,
+            "poll {} should get work",
+            i
+        );
     }
 
     // One more poll should return MaxInflight
@@ -668,7 +659,10 @@ async fn test_expired_range_stolen_by_another_reader() {
         .poll("se-group", topic_id, "reader-a", 1024 * 1024)
         .await
         .expect("poll a");
-    assert!(poll_a.start_offset != poll_a.end_offset, "reader-a should get work");
+    assert!(
+        poll_a.start_offset != poll_a.end_offset,
+        "reader-a should get work"
+    );
 
     // Manually expire A's lease
     sqlx::query(
@@ -713,14 +707,32 @@ async fn test_pipelined_poll_different_readers() {
     };
     let coordinator = Coordinator::new(db.pool.clone(), config);
 
-    coordinator.join_group("pp-group", topic_id, "reader-a").await.expect("join a");
-    coordinator.join_group("pp-group", topic_id, "reader-b").await.expect("join b");
+    coordinator
+        .join_group("pp-group", topic_id, "reader-a")
+        .await
+        .expect("join a");
+    coordinator
+        .join_group("pp-group", topic_id, "reader-b")
+        .await
+        .expect("join b");
 
     // Each reader polls twice (pipeline)
-    let a1 = coordinator.poll("pp-group", topic_id, "reader-a", 1024).await.expect("a1");
-    let a2 = coordinator.poll("pp-group", topic_id, "reader-a", 1024).await.expect("a2");
-    let b1 = coordinator.poll("pp-group", topic_id, "reader-b", 1024).await.expect("b1");
-    let b2 = coordinator.poll("pp-group", topic_id, "reader-b", 1024).await.expect("b2");
+    let a1 = coordinator
+        .poll("pp-group", topic_id, "reader-a", 1024)
+        .await
+        .expect("a1");
+    let a2 = coordinator
+        .poll("pp-group", topic_id, "reader-a", 1024)
+        .await
+        .expect("a2");
+    let b1 = coordinator
+        .poll("pp-group", topic_id, "reader-b", 1024)
+        .await
+        .expect("b1");
+    let b2 = coordinator
+        .poll("pp-group", topic_id, "reader-b", 1024)
+        .await
+        .expect("b2");
 
     let ranges: Vec<(u64, u64)> = [&a1, &a2, &b1, &b2]
         .iter()
@@ -734,7 +746,10 @@ async fn test_pipelined_poll_different_readers() {
             assert!(
                 r1.1 <= r2.0 || r2.1 <= r1.0,
                 "ranges must not overlap: [{}, {}) vs [{}, {})",
-                r1.0, r1.1, r2.0, r2.1,
+                r1.0,
+                r1.1,
+                r2.0,
+                r2.1,
             );
         }
     }
@@ -780,7 +795,10 @@ async fn test_empty_poll_no_inflight_row() {
     .fetch_one(&db.pool)
     .await
     .expect("query inflight");
-    assert_eq!(inflight_count, 0, "empty poll should not create inflight rows");
+    assert_eq!(
+        inflight_count, 0,
+        "empty poll should not create inflight rows"
+    );
 
     // Poll again — still no inflight rows
     let poll2 = coordinator
@@ -797,7 +815,10 @@ async fn test_empty_poll_no_inflight_row() {
     .fetch_one(&db.pool)
     .await
     .expect("query inflight 2");
-    assert_eq!(inflight_count2, 0, "second empty poll should still have no inflight rows");
+    assert_eq!(
+        inflight_count2, 0,
+        "second empty poll should still have no inflight rows"
+    );
 }
 
 /// Verify lease_deadline_ms is non-zero and approximately correct.
@@ -831,7 +852,10 @@ async fn test_lease_deadline_ms_populated() {
         .expect("poll");
 
     assert!(poll.start_offset != poll.end_offset, "should get work");
-    assert!(poll.lease_deadline_ms > 0, "lease_deadline_ms should be non-zero");
+    assert!(
+        poll.lease_deadline_ms > 0,
+        "lease_deadline_ms should be non-zero"
+    );
 
     // Should be roughly now + lease_duration (within 5 second tolerance)
     let expected_min = now_ms + (lease_secs - 5) * 1000;
@@ -839,7 +863,10 @@ async fn test_lease_deadline_ms_populated() {
     assert!(
         poll.lease_deadline_ms >= expected_min && poll.lease_deadline_ms <= expected_max,
         "lease_deadline_ms {} should be near now + {}s (expected [{}, {}])",
-        poll.lease_deadline_ms, lease_secs, expected_min, expected_max,
+        poll.lease_deadline_ms,
+        lease_secs,
+        expected_min,
+        expected_max,
     );
 }
 
@@ -853,7 +880,10 @@ async fn test_partial_range_commit_rejected() {
     insert_test_batches(&db.pool, topic_id, 20).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
-    coordinator.join_group("pc-group", topic_id, "reader-a").await.expect("join");
+    coordinator
+        .join_group("pc-group", topic_id, "reader-a")
+        .await
+        .expect("join");
 
     let poll = coordinator
         .poll("pc-group", topic_id, "reader-a", 1024 * 1024)
@@ -877,7 +907,10 @@ async fn test_superset_range_commit_rejected() {
     insert_test_batches(&db.pool, topic_id, 20).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
-    coordinator.join_group("sc-group", topic_id, "reader-a").await.expect("join");
+    coordinator
+        .join_group("sc-group", topic_id, "reader-a")
+        .await
+        .expect("join");
 
     let poll = coordinator
         .poll("sc-group", topic_id, "reader-a", 1024 * 1024)
@@ -887,8 +920,11 @@ async fn test_superset_range_commit_rejected() {
 
     let status = coordinator
         .commit_range(
-            "sc-group", topic_id, "reader-a",
-            poll.start_offset, Offset(poll.end_offset.0 + 50),
+            "sc-group",
+            topic_id,
+            "reader-a",
+            poll.start_offset,
+            Offset(poll.end_offset.0 + 50),
         )
         .await
         .expect("commit superset");
@@ -903,7 +939,10 @@ async fn test_wrong_range_commit_rejected() {
     insert_test_batches(&db.pool, topic_id, 20).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
-    coordinator.join_group("wc-group", topic_id, "reader-a").await.expect("join");
+    coordinator
+        .join_group("wc-group", topic_id, "reader-a")
+        .await
+        .expect("join");
 
     let poll = coordinator
         .poll("wc-group", topic_id, "reader-a", 1024 * 1024)
@@ -926,8 +965,14 @@ async fn test_commit_after_lease_steal_rejected() {
     insert_test_batches(&db.pool, topic_id, 20).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
-    coordinator.join_group("ls-group", topic_id, "reader-a").await.expect("join a");
-    coordinator.join_group("ls-group", topic_id, "reader-b").await.expect("join b");
+    coordinator
+        .join_group("ls-group", topic_id, "reader-a")
+        .await
+        .expect("join a");
+    coordinator
+        .join_group("ls-group", topic_id, "reader-b")
+        .await
+        .expect("join b");
 
     // A polls
     let poll_a = coordinator
@@ -957,14 +1002,26 @@ async fn test_commit_after_lease_steal_rejected() {
 
     // A tries to commit the stolen range — should be NotOwner
     let status_a = coordinator
-        .commit_range("ls-group", topic_id, "reader-a", poll_a.start_offset, poll_a.end_offset)
+        .commit_range(
+            "ls-group",
+            topic_id,
+            "reader-a",
+            poll_a.start_offset,
+            poll_a.end_offset,
+        )
         .await
         .expect("commit a");
     assert_eq!(status_a, CommitStatus::NotOwner);
 
     // B can still commit
     let status_b = coordinator
-        .commit_range("ls-group", topic_id, "reader-b", poll_b.start_offset, poll_b.end_offset)
+        .commit_range(
+            "ls-group",
+            topic_id,
+            "reader-b",
+            poll_b.start_offset,
+            poll_b.end_offset,
+        )
         .await
         .expect("commit b");
     assert_eq!(status_b, CommitStatus::Ok);
@@ -978,7 +1035,10 @@ async fn test_poll_empty_when_all_dispatched() {
     insert_test_batches(&db.pool, topic_id, 10).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
-    coordinator.join_group("ad-group", topic_id, "reader-a").await.expect("join");
+    coordinator
+        .join_group("ad-group", topic_id, "reader-a")
+        .await
+        .expect("join");
 
     // Poll all data
     let poll1 = coordinator
@@ -1012,7 +1072,10 @@ async fn test_poll_empty_when_all_dispatched() {
     .await
     .expect("count inflight after");
 
-    assert_eq!(inflight_before, inflight_after, "inflight count should be unchanged");
+    assert_eq!(
+        inflight_before, inflight_after,
+        "inflight count should be unchanged"
+    );
 }
 
 /// Watermark advances to dispatch_cursor when a reader leaves with inflight ranges.
@@ -1023,22 +1086,40 @@ async fn test_watermark_advances_on_leave() {
     insert_test_batches(&db.pool, topic_id, 30).await;
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
-    coordinator.join_group("wl-group", topic_id, "reader-a").await.expect("join");
+    coordinator
+        .join_group("wl-group", topic_id, "reader-a")
+        .await
+        .expect("join");
 
     // Poll twice to get 2 inflight ranges
-    let poll1 = coordinator.poll("wl-group", topic_id, "reader-a", 1024).await.expect("poll 1");
-    let poll2 = coordinator.poll("wl-group", topic_id, "reader-a", 1024).await.expect("poll 2");
+    let poll1 = coordinator
+        .poll("wl-group", topic_id, "reader-a", 1024)
+        .await
+        .expect("poll 1");
+    let poll2 = coordinator
+        .poll("wl-group", topic_id, "reader-a", 1024)
+        .await
+        .expect("poll 2");
     assert!(poll1.start_offset != poll1.end_offset);
     assert!(poll2.start_offset != poll2.end_offset);
 
     // Commit the first range
     coordinator
-        .commit_range("wl-group", topic_id, "reader-a", poll1.start_offset, poll1.end_offset)
+        .commit_range(
+            "wl-group",
+            topic_id,
+            "reader-a",
+            poll1.start_offset,
+            poll1.end_offset,
+        )
         .await
         .expect("commit 1");
 
     // Leave — should clear remaining inflight and advance watermark
-    coordinator.leave_group("wl-group", topic_id, "reader-a").await.expect("leave");
+    coordinator
+        .leave_group("wl-group", topic_id, "reader-a")
+        .await
+        .expect("leave");
 
     let watermark: i64 = sqlx::query_scalar(
         "SELECT committed_watermark FROM reader_group_state WHERE group_id = $1 AND topic_id = $2",
@@ -1123,14 +1204,25 @@ async fn test_dispatch_serialization_under_load() {
         assert!(
             window[0].1 <= window[1].0,
             "ranges overlap: [{}, {}) and [{}, {})",
-            window[0].0, window[0].1, window[1].0, window[1].1,
+            window[0].0,
+            window[0].1,
+            window[1].0,
+            window[1].1,
         );
     }
 
     // Verify full coverage: first range starts at 0, last range ends at 200
     if !all_ranges.is_empty() {
-        assert_eq!(all_ranges.first().unwrap().0, 0, "first range should start at 0");
-        assert_eq!(all_ranges.last().unwrap().1, 200, "last range should end at 200");
+        assert_eq!(
+            all_ranges.first().unwrap().0,
+            0,
+            "first range should start at 0"
+        );
+        assert_eq!(
+            all_ranges.last().unwrap().1,
+            200,
+            "last range should end at 200"
+        );
     }
 }
 
@@ -1149,7 +1241,10 @@ async fn test_evicted_reader_commit_rejected() {
     let coordinator = Coordinator::new(db.pool.clone(), config);
 
     // A joins and polls
-    coordinator.join_group("ec-group", topic_id, "reader-a").await.expect("join a");
+    coordinator
+        .join_group("ec-group", topic_id, "reader-a")
+        .await
+        .expect("join a");
     let poll = coordinator
         .poll("ec-group", topic_id, "reader-a", 1024 * 1024)
         .await
@@ -1157,18 +1252,30 @@ async fn test_evicted_reader_commit_rejected() {
     assert!(poll.start_offset != poll.end_offset);
 
     // B joins
-    coordinator.join_group("ec-group", topic_id, "reader-b").await.expect("join b");
+    coordinator
+        .join_group("ec-group", topic_id, "reader-b")
+        .await
+        .expect("join b");
 
     // Wait for A's session to expire
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // B's heartbeat evicts A (cleans up A's inflight rows)
-    let hb = coordinator.heartbeat("ec-group", topic_id, "reader-b").await.expect("heartbeat b");
+    let hb = coordinator
+        .heartbeat("ec-group", topic_id, "reader-b")
+        .await
+        .expect("heartbeat b");
     assert_eq!(hb, HeartbeatStatus::Ok);
 
     // A tries to commit — should be NotOwner (inflight rows deleted)
     let status = coordinator
-        .commit_range("ec-group", topic_id, "reader-a", poll.start_offset, poll.end_offset)
+        .commit_range(
+            "ec-group",
+            topic_id,
+            "reader-a",
+            poll.start_offset,
+            poll.end_offset,
+        )
         .await
         .expect("commit a");
     assert_eq!(status, CommitStatus::NotOwner);
@@ -1193,21 +1300,33 @@ async fn test_heartbeat_eviction_redispatches_expired_ranges() {
     let coordinator = Coordinator::new(db.pool.clone(), config);
 
     // A joins and polls — gets a range
-    coordinator.join_group("er-group", topic_id, "reader-a").await.expect("join a");
+    coordinator
+        .join_group("er-group", topic_id, "reader-a")
+        .await
+        .expect("join a");
     let poll_a = coordinator
         .poll("er-group", topic_id, "reader-a", 1024 * 1024)
         .await
         .expect("poll a");
-    assert!(poll_a.start_offset != poll_a.end_offset, "reader-a should get work");
+    assert!(
+        poll_a.start_offset != poll_a.end_offset,
+        "reader-a should get work"
+    );
 
     // B joins
-    coordinator.join_group("er-group", topic_id, "reader-b").await.expect("join b");
+    coordinator
+        .join_group("er-group", topic_id, "reader-b")
+        .await
+        .expect("join b");
 
     // Wait for A's session to expire
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // B's heartbeat evicts A (deletes A's inflight rows)
-    let hb = coordinator.heartbeat("er-group", topic_id, "reader-b").await.expect("heartbeat b");
+    let hb = coordinator
+        .heartbeat("er-group", topic_id, "reader-b")
+        .await
+        .expect("heartbeat b");
     assert_eq!(hb, HeartbeatStatus::Ok);
 
     // dispatch_cursor must be rolled back so evicted range is re-dispatchable
@@ -1260,17 +1379,38 @@ async fn test_force_reset_does_not_skip_uncommitted_data() {
 
     let coordinator = Coordinator::new(db.pool.clone(), CoordinatorConfig::default());
 
-    coordinator.join_group("fr-group", topic_id, "reader-a").await.expect("join a");
+    coordinator
+        .join_group("fr-group", topic_id, "reader-a")
+        .await
+        .expect("join a");
 
     // Poll twice to get two ranges
-    let poll1 = coordinator.poll("fr-group", topic_id, "reader-a", 1024).await.expect("poll 1");
-    let poll2 = coordinator.poll("fr-group", topic_id, "reader-a", 1024).await.expect("poll 2");
-    assert!(poll1.start_offset != poll1.end_offset, "poll1 should get work");
-    assert!(poll2.start_offset != poll2.end_offset, "poll2 should get work");
+    let poll1 = coordinator
+        .poll("fr-group", topic_id, "reader-a", 1024)
+        .await
+        .expect("poll 1");
+    let poll2 = coordinator
+        .poll("fr-group", topic_id, "reader-a", 1024)
+        .await
+        .expect("poll 2");
+    assert!(
+        poll1.start_offset != poll1.end_offset,
+        "poll1 should get work"
+    );
+    assert!(
+        poll2.start_offset != poll2.end_offset,
+        "poll2 should get work"
+    );
 
     // Commit only the first range
     let status = coordinator
-        .commit_range("fr-group", topic_id, "reader-a", poll1.start_offset, poll1.end_offset)
+        .commit_range(
+            "fr-group",
+            topic_id,
+            "reader-a",
+            poll1.start_offset,
+            poll1.end_offset,
+        )
         .await
         .expect("commit 1");
     assert_eq!(status, CommitStatus::Ok);
@@ -1285,7 +1425,10 @@ async fn test_force_reset_does_not_skip_uncommitted_data() {
     .expect("query watermark before");
 
     // force_reset — evicts everyone, clears inflight
-    coordinator.force_reset("fr-group", topic_id).await.expect("force_reset");
+    coordinator
+        .force_reset("fr-group", topic_id)
+        .await
+        .expect("force_reset");
 
     let (cursor_after, watermark_after): (i64, i64) = sqlx::query_as(
         "SELECT dispatch_cursor, committed_watermark FROM reader_group_state WHERE group_id = $1 AND topic_id = $2",
@@ -1300,20 +1443,21 @@ async fn test_force_reset_does_not_skip_uncommitted_data() {
     assert_eq!(
         watermark_after, watermark_before,
         "committed_watermark ({}) should stay at {} (not jump to dispatch_cursor)",
-        watermark_after,
-        watermark_before,
+        watermark_after, watermark_before,
     );
 
     // dispatch_cursor must be rolled back to committed_watermark
     assert_eq!(
         cursor_after, watermark_before,
         "dispatch_cursor ({}) should be rolled back to committed_watermark ({})",
-        cursor_after,
-        watermark_before,
+        cursor_after, watermark_before,
     );
 
     // New reader joins and polls — should get the uncommitted range
-    coordinator.join_group("fr-group", topic_id, "reader-b").await.expect("join b");
+    coordinator
+        .join_group("fr-group", topic_id, "reader-b")
+        .await
+        .expect("join b");
     let poll_b = coordinator
         .poll("fr-group", topic_id, "reader-b", 1024 * 1024)
         .await

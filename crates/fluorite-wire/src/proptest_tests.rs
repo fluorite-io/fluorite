@@ -3,14 +3,12 @@
 
 //! Property-based tests for wire protocol encoding.
 
-#![cfg(test)]
-
 use bytes::Bytes;
+use fluorite_common::ids::{AppendSeq, Offset, SchemaId, TopicId, WriterId};
+use fluorite_common::types::{BatchAck, Record, RecordBatch};
 use proptest::prelude::*;
-use fluorite_common::ids::{Offset, WriterId, SchemaId, AppendSeq, TopicId};
-use fluorite_common::types::{Record, RecordBatch, BatchAck};
 
-use crate::{reader, writer, record, varint};
+use crate::{reader, record, varint, writer};
 
 // ============ Varint Property Tests ============
 
@@ -109,20 +107,14 @@ fn arb_segment() -> impl Strategy<Value = RecordBatch> {
 }
 
 fn arb_segment_ack() -> impl Strategy<Value = BatchAck> {
-    (
-        any::<u32>(),
-        any::<u32>(),
-        any::<u64>(),
-        any::<u64>(),
+    (any::<u32>(), any::<u32>(), any::<u64>(), any::<u64>()).prop_map(
+        |(topic_id, schema_id, start_offset, end_offset)| BatchAck {
+            topic_id: TopicId(topic_id),
+            schema_id: SchemaId(schema_id),
+            start_offset: Offset(start_offset),
+            end_offset: Offset(end_offset),
+        },
     )
-        .prop_map(
-            |(topic_id, schema_id, start_offset, end_offset)| BatchAck {
-                topic_id: TopicId(topic_id),
-                schema_id: SchemaId(schema_id),
-                start_offset: Offset(start_offset),
-                end_offset: Offset(end_offset),
-            },
-        )
 }
 
 // ============ AppendRequest/Response Property Tests ============
@@ -219,42 +211,34 @@ fn arb_topic_result() -> impl Strategy<Value = reader::TopicResult> {
         any::<u64>(),
         prop::collection::vec(arb_record(), 0..10),
     )
-        .prop_map(|(topic_id, schema_id, high_watermark, records)| {
-            reader::TopicResult {
+        .prop_map(
+            |(topic_id, schema_id, high_watermark, records)| reader::TopicResult {
                 topic_id: TopicId(topic_id),
                 schema_id: SchemaId(schema_id),
                 high_watermark: Offset(high_watermark),
                 records,
-            }
-        })
+            },
+        )
 }
 
 fn arb_read_response() -> impl Strategy<Value = reader::ReadResponse> {
-    prop::collection::vec(arb_topic_result(), 0..5).prop_map(|results| {
-        reader::ReadResponse {
-            success: true,
-            error_code: 0,
-            error_message: String::new(),
-            results,
-        }
+    prop::collection::vec(arb_topic_result(), 0..5).prop_map(|results| reader::ReadResponse {
+        success: true,
+        error_code: 0,
+        error_message: String::new(),
+        results,
     })
 }
 
 fn arb_poll_request() -> impl Strategy<Value = reader::PollRequest> {
-    (
-        "[a-z]{1,20}",
-        any::<u32>(),
-        "[a-z0-9]{1,30}",
-        any::<u32>(),
+    ("[a-z]{1,20}", any::<u32>(), "[a-z0-9]{1,30}", any::<u32>()).prop_map(
+        |(group_id, topic_id, reader_id, max_bytes)| reader::PollRequest {
+            group_id,
+            topic_id: TopicId(topic_id),
+            reader_id,
+            max_bytes,
+        },
     )
-        .prop_map(|(group_id, topic_id, reader_id, max_bytes)| {
-            reader::PollRequest {
-                group_id,
-                topic_id: TopicId(topic_id),
-                reader_id,
-                max_bytes,
-            }
-        })
 }
 
 fn arb_poll_response() -> impl Strategy<Value = reader::PollResponse> {
@@ -264,14 +248,16 @@ fn arb_poll_response() -> impl Strategy<Value = reader::PollResponse> {
         any::<u64>(),
         any::<u64>(),
     )
-        .prop_map(|(results, start_offset, end_offset, lease_deadline_ms)| reader::PollResponse {
-            success: true,
-            error_code: 0,
-            error_message: String::new(),
-            results,
-            start_offset: Offset(start_offset),
-            end_offset: Offset(end_offset),
-            lease_deadline_ms,
+        .prop_map(|(results, start_offset, end_offset, lease_deadline_ms)| {
+            reader::PollResponse {
+                success: true,
+                error_code: 0,
+                error_message: String::new(),
+                results,
+                start_offset: Offset(start_offset),
+                end_offset: Offset(end_offset),
+                lease_deadline_ms,
+            }
         })
 }
 

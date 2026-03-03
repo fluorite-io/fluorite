@@ -5,9 +5,9 @@
 //!
 //! Handles schema storage, deduplication, and topic association.
 
+use fluorite_common::ids::{SchemaId, TopicId};
 use serde_json::Value;
 use sqlx::PgPool;
-use fluorite_common::ids::{SchemaId, TopicId};
 
 use crate::SchemaError;
 use crate::canonical::schema_hash;
@@ -116,13 +116,12 @@ impl SchemaRegistry {
         .await?;
 
         // 5. Check compatibility if there's a previous schema
-        if let Some((_, old_schema)) = latest {
-            if !is_backward_compatible(schema, &old_schema)? {
-                return Err(SchemaError::IncompatibleSchema {
-                    message: "new schema is not backward compatible with the previous schema"
-                        .into(),
-                });
-            }
+        if let Some((_, old_schema)) = latest
+            && !is_backward_compatible(schema, &old_schema)?
+        {
+            return Err(SchemaError::IncompatibleSchema {
+                message: "new schema is not backward compatible with the previous schema".into(),
+            });
         }
 
         // 6. Register for topic

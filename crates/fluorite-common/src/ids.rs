@@ -8,10 +8,14 @@ use std::fmt;
 macro_rules! newtype_id {
     ($name:ident, $inner:ty) => {
         impl From<$name> for $inner {
-            fn from(id: $name) -> $inner { id.0 }
+            fn from(id: $name) -> $inner {
+                id.0
+            }
         }
         impl From<$inner> for $name {
-            fn from(val: $inner) -> $name { $name(val) }
+            fn from(val: $inner) -> $name {
+                $name(val)
+            }
         }
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

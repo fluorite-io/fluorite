@@ -16,7 +16,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::buffer::avro_converter::RecordBatchBuilder;
-use crate::buffer::error::{Result, FluoriteError};
+use crate::buffer::error::{FluoriteError, Result};
 use crate::buffer::parquet_writer::{ParquetFileWriter, ParquetWriterConfig};
 
 pub struct AppState {
@@ -115,7 +115,7 @@ async fn write_avro_data(
         match from_avro_datum(&schema, &mut cursor, None) {
             Ok(value) => builder.append_value(&value)?,
             Err(_) if cursor.is_empty() => break,
-            Err(e) => return Err(FluoriteError::AvroParse(e)),
+            Err(e) => return Err(FluoriteError::AvroParse(Box::new(e))),
         }
     }
 

@@ -31,14 +31,14 @@ pub struct IcebergConfig {
 impl Default for IcebergConfig {
     fn default() -> Self {
         Self {
-            table_flush_size: 128 * 1024 * 1024,         // 128 MB
+            table_flush_size: 128 * 1024 * 1024, // 128 MB
             table_flush_interval: Duration::from_secs(60),
-            global_memory_cap: 4 * 1024 * 1024 * 1024,   // 4 GB
+            global_memory_cap: 4 * 1024 * 1024 * 1024, // 4 GB
             warehouse: String::new(),
             namespace: "fluorite".to_string(),
             catalog_uri: String::new(),
             catchup_interval: Duration::from_secs(30),
-            claim_expiry: Duration::from_secs(300),       // 5 min
+            claim_expiry: Duration::from_secs(300), // 5 min
             catchup_batch_limit: 100,
         }
     }
@@ -49,14 +49,20 @@ impl IcebergConfig {
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
-        if let Ok(v) = std::env::var("ICEBERG_TABLE_FLUSH_SIZE") {
-            if let Ok(n) = v.parse() { config.table_flush_size = n; }
+        if let Ok(v) = std::env::var("ICEBERG_TABLE_FLUSH_SIZE")
+            && let Ok(n) = v.parse()
+        {
+            config.table_flush_size = n;
         }
-        if let Ok(v) = std::env::var("ICEBERG_TABLE_FLUSH_INTERVAL_SECS") {
-            if let Ok(n) = v.parse() { config.table_flush_interval = Duration::from_secs(n); }
+        if let Ok(v) = std::env::var("ICEBERG_TABLE_FLUSH_INTERVAL_SECS")
+            && let Ok(n) = v.parse()
+        {
+            config.table_flush_interval = Duration::from_secs(n);
         }
-        if let Ok(v) = std::env::var("ICEBERG_GLOBAL_MEMORY_CAP") {
-            if let Ok(n) = v.parse() { config.global_memory_cap = n; }
+        if let Ok(v) = std::env::var("ICEBERG_GLOBAL_MEMORY_CAP")
+            && let Ok(n) = v.parse()
+        {
+            config.global_memory_cap = n;
         }
         if let Ok(v) = std::env::var("ICEBERG_WAREHOUSE") {
             config.warehouse = v;
@@ -67,14 +73,20 @@ impl IcebergConfig {
         if let Ok(v) = std::env::var("ICEBERG_CATALOG_URI") {
             config.catalog_uri = v;
         }
-        if let Ok(v) = std::env::var("ICEBERG_CATCHUP_INTERVAL_SECS") {
-            if let Ok(n) = v.parse() { config.catchup_interval = Duration::from_secs(n); }
+        if let Ok(v) = std::env::var("ICEBERG_CATCHUP_INTERVAL_SECS")
+            && let Ok(n) = v.parse()
+        {
+            config.catchup_interval = Duration::from_secs(n);
         }
-        if let Ok(v) = std::env::var("ICEBERG_CLAIM_EXPIRY_SECS") {
-            if let Ok(n) = v.parse() { config.claim_expiry = Duration::from_secs(n); }
+        if let Ok(v) = std::env::var("ICEBERG_CLAIM_EXPIRY_SECS")
+            && let Ok(n) = v.parse()
+        {
+            config.claim_expiry = Duration::from_secs(n);
         }
-        if let Ok(v) = std::env::var("ICEBERG_CATCHUP_BATCH_LIMIT") {
-            if let Ok(n) = v.parse() { config.catchup_batch_limit = n; }
+        if let Ok(v) = std::env::var("ICEBERG_CATCHUP_BATCH_LIMIT")
+            && let Ok(n) = v.parse()
+        {
+            config.catchup_batch_limit = n;
         }
 
         config

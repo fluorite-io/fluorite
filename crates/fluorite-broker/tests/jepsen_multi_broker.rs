@@ -106,10 +106,7 @@ async fn ws_read(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -331,13 +328,12 @@ async fn test_consumer_group_across_brokers() {
     assert!(resp_b.success, "Reader B join should succeed");
 
     // Verify both members exist in DB
-    let member_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM reader_members WHERE group_id = $1",
-    )
-    .bind("multi-cg-group")
-    .fetch_one(cluster.pool())
-    .await
-    .expect("query members");
+    let member_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reader_members WHERE group_id = $1")
+            .bind("multi-cg-group")
+            .fetch_one(cluster.pool())
+            .await
+            .expect("query members");
     assert_eq!(member_count, 2, "both readers should be members");
 
     // --- Crash broker 0, verify B continues via heartbeat ---
@@ -474,17 +470,14 @@ async fn test_multi_broker_chaos() {
 
                 match ws_produce(w, writer_id, seq, topic_id, &val).await {
                     Ok(resp) if resp.success => {
-                        let offset = resp
-                            .append_acks
-                            .first()
-                            .map(|a| Offset(a.start_offset.0));
-                        history.lock().await.record_write_complete(idx, offset, true);
-                    }
-                    _ => {
+                        let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
                         history
                             .lock()
                             .await
-                            .record_write_complete(idx, None, false);
+                            .record_write_complete(idx, offset, true);
+                    }
+                    _ => {
+                        history.lock().await.record_write_complete(idx, None, false);
                         ws = None;
                     }
                 }
@@ -547,12 +540,10 @@ async fn test_multi_broker_chaos() {
                             .record_read_complete(idx, values, hwm, true);
                     }
                     _ => {
-                        history.lock().await.record_read_complete(
-                            idx,
-                            vec![],
-                            Offset(0),
-                            false,
-                        );
+                        history
+                            .lock()
+                            .await
+                            .record_read_complete(idx, vec![], Offset(0), false);
                         ws = None;
                     }
                 }
@@ -642,7 +633,10 @@ async fn test_asymmetric_s3_partition_one_broker() {
         ws_produce(&mut ws0, w0b, 1, topic_id, "should-hang"),
     )
     .await;
-    assert!(hung.is_err(), "broker 0 write should hang while S3 partitioned");
+    assert!(
+        hung.is_err(),
+        "broker 0 write should hang while S3 partitioned"
+    );
 
     // Write via broker 1 should succeed
     let mut ws1 = ws_connect(cluster.broker(1).addr()).await;
@@ -664,19 +658,13 @@ async fn test_asymmetric_s3_partition_one_broker() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify all broker 1 acked writes visible
-    let (values, hwm) = ws_read_all(&mut ws1, topic_id)
-        .await
-        .expect("final read");
+    let (values, hwm) = ws_read_all(&mut ws1, topic_id).await.expect("final read");
     for v in &acked_via_b1 {
         assert!(values.contains(v), "broker 1 acked value {:?} missing", v);
     }
 
     // Offsets contiguous
-    assert_eq!(
-        values.len() as u64,
-        hwm.0,
-        "offsets should be contiguous"
-    );
+    assert_eq!(values.len() as u64, hwm.0, "offsets should be contiguous");
 
     // No duplicate values
     let unique: HashSet<&Bytes> = values.iter().collect();
@@ -776,9 +764,7 @@ async fn test_split_brain_writes() {
 
     // Final read
     let mut ws = ws_connect(cluster.broker(1).addr()).await;
-    let (values, hwm) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, hwm) = ws_read_all(&mut ws, topic_id).await.expect("final read");
     {
         let mut h = history.lock().await;
         let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));
@@ -836,7 +822,10 @@ async fn test_db_partition_one_broker_continues() {
         let resp = ws_produce(&mut ws1, w1, (i + 1) as u64, topic_id, &val)
             .await
             .expect("broker 1 write");
-        assert!(resp.success, "broker 1 should continue after broker 0 DB partition");
+        assert!(
+            resp.success,
+            "broker 1 should continue after broker 0 DB partition"
+        );
         acked_b1.push(Bytes::from(val));
     }
 
@@ -845,9 +834,7 @@ async fn test_db_partition_one_broker_continues() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify all broker 1 acked writes visible
-    let (values, _) = ws_read_all(&mut ws1, topic_id)
-        .await
-        .expect("final read");
+    let (values, _) = ws_read_all(&mut ws1, topic_id).await.expect("final read");
     for v in &acked_b1 {
         assert!(values.contains(v), "broker 1 acked value {:?} missing", v);
     }
@@ -912,9 +899,7 @@ async fn test_db_partition_during_flush() {
     assert!(resp.success, "write should succeed after healing");
 
     // Verify data is consistent
-    let (values, hwm) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, hwm) = ws_read_all(&mut ws, topic_id).await.expect("final read");
     assert!(
         values.contains(&Bytes::from("after-heal")),
         "post-heal value should be visible"
@@ -965,11 +950,7 @@ async fn test_write_broker_a_read_broker_b_immediately() {
     }
 
     // Watermark must reflect all committed writes
-    assert!(
-        hwm.0 >= 5,
-        "high watermark should be >= 5, got {}",
-        hwm.0
-    );
+    assert!(hwm.0 >= 5, "high watermark should be >= 5, got {}", hwm.0);
 
     // Offsets contiguous
     assert_eq!(
@@ -1015,8 +996,9 @@ async fn test_cross_broker_reader_group_reconnect() {
 
     // Produce some records via broker 0 so there's work to dispatch
     let writer_id = WriterId::new();
-    let produce_resp =
-        ws_produce(&mut ws_a, writer_id, 1, topic_id, "test-value").await.expect("produce");
+    let produce_resp = ws_produce(&mut ws_a, writer_id, 1, topic_id, "test-value")
+        .await
+        .expect("produce");
     assert!(produce_resp.success, "produce via broker 0 should succeed");
 
     // Wait for flush
@@ -1143,12 +1125,9 @@ async fn test_sustained_s3_impairment_multi_broker() {
     let mut ws0 = ws_connect(cluster.broker(0).addr()).await;
     let w0 = WriterId::new();
     for i in 0..3 {
-        let resp = ws_produce(
-            &mut ws0, w0, i + 1, topic_id,
-            &format!("baseline-{}", i),
-        )
-        .await
-        .expect("baseline write");
+        let resp = ws_produce(&mut ws0, w0, i + 1, topic_id, &format!("baseline-{}", i))
+            .await
+            .expect("baseline write");
         assert!(resp.success);
     }
 
@@ -1176,7 +1155,10 @@ async fn test_sustained_s3_impairment_multi_broker() {
         ws_produce(&mut ws0, w0b, 1, topic_id, "should-hang"),
     )
     .await;
-    assert!(hung.is_err(), "broker 0 write should hang while S3 partitioned");
+    assert!(
+        hung.is_err(),
+        "broker 0 write should hang while S3 partitioned"
+    );
 
     // Heal broker A
     cluster.broker_store(0).heal_partition();
@@ -1207,5 +1189,9 @@ async fn test_sustained_s3_impairment_multi_broker() {
 
     // No duplicate values
     let unique: HashSet<&Bytes> = values.iter().collect();
-    assert_eq!(values.len(), unique.len(), "no duplicate values from both brokers");
+    assert_eq!(
+        values.len(),
+        unique.len(),
+        "no duplicate values from both brokers"
+    );
 }

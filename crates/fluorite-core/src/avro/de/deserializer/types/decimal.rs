@@ -63,7 +63,7 @@ where
         ))
     })?;
     reader.read_exact(&mut buf[start..]).map_err(DeError::io)?;
-    if buf.get(start).map_or(false, |&v| v & 0x80 != 0) {
+    if buf.get(start).is_some_and(|&v| v & 0x80 != 0) {
         // This is a negative number in CA2 repr, we need to maintain that for the
         // larger number
         for v in &mut buf[0..start] {
@@ -126,10 +126,10 @@ where
     }
     let decimal = rust_decimal::Decimal::try_from_i128_with_scale(unscaled, scale)
         .map_err(|e| DeError::custom(format_args!("Could not parse decimal from i128: {e}")))?;
-    if hint == VisitorHint::F64 {
-        if let Some(float) = decimal.to_f64() {
-            return visitor.visit_f64(float);
-        }
+    if hint == VisitorHint::F64
+        && let Some(float) = decimal.to_f64()
+    {
+        return visitor.visit_f64(float);
     }
     serde::Serialize::serialize(
         &decimal,
@@ -161,7 +161,7 @@ struct SerializeToVisitorStr<'de, V> {
 
 // This serializer shim depends on a helper macro that references legacy serde
 // internals. The warning is expected and scoped to this impl.
-#[allow(deprecated)]
+#[allow(deprecated, clippy::multiple_bound_locations)]
 impl<'de, V: Visitor<'de>> serde::Serializer for SerializeToVisitorStr<'de, V> {
     type Ok = V::Value;
     type Error = DeError;

@@ -29,10 +29,7 @@ pub enum EvolutionOp {
         parent: Vec<String>,
     },
     /// Rename an existing column.
-    RenameColumn {
-        old_name: String,
-        new_name: String,
-    },
+    RenameColumn { old_name: String, new_name: String },
     /// Widen a column type (e.g. int → long).
     UpdateColumnType {
         name: String,
@@ -40,9 +37,7 @@ pub enum EvolutionOp {
         to: String,
     },
     /// Delete (soft-remove) a column.
-    DeleteColumn {
-        name: String,
-    },
+    DeleteColumn { name: String },
 }
 
 /// Result of comparing two schema versions for Iceberg evolution.
@@ -62,20 +57,19 @@ impl SchemaEvolution {
 ///
 /// Reads `fluorite.renames` and `fluorite.deletions` from the new schema's
 /// metadata, then compares field lists for type widening and additions.
-pub fn compute_evolution(
-    new_json: &Value,
-    old_json: &Value,
-) -> Result<SchemaEvolution> {
+pub fn compute_evolution(new_json: &Value, old_json: &Value) -> Result<SchemaEvolution> {
     let mut ops = Vec::new();
 
     // 1. Renames from fluorite.renames: {"old_name": "new_name"}
     let mut renames_reverse: HashMap<&str, &str> = HashMap::new();
     if let Some(renames) = new_json.get("fluorite.renames").and_then(|v| v.as_object()) {
         for (old_name, new_name) in renames {
-            let new_name_str = new_name.as_str()
-                .ok_or_else(|| IcebergError::Schema(
-                    format!("fluorite.renames value for '{}' must be a string", old_name),
-                ))?;
+            let new_name_str = new_name.as_str().ok_or_else(|| {
+                IcebergError::Schema(format!(
+                    "fluorite.renames value for '{}' must be a string",
+                    old_name
+                ))
+            })?;
             ops.push(EvolutionOp::RenameColumn {
                 old_name: old_name.clone(),
                 new_name: new_name_str.to_string(),
@@ -85,12 +79,14 @@ pub fn compute_evolution(
     }
 
     // 2. Deletions from fluorite.deletions: ["removed_field"]
-    if let Some(deletions) = new_json.get("fluorite.deletions").and_then(|v| v.as_array()) {
+    if let Some(deletions) = new_json
+        .get("fluorite.deletions")
+        .and_then(|v| v.as_array())
+    {
         for name in deletions {
-            let name_str = name.as_str()
-                .ok_or_else(|| IcebergError::Schema(
-                    "fluorite.deletions entries must be strings".into(),
-                ))?;
+            let name_str = name.as_str().ok_or_else(|| {
+                IcebergError::Schema("fluorite.deletions entries must be strings".into())
+            })?;
             ops.push(EvolutionOp::DeleteColumn {
                 name: name_str.to_string(),
             });
@@ -100,12 +96,14 @@ pub fn compute_evolution(
     // 3. Type widening + new fields: compare old vs new field lists
     let new_fields = get_fields(new_json)?;
     let old_fields = get_fields(old_json)?;
-    let old_by_name: HashMap<&str, &Value> = old_fields.iter()
+    let old_by_name: HashMap<&str, &Value> = old_fields
+        .iter()
         .filter_map(|f| f["name"].as_str().map(|n| (n, f)))
         .collect();
 
     for new_field in &new_fields {
-        let name = new_field["name"].as_str()
+        let name = new_field["name"]
+            .as_str()
             .ok_or_else(|| IcebergError::Schema("field missing 'name'".into()))?;
 
         // If this field was renamed, look up the old name
@@ -114,10 +112,9 @@ pub fn compute_evolution(
         match old_by_name.get(lookup_name) {
             Some(old_field) => {
                 // Check type widening
-                if let Some((from, to)) = detect_type_widening(
-                    &old_field["type"],
-                    &new_field["type"],
-                ) {
+                if let Some((from, to)) =
+                    detect_type_widening(&old_field["type"], &new_field["type"])
+                {
                     ops.push(EvolutionOp::UpdateColumnType {
                         name: name.to_string(),
                         from,
@@ -140,7 +137,8 @@ pub fn compute_evolution(
 
 /// Extract the "fields" array from a record schema JSON.
 fn get_fields(schema: &Value) -> Result<Vec<Value>> {
-    schema.get("fields")
+    schema
+        .get("fields")
         .and_then(|f| f.as_array())
         .cloned()
         .ok_or_else(|| IcebergError::Schema("schema missing 'fields' array".into()))
@@ -162,14 +160,14 @@ fn detect_type_widening(old_type: &Value, new_type: &Value) -> Option<(String, S
 fn unwrap_type_name(type_val: &Value) -> String {
     match type_val {
         Value::String(s) => s.clone(),
-        Value::Object(obj) => {
-            obj.get("type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
-        }
+        Value::Object(obj) => obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
         Value::Array(arr) => {
             // Union: find the non-null type
-            let non_null: Vec<_> = arr.iter()
-                .filter(|v| v.as_str() != Some("null"))
-                .collect();
+            let non_null: Vec<_> = arr.iter().filter(|v| v.as_str() != Some("null")).collect();
             if non_null.len() == 1 {
                 unwrap_type_name(non_null[0])
             } else {
@@ -332,10 +330,26 @@ mod tests {
         let evo = compute_evolution(&new, &old).unwrap();
         // rename + delete + widen + add = 4
         assert_eq!(evo.ops.len(), 4);
-        assert!(evo.ops.iter().any(|op| matches!(op, EvolutionOp::RenameColumn { .. })));
-        assert!(evo.ops.iter().any(|op| matches!(op, EvolutionOp::DeleteColumn { .. })));
-        assert!(evo.ops.iter().any(|op| matches!(op, EvolutionOp::UpdateColumnType { .. })));
-        assert!(evo.ops.iter().any(|op| matches!(op, EvolutionOp::AddColumn { .. })));
+        assert!(
+            evo.ops
+                .iter()
+                .any(|op| matches!(op, EvolutionOp::RenameColumn { .. }))
+        );
+        assert!(
+            evo.ops
+                .iter()
+                .any(|op| matches!(op, EvolutionOp::DeleteColumn { .. }))
+        );
+        assert!(
+            evo.ops
+                .iter()
+                .any(|op| matches!(op, EvolutionOp::UpdateColumnType { .. }))
+        );
+        assert!(
+            evo.ops
+                .iter()
+                .any(|op| matches!(op, EvolutionOp::AddColumn { .. }))
+        );
     }
 
     #[test]

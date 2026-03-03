@@ -92,13 +92,12 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
     assert_eq!(deny_resp.error_code, ERR_AUTHZ_DENIED);
     assert!(deny_resp.append_acks.is_empty());
 
-    let offset_after_deny: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let offset_after_deny: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(offset_after_deny, 0);
     ws_deny.close(None).await.ok();
 
@@ -137,13 +136,12 @@ async fn test_unprefixed_produce_acl_enforced_with_auth() {
     assert!(allow_resp.success);
     assert_eq!(allow_resp.append_acks.len(), 1);
 
-    let offset_after_allow: i64 = sqlx::query_scalar(
-        "SELECT next_offset FROM topic_offsets WHERE topic_id = $1",
-    )
-    .bind(topic_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let offset_after_allow: i64 =
+        sqlx::query_scalar("SELECT next_offset FROM topic_offsets WHERE topic_id = $1")
+            .bind(topic_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(offset_after_allow, 1);
 
     ws_allow.close(None).await.ok();

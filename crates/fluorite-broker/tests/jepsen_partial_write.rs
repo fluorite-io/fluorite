@@ -106,10 +106,7 @@ async fn ws_read(
     }
 }
 
-async fn ws_read_all(
-    ws: &mut Ws,
-    topic_id: TopicId,
-) -> Result<(Vec<Bytes>, Offset), String> {
+async fn ws_read_all(ws: &mut Ws, topic_id: TopicId) -> Result<(Vec<Bytes>, Offset), String> {
     let mut all_values = Vec::new();
     let mut next_offset = Offset(0);
     let mut hwm = Offset(0);
@@ -195,9 +192,7 @@ async fn test_interleaved_corruption_and_healthy_writes() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Verify all data intact
-    let (values, _) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, _) = ws_read_all(&mut ws, topic_id).await.expect("final read");
     assert_eq!(values.len(), 6, "should have 6 records total");
 }
 
@@ -339,7 +334,10 @@ async fn test_repeated_corruption_recovery_cycles() {
             .await
             .expect("write");
         let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
-        history.lock().await.record_write_complete(idx, offset, resp.success);
+        history
+            .lock()
+            .await
+            .record_write_complete(idx, offset, resp.success);
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -371,13 +369,14 @@ async fn test_repeated_corruption_recovery_cycles() {
             .await
             .expect("cycle write");
         let offset = resp.append_acks.first().map(|a| Offset(a.start_offset.0));
-        history.lock().await.record_write_complete(idx, offset, resp.success);
+        history
+            .lock()
+            .await
+            .record_write_complete(idx, offset, resp.success);
     }
 
     // Final verification
-    let (values, hwm) = ws_read_all(&mut ws, topic_id)
-        .await
-        .expect("final read");
+    let (values, hwm) = ws_read_all(&mut ws, topic_id).await.expect("final read");
 
     let mut h = history.lock().await;
     let idx = h.record_read(TopicId(0), "final".to_string(), Offset(0));

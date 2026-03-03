@@ -73,6 +73,8 @@ async fn start_server(
         flush_interval: Duration::from_millis(50),
         require_auth: false,
         auth_timeout: Duration::from_secs(10),
+        #[cfg(feature = "iceberg")]
+        iceberg: None,
     };
 
     let state = BrokerState::new(pool, store, config).await;
@@ -611,10 +613,7 @@ async fn test_python_to_java() {
 // ---- Schema E2E helpers ----
 
 /// Run Python schema writer.
-async fn run_python_schema_writer(
-    url: &str,
-    topic_id: i32,
-) -> Result<SchemaWriteResult, String> {
+async fn run_python_schema_writer(url: &str, topic_id: i32) -> Result<SchemaWriteResult, String> {
     let root = project_root();
     let script = root.join("tests/cross_language/python_schema_writer.py");
 
@@ -657,10 +656,7 @@ async fn run_python_schema_reader(
 }
 
 /// Run Java schema writer.
-async fn run_java_schema_writer(
-    url: &str,
-    topic_id: i32,
-) -> Result<SchemaWriteResult, String> {
+async fn run_java_schema_writer(url: &str, topic_id: i32) -> Result<SchemaWriteResult, String> {
     let root = project_root();
     let jar_path = root.join("sdks/java/fluorite-sdk/target/fluorite-sdk-0.1.0.jar");
     let dependency_glob = root.join("sdks/java/fluorite-sdk/target/dependency/*");

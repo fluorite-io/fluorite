@@ -3,12 +3,10 @@
 
 //! SQL operations for reader group coordination.
 
-use sqlx::PgPool;
 use fluorite_common::ids::{Offset, TopicId};
+use sqlx::PgPool;
 
-use super::{
-    CommitStatus, CoordinatorConfig, HeartbeatStatus, PollResult, PollStatus,
-};
+use super::{CommitStatus, CoordinatorConfig, HeartbeatStatus, PollResult, PollStatus};
 
 /// Reader group coordinator.
 #[derive(Clone)]
@@ -430,11 +428,10 @@ impl Coordinator {
 
         if let Some((start, end)) = stolen {
             // Compute lease deadline
-            let now_ms: i64 = sqlx::query_scalar(
-                "SELECT (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint",
-            )
-            .fetch_one(&mut *tx)
-            .await?;
+            let now_ms: i64 =
+                sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint")
+                    .fetch_one(&mut *tx)
+                    .await?;
             let deadline = now_ms as u64 + lease_duration_ms;
 
             tx.commit().await?;
@@ -554,11 +551,9 @@ impl Coordinator {
         .await?;
 
         // 9. Compute lease deadline
-        let now_ms: i64 = sqlx::query_scalar(
-            "SELECT (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let now_ms: i64 = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint")
+            .fetch_one(&mut *tx)
+            .await?;
         let deadline = now_ms as u64 + lease_duration_ms;
 
         tx.commit().await?;
@@ -609,28 +604,20 @@ impl Coordinator {
     /// BREAK-GLASS: Reset a consumer group by evicting all members, clearing
     /// inflight ranges, and rolling back the dispatch cursor so uncommitted
     /// ranges are re-dispatched when new readers join.
-    pub async fn force_reset(
-        &self,
-        group_id: &str,
-        topic_id: TopicId,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn force_reset(&self, group_id: &str, topic_id: TopicId) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(
-            "DELETE FROM reader_inflight WHERE group_id = $1 AND topic_id = $2",
-        )
-        .bind(group_id)
-        .bind(topic_id.0 as i32)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("DELETE FROM reader_inflight WHERE group_id = $1 AND topic_id = $2")
+            .bind(group_id)
+            .bind(topic_id.0 as i32)
+            .execute(&mut *tx)
+            .await?;
 
-        sqlx::query(
-            "DELETE FROM reader_members WHERE group_id = $1 AND topic_id = $2",
-        )
-        .bind(group_id)
-        .bind(topic_id.0 as i32)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("DELETE FROM reader_members WHERE group_id = $1 AND topic_id = $2")
+            .bind(group_id)
+            .bind(topic_id.0 as i32)
+            .execute(&mut *tx)
+            .await?;
 
         // Roll back dispatch_cursor to committed_watermark so uncommitted
         // ranges are re-dispatched when new readers join.

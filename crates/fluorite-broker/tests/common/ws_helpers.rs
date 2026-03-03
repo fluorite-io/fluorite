@@ -12,8 +12,8 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
-use fluorite_broker::{BrokerConfig, BrokerState, LocalFsStore};
 use fluorite_broker::buffer::BufferConfig;
+use fluorite_broker::{BrokerConfig, BrokerState, LocalFsStore};
 use fluorite_wire::{
     ClientMessage, ServerMessage, auth as wire_auth, decode_server_message, encode_client_message,
     reader, writer,
@@ -50,6 +50,8 @@ pub async fn start_server_with_auth(
         flush_interval: Duration::from_millis(50),
         require_auth,
         auth_timeout: Duration::from_secs(10),
+        #[cfg(feature = "iceberg")]
+        iceberg: None,
     };
 
     let state = BrokerState::new(pool, store, config).await;

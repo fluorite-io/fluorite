@@ -17,10 +17,10 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use fluorite_common::ids::{SchemaId, TopicId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use fluorite_common::ids::{SchemaId, TopicId};
 
 use crate::{SchemaError, SchemaRegistry};
 
@@ -85,10 +85,7 @@ pub fn router(state: AppState) -> Router {
         .route("/schemas/:id", get(get_schema))
         .route("/topics/:topic_id/schemas", get(list_topic_schemas))
         .route("/topics/:topic_id/schemas/latest", get(get_latest_schema))
-        .route(
-            "/topics/:topic_id/schemas/check",
-            post(check_compatibility),
-        )
+        .route("/topics/:topic_id/schemas/check", post(check_compatibility))
         .route("/health", get(health_check))
         .with_state(Arc::new(state))
 }
