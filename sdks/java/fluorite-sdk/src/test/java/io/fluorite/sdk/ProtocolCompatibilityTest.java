@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProtocolCompatibilityTest {
     private static final String APPEND_ENVELOPE_HEX =
-            "0a2a0a10000102030405060708090a0b0c0d0e0f10071a140809186422080a026b3112027631220412027632";
+            "0a2a0a10000102030405060708090a0b0c0d0e0f10071a14080910641a080a026b31120276311a0412027632";
     private static final String APPEND_RESPONSE_ENVELOPE_HEX =
-            "0a10080710012a0a0809186420f40328f603";
+            "0a10080710012a0a0809106418f40320f603";
     private static final String JOIN_GROUP_ENVELOPE_HEX =
             "1a1f0a0c6f72646572732d67726f7570120a636f6e73756d65722d311a03010203";
 
