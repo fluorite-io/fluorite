@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fluorite — Event streaming, simplified.</title>
+  <meta name="description" content="Replace Kafka + Schema Registry + Iceberg with a single binary. No partitions to tune. No brokers to replicate. Just S3, Postgres, and your code.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Nav ── -->
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="wordmark">fluorite</a>
+    <ul class="nav-links">
+      <li><a href="docs/">Docs</a></li>
+      <li><a href="blog/">Blog</a></li>
+      <li><a href="https://github.com/turbine-stream/turbine" target="_blank" rel="noopener">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<header class="hero">
+  <div class="container">
+    <div class="hero-prompt">$ fluorite<span class="cursor"></span></div>
+    <h1>Event streaming, simplified.</h1>
+    <p class="subtitle">Replace Kafka + Schema Registry + Iceberg with a single binary. No partitions to tune. No brokers to replicate. Just S3, Postgres, and your code.</p>
+    <div class="cta-group">
+      <a href="docs/" class="cta-button cta-button--primary">&gt; Get Started</a>
+      <a href="#architecture" class="cta-button">&gt; Read the Docs</a>
+    </div>
+  </div>
+</header>
+
+<!-- ── Simpler than Kafka ── -->
+<section class="section" id="simpler">
+  <div class="container">
+    <h2>Simpler than Kafka</h2>
+    <p>Fluorite replaces client-side partition assignment with broker-side dispatch&mdash;no rebalancing, no hot partitions, no tuning.</p>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Kafka</th>
+          <th>Fluorite</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Consumer assignment</td>
+          <td>Client-side partition assignment, rebalancing</td>
+          <td>Broker-side dispatch, no rebalancing</td>
+        </tr>
+        <tr>
+          <td>Partition tuning</td>
+          <td>Too few = hot spots, too many = overhead</td>
+          <td>No partition tuning required</td>
+        </tr>
+        <tr>
+          <td>Infrastructure</td>
+          <td>ZooKeeper/KRaft + replicated brokers + local disks</td>
+          <td>Stateless binary + S3 + Postgres</td>
+        </tr>
+        <tr>
+          <td>Schema management</td>
+          <td>Separate Schema Registry service</td>
+          <td>Built into the broker</td>
+        </tr>
+        <tr>
+          <td>Iceberg ingestion</td>
+          <td>Kafka Connect + Iceberg connector</td>
+          <td>Built into the broker</td>
+        </tr>
+        <tr>
+          <td>CDC</td>
+          <td>Debezium + Kafka Connect</td>
+          <td>Built in (coming soon)</td>
+        </tr>
+        <tr>
+          <td>Exactly-once</td>
+          <td>Careful config of <code>transactional.id</code>, <code>isolation.level</code>, idempotent producers</td>
+          <td>On by default</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Schema as code ── -->
+<section class="section" id="schema">
+  <div class="container">
+    <h2>Schema as code</h2>
+    <p>Define schemas as native types in your language. No <code>.proto</code> files, no Avro IDL, no build plugins, no code generation step.</p>
+    <p>Fluorite auto-infers Avro schemas from your types and handles evolution&mdash;renames, deletions, type widening&mdash;tracked explicitly in your code.</p>
+
+    <div class="code-tabs" id="schema-tabs">
+      <div class="tab-labels">
+        <button class="tab-label active" onclick="switchTab('schema-tabs', 0)">Java</button>
+        <button class="tab-label" onclick="switchTab('schema-tabs', 1)">Python</button>
+      </div>
+      <div class="tab-content active">
+        <div class="terminal-block"><code><span class="ann">@FluoriteSchema</span>(
+    namespace = <span class="str">"com.example"</span>,
+    renames = {<span class="ann">@Rename</span>(from = <span class="str">"old_name"</span>, to = <span class="str">"newName"</span>)},
+    deletions = {<span class="str">"removedField"</span>}
+)
+<span class="kw">public class</span> <span class="type">OrderEvent</span> {
+    <span class="ann">@NonNull</span> <span class="kw">public</span> <span class="type">String</span> orderId;
+    <span class="kw">public long</span> amount;
+    <span class="kw">public int</span> newName;   <span class="cm">// renamed from old_name</span>
+    <span class="kw">public</span> <span class="type">List</span>&lt;<span class="type">String</span>&gt; tags;
+}</code></div>
+      </div>
+
+      <div class="tab-content">
+        <div class="terminal-block"><code><span class="ann">@schema</span>(
+    namespace=<span class="str">"com.example"</span>,
+    renames={<span class="str">"old_name"</span>: <span class="str">"new_name"</span>},
+    deletions=[<span class="str">"removed_field"</span>],
+)
+<span class="ann">@dataclass</span>
+<span class="kw">class</span> <span class="type">OrderEvent</span>:
+    order_id: <span class="type">Annotated</span>[<span class="type">str</span>, <span class="type">NonNull</span>]
+    amount: <span class="type">int</span>
+    new_name: <span class="type">int</span>   <span class="cm"># renamed from old_name</span>
+    tags: <span class="type">list</span>[<span class="type">str</span>]</code></div>
+      </div>
+    </div>
+
+    <a href="docs/schema.html" class="learn-more">Serialization &amp; client API &rarr;</a>
+  </div>
+</section>
+
+<!-- ── Iceberg ingestion ── -->
+<section class="section" id="iceberg">
+  <div class="container">
+    <h2>Iceberg ingestion, built in</h2>
+    <p>Data appears in Iceberg tables within seconds of being written&mdash;not minutes, not hours.</p>
+    <p>The broker's flush loop pushes records directly into per-table Iceberg buffers (hot path). Schema evolution carries through automatically&mdash;rename a field in your code and it's renamed in Iceberg.</p>
+    <p>A catch-up path runs in the background, finding any un-ingested batches via anti-join and re-reading them from S3. No data loss, no manual intervention.</p>
+    <p class="callout">No Debezium. No Kafka Connect. No Iceberg connector configs. It just works.</p>
+  </div>
+</section>
+
+<!-- ── CDC ── -->
+<section class="section" id="cdc">
+  <div class="container">
+    <h2>Built-in CDC <span class="badge">coming soon</span></h2>
+    <p>Capture database changes as first-class Fluorite events with full schema evolution. No separate connector infrastructure, no Debezium deployment, no Kafka Connect cluster.</p>
+    <p>One system for event streaming and CDC.</p>
+  </div>
+</section>
+
+<!-- ── Cost comparison ── -->
+<section class="section" id="cost">
+  <div class="container--wide">
+    <h2>6x cheaper</h2>
+    <p>Fluorite benchmarks at 5M events/sec on 8 cores. Core count matched at 32 vCPUs. Workload: 100,000 events/sec &middot; 1 KB avg &middot; 7-day retention &middot; AWS us-east-1</p>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Self-managed Kafka</th>
+          <th>Amazon MSK</th>
+          <th>Fluorite</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Brokers</td>
+          <td>8&times; m6i.xlarge (32 vCPUs) &mdash; $1,120/mo</td>
+          <td>8&times; kafka.m5.xlarge (32 vCPUs) &mdash; $1,220/mo</td>
+          <td>1&times; c6g.8xlarge (32 vCPUs) &mdash; $800/mo</td>
+        </tr>
+        <tr>
+          <td>Storage</td>
+          <td>180 TB EBS gp3 (3&times; RF) &mdash; $14,400/mo</td>
+          <td>180 TB provisioned (3&times; RF) &mdash; $18,000/mo</td>
+          <td>60 TB S3 + requests &mdash; $1,580/mo</td>
+        </tr>
+        <tr>
+          <td>Iceberg ingestion</td>
+          <td>Kafka Connect (4 workers) &mdash; $240/mo</td>
+          <td>MSK Connect (4 MCU) &mdash; $320/mo</td>
+          <td>Built in</td>
+        </tr>
+        <tr>
+          <td>Coordination &amp; schema</td>
+          <td>ZK + Schema Registry &mdash; $120/mo</td>
+          <td>Included + Glue (free)</td>
+          <td>Postgres (RDS) &mdash; $50/mo</td>
+        </tr>
+        <tr>
+          <td><strong>Total</strong></td>
+          <td><strong>~$15,900/mo</strong></td>
+          <td><strong>~$19,500/mo</strong></td>
+          <td><strong>~$2,430/mo</strong></td>
+        </tr>
+      </tbody>
+    </table>
+    <p>With matched core counts, compute costs are comparable ($1,120 vs $800). The gap is almost entirely storage: no 3&times; replication ($14,400 &rarr; $1,380) and no Iceberg connector infrastructure ($240&ndash;$320 &rarr; $0).</p>
+    <pre class="diagram">┌──────────┐     ┌──────────────────┐     ┌─────────────┐
+│ Writers  │────▶│ Stateless Broker │────▶│     S3      │
+└──────────┘     │   (Rust binary)  │     │  (storage)  │
+                 └────────┬─────────┘     └─────────────┘
+                          │
+                          ▼
+                 ┌─────────────────┐
+                 │    Postgres     │
+                 │   (metadata)    │
+                 └─────────────────┘</pre>
+  </div>
+</section>
+
+<!-- ── Run anywhere ── -->
+<section class="section" id="cloud">
+  <div class="container">
+    <h2>Run anywhere</h2>
+    <p>Fluorite supports S3, GCS, and ABFS. Run on AWS, GCP, or Azure&mdash;or all three.</p>
+    <p>The broker is the same stateless binary everywhere. Bring your own object store, point the broker at it, and go.</p>
+    <p>No cloud lock-in. No vendor-specific APIs. Disaggregated storage means you own your data.</p>
+  </div>
+</section>
+
+<!-- ── Performance ── -->
+<section class="section" id="performance">
+  <div class="container">
+    <h2>5M events/second</h2>
+    <p>A single Fluorite broker handles 5 million events per second.</p>
+    <p>This is powered by a custom Avro engine that's 5&ndash;9x faster than apache-avro:</p>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>Payload</th>
+          <th>Fluorite</th>
+          <th>apache-avro</th>
+          <th>Speedup</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Small</td>
+          <td>341 ns</td>
+          <td>3.05 &micro;s</td>
+          <td><strong>8.9x</strong></td>
+        </tr>
+        <tr>
+          <td>Medium</td>
+          <td>1.04 &micro;s</td>
+          <td>6.39 &micro;s</td>
+          <td><strong>6.1x</strong></td>
+        </tr>
+        <tr>
+          <td>Large</td>
+          <td>2.88 &micro;s</td>
+          <td>14.59 &micro;s</td>
+          <td><strong>5.1x</strong></td>
+        </tr>
+      </tbody>
+    </table>
+    <p><strong>Throughput: 1.5&ndash;1.6 GiB/s</strong> with ZSTD compression and CRC32 integrity checks on every segment.</p>
+    <a href="docs/architecture.html#performance" class="learn-more">Architecture &amp; optimizations &rarr;</a>
+  </div>
+</section>
+
+<!-- ── Correctness ── -->
+<section class="section" id="correctness">
+  <div class="container">
+    <h2>Built for correctness</h2>
+    <p>Fluorite ships with a built-in Jepsen-style test suite&mdash;not as an afterthought, but as a core part of the system.</p>
+    <p class="stat-line"><strong>17</strong> chaos scenarios &middot; <strong>7</strong> invariants &middot; fault injection on every path &middot; reproducible via seed</p>
+    <p>Other systems discover correctness bugs in production. We find them before you do.</p>
+    <a href="docs/correctness.html" class="learn-more">Test scenarios &amp; invariants &rarr;</a>
+  </div>
+</section>
+
+<!-- ── Architecture ── -->
+<section class="section" id="architecture">
+  <div class="container--wide">
+    <h2>Architecture</h2>
+    <img src="architecture.svg" alt="Fluorite architecture diagram" style="width:100%;">
+    <a href="docs/architecture.html" class="learn-more">Write path, read path &amp; storage format &rarr;</a>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer>
+  <div class="container">
+    <div class="footer-links">
+      <a href="docs/">Docs</a>
+      <a href="blog/">Blog</a>
+      <a href="https://github.com/turbine-stream/turbine" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <p>fluorite &middot; MIT License</p>
+  </div>
+</footer>
+
+<!-- ── Minimal JS for tabs ── -->
+<script>
+function switchTab(groupId, index) {
+  const group = document.getElementById(groupId);
+  const labels = group.querySelectorAll('.tab-label');
+  const contents = group.querySelectorAll('.tab-content');
+  labels.forEach((l, i) => l.classList.toggle('active', i === index));
+  contents.forEach((c, i) => c.classList.toggle('active', i === index));
+}
+</script>
+
+
+</body>
+</html>
