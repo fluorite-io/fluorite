@@ -91,6 +91,51 @@
   </div>
 </section>
 
+<!-- ── Why not Kafka protocol? ── -->
+<section class="section" id="why-not-kafka">
+  <div class="container">
+    <h2>Why not the Kafka protocol?</h2>
+    <p>It's the first question everyone asks. The Kafka wire protocol carries deep architectural baggage that can't be papered over:</p>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Kafka protocol</th>
+          <th>Fluorite</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Schema evolution</td>
+          <td>No native semantics. Bolted-on registry, burden of schema maintenance falls entirely on the end user</td>
+          <td>Built into the broker. Renames, deletions, and type widening tracked in code</td>
+        </tr>
+        <tr>
+          <td>Partitions</td>
+          <td>Hardwired into the protocol. Causes hotspots, prone to under-provisioning, and adding partitions silently drops data when consumers don't pick up the new partition&mdash;a common production failure</td>
+          <td>No partitions. Broker-side offset-range dispatch handles all consumers</td>
+        </tr>
+        <tr>
+          <td>Storage</td>
+          <td>Local disks with 3&times; replication. EBS alone costs ~$14,400/mo at 100K events/sec</td>
+          <td>S3 with no replication overhead. ~$1,580/mo for the same workload</td>
+        </tr>
+        <tr>
+          <td>Durability</td>
+          <td>Depends on replication factor, ISR config, and <code>min.insync.replicas</code>. Unclean leader election loses acked writes</td>
+          <td>S3 provides 99.999999999% durability out of the box</td>
+        </tr>
+        <tr>
+          <td>Warehouse integration</td>
+          <td>Separate topic and table abstractions. Keeping them in sync requires Kafka Connect, Debezium, or custom glue&mdash;each a source of painful inconsistencies</td>
+          <td>One system. Data lands in Iceberg tables within seconds, schema evolution carries through automatically</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>Adopting the Kafka protocol means inheriting all of these problems. Fluorite starts fresh with a protocol designed for disaggregated storage, built-in schemas, and zero partitions.</p>
+  </div>
+</section>
+
 <!-- ── Schema as code ── -->
 <section class="section" id="schema">
   <div class="container">
