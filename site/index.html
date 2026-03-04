@@ -219,6 +219,9 @@
       </tbody>
     </table>
     <p>S3 eliminates replication overhead and provides 99.999999999% durability. No EBS volumes to provision, no RAID to manage, no disk failures to handle.</p>
+    <h3>The latency tradeoff</h3>
+    <p>Most mature Kafka deployments already trade latency for throughput&mdash;<code>linger.ms</code>, large batch sizes, and async replication are the norm. Fluorite makes that same tradeoff by design: writer-side buffering and broker-side flush batching push data to S3 in bulk, achieving <a href="#performance">1.5&ndash;1.6 GiB/s throughput</a> on a single broker.</p>
+    <p>When you need lower latency, you have knobs: use <strong>S3 Express One Zone</strong> for single-digit-millisecond object storage, and set the broker's flush interval to match your SLA. The architecture scales smoothly from high-throughput batch ingest down to near-real-time.</p>
   </div>
 </section>
 
