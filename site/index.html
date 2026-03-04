@@ -37,60 +37,6 @@
   </div>
 </header>
 
-<!-- ── Simpler than Kafka ── -->
-<section class="section" id="simpler">
-  <div class="container">
-    <h2>Simpler than Kafka</h2>
-    <p>Fluorite replaces client-side partition assignment with broker-side dispatch&mdash;no rebalancing, no hot partitions, no tuning.</p>
-    <table class="comparison-table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>Kafka</th>
-          <th>Fluorite</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Consumer assignment</td>
-          <td>Client-side partition assignment, rebalancing</td>
-          <td>Broker-side dispatch, no rebalancing</td>
-        </tr>
-        <tr>
-          <td>Partition tuning</td>
-          <td>Too few = hot spots, too many = overhead</td>
-          <td>No partition tuning required</td>
-        </tr>
-        <tr>
-          <td>Infrastructure</td>
-          <td>ZooKeeper/KRaft + replicated brokers + local disks</td>
-          <td>Stateless binary + S3 + Postgres</td>
-        </tr>
-        <tr>
-          <td>Schema management</td>
-          <td>Separate Schema Registry service</td>
-          <td>Built into the broker</td>
-        </tr>
-        <tr>
-          <td>Iceberg ingestion</td>
-          <td>Kafka Connect + Iceberg connector</td>
-          <td>Built into the broker</td>
-        </tr>
-        <tr>
-          <td>CDC</td>
-          <td>Debezium + Kafka Connect</td>
-          <td>Built in (coming soon)</td>
-        </tr>
-        <tr>
-          <td>Exactly-once</td>
-          <td>Careful config of <code>transactional.id</code>, <code>isolation.level</code>, idempotent producers</td>
-          <td>On by default</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
 <!-- ── Why not Kafka protocol? ── -->
 <section class="section" id="why-not-kafka">
   <div class="container">
@@ -116,6 +62,16 @@
           <td>No partitions. Broker-side offset-range dispatch handles all consumers</td>
         </tr>
         <tr>
+          <td>API surface</td>
+          <td>89 RPCs across 60+ API keys. Complex, bug-prone, and the source of <a href="https://aphyr.com/posts/293-jepsen-kafka" target="_blank" rel="noopener">split-brain data loss</a> even in mature implementations</td>
+          <td>8 message types. Simple enough to audit end-to-end</td>
+        </tr>
+        <tr>
+          <td>Exactly-once</td>
+          <td>Off by default. Requires careful config of <code>transactional.id</code>, <code>isolation.level</code>, <code>enable.idempotence</code>, and <code>min.insync.replicas</code></td>
+          <td>On by default. Three-level dedup (in-flight, LRU, Postgres) with no config</td>
+        </tr>
+        <tr>
           <td>Storage</td>
           <td>Local disks with 3&times; replication. EBS alone costs ~$14,400/mo at 100K events/sec</td>
           <td>S3 with no replication overhead. ~$1,580/mo for the same workload</td>
@@ -124,6 +80,11 @@
           <td>Durability</td>
           <td>Depends on replication factor, ISR config, and <code>min.insync.replicas</code>. Unclean leader election loses acked writes</td>
           <td>S3 provides 99.999999999% durability out of the box</td>
+        </tr>
+        <tr>
+          <td>Infrastructure</td>
+          <td>ZooKeeper/KRaft + replicated brokers + local disks</td>
+          <td>Stateless binary + S3 + Postgres</td>
         </tr>
         <tr>
           <td>Warehouse integration</td>
